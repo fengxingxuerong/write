@@ -38,6 +38,19 @@ jobs:
       - name: Flutter test
         run: flutter test --coverage
 
+      - name: Enforce coverage threshold
+        # 覆盖率低于阈值时失败，防止测试退化
+        run: |
+          COV=$(grep -oP 'LF:\d+' coverage/lcov.info | awk -F: '{s+=$2} END {print s}')
+          LH=$(grep -oP 'LH:\d+' coverage/lcov.info | awk -F: '{s+=$2} END {print s}')
+          echo "Lines hit: $LH / $COV"
+          PERCENT=$(python3 -c "print(round(100.0*$LH/$COV, 1))" 2>/dev/null || echo "unknown")
+          echo "Coverage: $PERCENT%"
+          if [ "$PERCENT" != "unknown" ] && [ "$(python3 -c "print(1 if $PERCENT >= 50 else 0)")" = "0" ]; then
+            echo "::error::Coverage $PERCENT% below threshold 50%"
+            exit 1
+          fi
+
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:
