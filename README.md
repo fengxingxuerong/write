@@ -1,6 +1,6 @@
 # 墨匠 InkSmith —— 完全离线一键小说写作工具
 
-[![CI](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml/badge.svg)](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml) ![Coverage](https://img.shields.io/badge/coverage-65%25-brightgreen) ![Tests](https://img.shields.io/badge/tests-174-blue) ![Dart](https://img.shields.io/badge/dart-3.5%2B-blue) ![Flutter](https://img.shields.io/badge/flutter-3.24%2B-blue)
+[![CI](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml/badge.svg)](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml) ![Coverage](https://img.shields.io/badge/coverage-65%25-brightgreen) ![Tests](https://img.shields.io/badge/tests-177-blue) ![Dart](https://img.shields.io/badge/dart-3.5%2B-blue) ![Flutter](https://img.shields.io/badge/flutter-3.24%2B-blue)
 
 > 单代码库 Flutter / Dart，核心链路零网络请求、零外部 API。所有生成与存储均在本机完成。
 > 支持接入本地大模型（llama.cpp / Ollama）实现 AI 辅助写作，同样完全离线。
@@ -15,6 +15,8 @@
 - **查找替换（Ctrl+F）**：实时匹配计数、↑/↓ 循环跳转、替换当前 / 全部替换；替换后自动触发敏感词复查
 - **番茄钟**：25 分钟专注计时，编辑时随时开关
 - **敏感词检查**：内置 100+ 词分 5 类词库（暴力血腥/色情低俗/脏话辱骂/违法违规/广告引流），命中列表带上下文展示、分类统计、**历史累计命中 TOP 排行**，支持自定义词增删；保存/替换时自动复查
+- **AI 辅助**：编辑器内「✨ 续写」（选字数流式中途接龙）/「📝 修改」（选中文本改）/「🔍 校对」（错别字/病句/重复，勾选应用），三个动作均把角色对话风格注入 prompt
+- **存稿箱**：不满意的正文可一键存入草稿箱，工作区弹窗管理（转正/删除）
 - **专注模式（F11）**：一键隐藏侧栏沉浸写作
 - **快捷键**：`Ctrl+S` 保存 / `Ctrl+B` 切换侧栏 / `Ctrl+E` 聚焦编辑器 / `F11` 专注模式
 
@@ -28,7 +30,8 @@
 - `GenerationEngine` 抽象接口，两种实现：
   - **模板引擎（TemplateEngine）**：完全离线、零依赖，内置中文网文语料（5 大题材 × 30+ 姓名 / 20+ 地名 / 40+ 句式 / 10+ 情节骨架），Isolate 中运行、可取消、回报进度、种子可控随机
   - **LLM 引擎（LlmEngine）**：接入本地大模型（llama-server / Ollama，OpenAI 兼容协议），支持流式输出、进度回报、8 秒连接超时
-- **AI 生成配置**：题材（玄幻/都市/科幻/言情/悬疑）、基调、目标字数、随机度、主角名、大纲驱动
+- **AI 生成配置**：题材（玄幻/都市/科幻/言情/悬疑）、基调、目标字数、随机度、主角名、大纲驱动、**AI 扩写大纲开关**
+- **写作风格控制**：段落结构（标准/精炼短句/绵长细腻/对话密集）× 文风（网文/古龙/金庸/日轻），正交叠加进 prompt，且偏好随项目持久化
 - **多章连写**：一次生成 1~10 章，每章承接上一章结尾（continuation），卷纲按行分配到各章；每章标题由 AI 提炼（超时自动回退）
 - **AI 章节标题**：正文生成后并行提炼 8~15 字标题，失败不阻塞
 - **AI 记忆**：自动提取新角色与设定并累积，生成时随上下文注入（最多等待 8 秒，超时后台继续）
@@ -44,7 +47,8 @@
 > 🚀 GPU 加速：llama-server 自带 Vulkan 后端，NVIDIA 显卡可加 `--n-gpu-layers 999 --device Vulkan0` 启动，2B 模型生成速度可从 ~10 字/s 提升到 **~140 字/s**（2000 字章节约 15 秒）。
 
 ### 导出
-- **纯文本（.txt）** / **Markdown（.md）** / **Word（.docx，纯 Dart 手写 OOXML）** / **HTML** / **PDF** 五种格式
+- **纯文本（.txt）** / **Markdown（.md）** / **EPUB 电子书（.epub，纯 Dart 手写 zip）** / **Word（.docx，纯 Dart 手写 OOXML）** / **JSON 备份（.json）** 五种格式
+- 支持**附带角色与世界观设定附录**（txt/md/docx）、**一键导出全部格式**（跳过取消项汇总提示）；导出偏好（上次格式/是否附设定）自动记忆
 - 由 `file_picker` 让用户自选保存路径
 
 ## 目录结构
@@ -133,7 +137,7 @@ flutter analyze
 flutter test
 ```
 
-当前测试覆盖：**174 个用例**（模型序列化 / 模板引擎生成质量 / 生成 ViewModel 多章连写 / 引擎抽象 / 存储层归档与数据可靠性 / 敏感词统计 / 编辑器体验 / 导出服务（txt·md·epub·docx·backup）/ AI 记忆链路 / 校对解析 / 阅读设置 / 其他核心逻辑）。
+当前测试覆盖：**177 个用例**（模型序列化 / 模板引擎生成质量 / 生成 ViewModel 多章连写 / 引擎抽象 / 存储层归档与数据可靠性 / 敏感词统计 / 编辑器体验 / 导出服务（txt·md·epub·docx·backup）/ AI 记忆链路 / 校对解析 / 阅读设置 / 其他核心逻辑）。
 
 ### CI 流水线
 
