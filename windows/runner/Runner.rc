@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "novel_writer" "\0"
+            VALUE "CompanyName", "InkSmith" "\0"
+            VALUE "FileDescription", "墨匠 InkSmith - 本地 AI 小说创作工具" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "novel_writer" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 InkSmith. All rights reserved." "\0"
             VALUE "OriginalFilename", "novel_writer.exe" "\0"
-            VALUE "ProductName", "novel_writer" "\0"
+            VALUE "ProductName", "墨匠" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

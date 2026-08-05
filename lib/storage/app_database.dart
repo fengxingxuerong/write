@@ -32,8 +32,77 @@ class AppDatabase {
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
+    // 品牌化迁移：旧版本（com.example 或无公司名）数据目录迁入新路径。
+    await migrateLegacyData(base, dir);
     _instance = AppDatabase._(dir);
     return _instance!;
+  }
+
+  /// 将旧版（Runner.rc 未品牌化时期）的数据目录迁移到当前品牌路径。
+  ///
+  /// 旧版 getApplicationSupportDirectory() 返回 `%APPDATA%/com.example/novel_writer`
+  /// 或 `%APPDATA%/novel_writer`（无 CompanyName 时）。品牌化后路径变为
+  /// `%APPDATA%/InkSmith/墨匠`。仅当新目录为空且旧目录存在时执行搬迁，
+  /// 失败不阻塞启动（下次启动重试）。
+  @visibleForTesting
+  static Future<void> migrateLegacyData(
+      Directory base, Directory newDir) async {
+    try {
+      // 旧版数据目录位于 %APPDATA% 根下，而非 base 内：
+      //   %APPDATA%/com.example/novel_writer 或 %APPDATA%/novel_writer。
+      // 品牌路径固定为 CompanyName/ProductName 两级，故 base.parent.parent 即 %APPDATA%。
+      final String appDataRoot = base.parent.parent.path;
+      final List<Directory> legacyCandidates = <Directory>[
+        Directory(
+            '$appDataRoot${Platform.pathSeparator}com.example${Platform.pathSeparator}novel_writer'),
+        Directory('$appDataRoot${Platform.pathSeparator}novel_writer'),
+      ];
+      for (final Directory legacy in legacyCandidates) {
+        final Directory legacyNovels =
+            Directory('${legacy.path}${Platform.pathSeparator}${AppConstants.novelsDirName}');
+        if (!await legacyNovels.exists()) continue;
+        // 新目录已有数据则跳过（防止覆盖）。
+        final List<FileSystemEntity> newContent =
+            await newDir.list().toList();
+        if (newContent.isNotEmpty) continue;
+        // 递归拷贝旧 novels 内容到新目录。
+        await for (final FileSystemEntity entity in legacyNovels.list()) {
+          final String target =
+              '${newDir.path}${Platform.pathSeparator}${entity.uri.pathSegments.last}';
+          if (entity is File) {
+            await entity.copy(target);
+          } else if (entity is Directory) {
+            await _copyDirectory(entity, Directory(target));
+          }
+        }
+        // 拷贝成功后删除旧数据（避免下次重复迁移）。
+        try {
+          await legacyNovels.delete(recursive: true);
+        } catch (_) {
+          // 删除失败不阻塞（下次启动会再迁，拷贝目标存在则跳过）。
+        }
+        return;
+      }
+    } catch (_) {
+      // 迁移失败不阻塞启动；下次启动重试。
+    }
+  }
+
+  /// 递归拷贝目录（含子目录与文件）。
+  static Future<void> _copyDirectory(
+      Directory source, Directory target) async {
+    if (!await target.exists()) {
+      await target.create(recursive: true);
+    }
+    await for (final FileSystemEntity entity in source.list()) {
+      final String name = entity.uri.pathSegments.last;
+      final String dest = '${target.path}${Platform.pathSeparator}$name';
+      if (entity is File) {
+        await entity.copy(dest);
+      } else if (entity is Directory) {
+        await _copyDirectory(entity, Directory(dest));
+      }
+    }
   }
 
   /// 测试专用：使用指定目录创建实例（不碰全局单例、不依赖 path_provider）。
