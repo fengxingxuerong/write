@@ -29,12 +29,28 @@ class AppConstants {
   static int countWords(String text) {
     if (text.isEmpty) return 0;
     int count = 0;
-    // CJK 统一表意文字（基本区 + 扩展 A + 兼容区）。
-    final RegExp cjk = RegExp(r'[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]');
-    // 连续 ASCII 字母或数字，作为一个单词计 1。
-    final RegExp asciiWord = RegExp(r'[A-Za-z0-9]+');
-    count += cjk.allMatches(text).length;
-    count += asciiWord.allMatches(text).length;
+    bool inAsciiWord = false;
+    final runes = text.runes;
+    for (final r in runes) {
+      // CJK 统一表意文字（基本区 + 扩展 A + 兼容区）：每字计 1。
+      if (r >= 0x3400 && r <= 0x4DBF ||
+          r >= 0x4E00 && r <= 0x9FFF ||
+          r >= 0xF900 && r <= 0xFAFF) {
+        count++;
+        inAsciiWord = false;
+      }
+      // ASCII 字母或数字：连续成一个词，计 1。
+      else if ((r >= 0x41 && r <= 0x5A) ||
+               (r >= 0x61 && r <= 0x7A) ||
+               (r >= 0x30 && r <= 0x39)) {
+        if (!inAsciiWord) {
+          count++;
+          inAsciiWord = true;
+        }
+      } else {
+        inAsciiWord = false;
+      }
+    }
     return count;
   }
 

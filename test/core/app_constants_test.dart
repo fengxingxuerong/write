@@ -24,6 +24,18 @@ void main() {
       // 4 个汉字 + 1 个英文单词 = 5
       expect(AppConstants.countWords('主角光环 hero'), equals(5));
     });
+    test('纯数字计 1', () {
+      expect(AppConstants.countWords('12345'), equals(1));
+    });
+    test('纯英文空格分隔计多词', () {
+      expect(AppConstants.countWords('hello world test'), equals(3));
+    });
+    test('中文+英文+数字混合', () {
+      // 3 CJK + 1 英文词 + 1 数字词 = 5
+      expect(AppConstants.countWords('风云人物2024'), equals(5));
+      // 2 CJK + 1 英文词 = 3
+      expect(AppConstants.countWords('RPG游戏很棒'), equals(5));
+    });
   });
 
   group('AppConstants.safeFileName', () {
