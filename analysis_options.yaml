@@ -1,0 +1,20 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    prefer_const_constructors: true
+    prefer_const_constructors_in_immutables: true
+    prefer_const_literals_to_create_immutables: true
+    always_declare_return_types: true
+    avoid_print: true
+    camel_case_types: true
+    file_names: true
+    non_constant_identifier_names: true
+    slash_for_doc_comments: true
+    unnecessary_this: false
+
+analyzer:
+  errors:
+    unused_element: warning
+    unused_import: warning
+    dead_code: warning

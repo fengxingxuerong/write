@@ -1,0 +1,173 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:novel_writer/core/errors/app_exceptions.dart';
+
+/// LLM 提供商类型。
+enum LlmProvider {
+  /// OpenAI 兼容 API（DeepSeek / Moonshot / 通义 / 本地 vLLM 等）。
+  openaiCompatible,
+
+  /// 本地 Ollama（http://localhost:11434）。
+  ollama,
+}
+
+/// LLM 引擎配置。
+class LlmConfig {
+  /// 提供商类型。
+  final LlmProvider provider;
+
+  /// 模型名（如 deepseek-chat / qwen-max / qwen2.5:7b）。
+  final String model;
+
+  /// API Key（OpenAI 兼容必填；Ollama 留空）。
+  final String apiKey;
+
+  /// Base URL（OpenAI 兼容默认 https://api.deepseek.com/v1；Ollama 默认 http://localhost:11434）。
+  final String baseUrl;
+
+  /// 单次生成最大 token 数。
+  final int maxTokens;
+
+  /// 温度（0~2，默认 0.8）。
+  final double temperature;
+
+  /// 构造配置。
+  const LlmConfig({
+    this.provider = LlmProvider.ollama,
+    this.model = 'qwen2.5:7b',
+    this.apiKey = '',
+    this.baseUrl = '',
+    this.maxTokens = 8192,
+    this.temperature = 0.8,
+  });
+
+  /// 是否已配置可用（模型非空；OpenAI 兼容需 API Key + Base URL，
+  /// 但本地地址（localhost/127.0.0.1）免 Key——如 QClaw 内置 llama-server）。
+  bool get isConfigured {
+    if (model.trim().isEmpty) return false;
+    if (provider == LlmProvider.openaiCompatible) {
+      if (baseUrl.trim().isEmpty) return false;
+      if (_isLocalUrl(baseUrl)) return true; // 本地服务免 Key
+      return apiKey.trim().isNotEmpty;
+    }
+    return baseUrl.trim().isNotEmpty;
+  }
+
+  /// 是否本地地址（llama-server / Ollama 等本机服务）。
+  static bool _isLocalUrl(String url) {
+    final String u = url.trim().toLowerCase();
+    return u.startsWith('http://localhost') ||
+        u.startsWith('http://127.0.0.1') ||
+        u.startsWith('http://0.0.0.0') ||
+        u.startsWith('http://[::1]');
+  }
+
+  /// 是否本地服务配置（用于 UI 提示免 Key）。
+  bool get isLocal => _isLocalUrl(baseUrl);
+
+  /// 展示名。
+  String get label {
+    final String p = provider == LlmProvider.ollama ? 'Ollama 本地' : '云端 API';
+    return '$p · $model';
+  }
+
+  /// 序列化。
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'provider': provider.name,
+        'model': model,
+        'apiKey': apiKey,
+        'baseUrl': baseUrl,
+        'maxTokens': maxTokens,
+        'temperature': temperature,
+      };
+
+  /// 反序列化（兼容缺失字段）。
+  factory LlmConfig.fromJson(Map<String, dynamic> json) {
+    return LlmConfig(
+      provider: LlmProvider.values.firstWhere(
+        (LlmProvider e) => e.name == json['provider'],
+        orElse: () => LlmProvider.ollama,
+      ),
+      model: json['model'] as String? ?? 'qwen2.5:7b',
+      apiKey: json['apiKey'] as String? ?? '',
+      baseUrl: json['baseUrl'] as String? ?? '',
+      maxTokens: json['maxTokens'] as int? ?? 8192,
+      temperature: (json['temperature'] as num?)?.toDouble() ?? 0.8,
+    );
+  }
+
+  /// 复制并修改部分字段。
+  LlmConfig copyWith({
+    LlmProvider? provider,
+    String? model,
+    String? apiKey,
+    String? baseUrl,
+    int? maxTokens,
+    double? temperature,
+  }) {
+    return LlmConfig(
+      provider: provider ?? this.provider,
+      model: model ?? this.model,
+      apiKey: apiKey ?? this.apiKey,
+      baseUrl: baseUrl ?? this.baseUrl,
+      maxTokens: maxTokens ?? this.maxTokens,
+      temperature: temperature ?? this.temperature,
+    );
+  }
+}
+
+/// LLM 设置仓库：JSON 文件持久化。
+///
+/// 存于 applicationSupportDirectory 下的 `llm_settings.json`。
+/// 引擎选择（模板/AI）由调用方持有，这里只管理 AI 连接配置。
+class LlmSettingsRepository {
+  /// 构造仓库。
+  LlmSettingsRepository(this.directory);
+
+  /// 配置所在目录（AppDatabase 同级，避免额外 path_provider 依赖）。
+  final String directory;
+
+  /// 配置文件路径。
+  String get filePath => '$directory/llm_settings.json';
+
+  /// 读取配置；文件不存在时返回默认（Ollama）。
+  Future<LlmConfig> load() async {
+    final File file = File(filePath);
+    if (!await file.exists()) return const LlmConfig();
+    try {
+      final Map<String, dynamic> json =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      return LlmConfig.fromJson(json);
+    } catch (e) {
+      throw StorageException('LLM 配置读取失败', e);
+    }
+  }
+
+  /// 保存配置（原子写）。
+  Future<void> save(LlmConfig config) async {
+    final File file = File(filePath);
+    final File tmp = File('$filePath.tmp');
+    try {
+      await tmp.writeAsString(jsonEncode(config.toJson()), flush: true);
+      await tmp.rename(file.path);
+    } catch (e) {
+      if (await tmp.exists()) {
+        await tmp.delete().ignore();
+      }
+      throw StorageException('LLM 配置保存失败', e);
+    }
+  }
+}
+
+/// 忽略异常的清理扩展。
+extension _FutureIgnore<T> on Future<T> {
+  /// 吞掉异常。
+  Future<void> ignore() async {
+    try {
+      await this;
+    } catch (_) {
+      // 忽略。
+    }
+  }
+}

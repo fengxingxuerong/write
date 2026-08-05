@@ -1,0 +1,66 @@
+sequenceDiagram
+    actor User
+    participant D as GenerateDialog (UI)
+    participant VM as GenerateViewModel (Riverpod)
+    participant Repo as ChapterRepository/SettingRepo
+    participant Corpus as CorpusManager
+    participant Engine as TemplateEngine (Isolate)
+    participant Rng as SeededRandom
+    participant Edit as EditorPage
+
+    User->>D: 选题材/基调/目标字数/可选设定
+    D->>VM: submit(GenerationConfig)
+    VM->>Repo: loadCharacters(novelId), loadWorldSettings(novelId)
+    Repo-->>VM: characters, worldSettings
+    VM->>Corpus: loadPreset(config.genre)
+    Corpus-->>VM: GenrePreset + PlotSkeleton
+    VM->>Engine: generate(config, ContextBundle)
+    loop 按情节骨架分段生成
+        Engine->>Corpus: nextSentenceTemplate(tone)
+        Corpus-->>Engine: 句式模板
+        Engine->>Rng: pick()/range()
+        Rng-->>Engine: 选词/随机参数
+        Engine->>Corpus: pickName()/pickPlace()
+        Corpus-->>Engine: 姓名/地名
+        Engine->>Engine: 组装段落，约束字数≤maxWords
+    end
+    Engine-->>VM: GenerationResult(content, actualWords)
+    VM->>Repo: saveChapter(novelId, content, order)
+    Repo-->>VM: Chapter saved
+    VM-->>D: state=success
+    D-->>Edit: 刷新/打开章节回显
+    Edit-->>User: 显示生成正文
+    Note over User,Engine: 生成中可点「取消」→ VM 发送 CancelToken → Isolate 终止
+
+---
+
+sequenceDiagram
+    actor User
+    participant Edit as EditorPage
+    participant Auto as AutosaveMixin
+    participant Repo as ChapterRepository
+    participant Exp as ExportService
+    participant FP as FilePicker
+    participant FS as 本地文件系统
+
+    Note over Edit,Repo: 自动保存（防抖 800ms）
+    User->>Edit: 输入/编辑正文
+    Edit->>Auto: onChanged(content)
+    Auto->>Auto: debounce(800ms)
+    Auto->>Repo: updateChapter(id, content, updatedAt)
+    Repo-->>Auto: saved (落盘)
+    Auto-->>Edit: 显示「已保存」
+
+    Note over User,FS: 手动导出
+    User->>Edit: 菜单 → 导出
+    Edit->>Exp: export(novel, format: TXT|MD)
+    Exp->>Repo: loadNovelWithChapters(novelId)
+    Repo-->>Exp: Novel + 有序 Chapters
+    Exp->>Exp: 拼接标题 + 章节结构（MD 加 # / ##）
+    Exp-->>FP: 建议文件名
+    FP-->>User: 选择保存路径
+    User->>FP: 确认路径
+    FP->>Exp: path
+    Exp->>FS: writeFile(path, content)
+    FS-->>Exp: done
+    Exp-->>Edit: 导出成功提示

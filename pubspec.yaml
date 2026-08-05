@@ -1,0 +1,36 @@
+name: novel_writer
+description: 墨匠 InkSmith —— 完全离线的一键小说写作工具（Flutter MVP，零网络请求）。
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.5.0
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # 状态管理：Provider / StateNotifier 即 ViewModel，轻量可测
+  flutter_riverpod: ^2.5.1
+  # 声明式路由，原生支持多端深链
+  go_router: ^14.2.7
+  # 获取各平台 App 文档/支持目录（存储项目数据）
+  path_provider: ^2.1.3
+  # 导出时让用户自选保存路径
+  file_picker: ^8.0.0
+  # 实体主键（uuid v4）
+  uuid: ^4.4.0
+  # 模型值相等简化（轻量，无网络依赖）
+  equatable: ^2.0.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+# 注意：本工程刻意不引入任何网络库（http / dio 等），
+# 从依赖层面保证「完全离线、零 API、零网络请求」。
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/

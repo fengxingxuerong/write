@@ -1,0 +1,108 @@
+classDiagram
+    class Novel {
+        +String id
+        +String title
+        +String genre
+        +String tone
+        +int targetWordsPerChapter
+        +DateTime createdAt
+        +DateTime updatedAt
+        +List~Chapter~ chapters
+        +List~Character~ characters
+        +List~WorldSetting~ worldSettings
+        +int wordCount()
+    }
+    class Chapter {
+        +String id
+        +String novelId
+        +String title
+        +int order
+        +String content
+        +DateTime createdAt
+        +DateTime updatedAt
+        +int wordCount()
+    }
+    class Character {
+        +String id
+        +String novelId
+        +String name
+        +String role
+        +String traits
+        +String background
+        +String relationships
+    }
+    class WorldSetting {
+        +String id
+        +String novelId
+        +String title
+        +String category
+        +String content
+    }
+    class GenerationConfig {
+        +String genre
+        +String tone
+        +int targetWords
+        +bool useExistingSettings
+        +String? protagonistName
+        +double randomLevel
+        +GenerationConstraints constraints
+    }
+    class GenerationConstraints {
+        +int maxWordsPerChapter
+        +bool allowRepeat
+    }
+    class ContextBundle {
+        +List~Character~ characters
+        +List~WorldSetting~ worldSettings
+        +GenrePreset genrePreset
+        +PlotSkeleton plotSkeleton
+    }
+    class GenerationResult {
+        +String content
+        +int actualWords
+        +GenerationConfig usedConfig
+    }
+    class GenerationEngine {
+        <<abstract>>
+        +Future~GenerationResult~ generate(GenerationConfig config, ContextBundle ctx)
+    }
+    class TemplateEngine {
+        -CorpusManager corpus
+        -SeededRandom rng
+        +Future~GenerationResult~ generate(GenerationConfig config, ContextBundle ctx)
+    }
+    class CorpusManager {
+        +SentenceTemplates sentenceTemplates
+        +NamesCorpus namesCorpus
+        +PlotSkeleton plotSkeleton
+        +loadPreset(String genre)
+    }
+    class SentenceTemplates
+    class NamesCorpus
+    class PlotSkeleton
+    class SeededRandom {
+        +double next()
+        +int range(int min, int max)
+        +T pick(List~T~ items)
+    }
+    class GenrePreset {
+        +String key
+        +String label
+        +List~String~ tones
+        +Map skeletonRef
+    }
+
+    Novel "1" *-- "0..*" Chapter : contains
+    Novel "1" *-- "0..*" Character : contains
+    Novel "1" *-- "0..*" WorldSetting : contains
+    Chapter --> "1" Novel : belongsTo
+    GenerationConfig *-- GenerationConstraints
+    ContextBundle --> GenrePreset
+    GenerationEngine <|-- TemplateEngine : implements
+    TemplateEngine --> CorpusManager : uses
+    TemplateEngine --> SeededRandom : uses
+    CorpusManager --> SentenceTemplates
+    CorpusManager --> NamesCorpus
+    CorpusManager --> PlotSkeleton
+    GenerationEngine ..> GenerationResult : returns
+    GenerationConfig ..> ContextBundle : combined into

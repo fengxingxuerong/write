@@ -1,0 +1,74 @@
+# 墨匠 InkSmith — CI 流水线
+# 触发: push / PR 到 main、master；也可手动 workflow_dispatch
+# 步骤: flutter analyze → flutter test → (Windows) Release 构建
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  analyze-test:
+    name: Analyze + Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: stable
+          cache: true
+
+      - name: Enable Flutter web (analyze 需要)
+        run: flutter config --enable-web
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Dart analyze
+        run: dart analyze
+
+      - name: Flutter test
+        run: flutter test --coverage
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/lcov.info
+          retention-days: 7
+
+  build-windows:
+    name: Build Windows Release
+    needs: analyze-test
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Build Windows Release
+        run: flutter build windows --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: novel-writer-windows
+          path: build/windows/x64/runner/Release/
+          retention-days: 14
