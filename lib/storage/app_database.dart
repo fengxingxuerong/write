@@ -115,6 +115,27 @@ class AppDatabase {
     return AppDatabase._(dir);
   }
 
+  /// 应用支持目录（品牌路径根，不含 novels 子目录）。
+  ///
+  /// 用于崩溃日志等需要独立于数据目录的场景；
+  /// 即使 [init] 失败也可安全调用（只依赖 path_provider）。
+  static Future<Directory> supportDirectory() async {
+    return getApplicationSupportDirectory();
+  }
+
+  /// 初始化失败时的兜底实例（使用系统临时目录，保证 UI 可启动）。
+  ///
+  /// 数据不可持久化，但应用不会因数据库初始化失败而崩溃。
+  static AppDatabase fallback() {
+    final Directory dir = Directory(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}novel_writer_fallback',
+    );
+    if (!dir.existsSync()) {
+      dir.createSync(recursive: true);
+    }
+    return AppDatabase._(dir);
+  }
+
   /// 项目 json 文件。
   File novelFile(String id) => File('${directory.path}/$id.json');
 
