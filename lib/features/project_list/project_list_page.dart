@@ -1,11 +1,15 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:novel_writer/core/constants/genre_presets.dart';
 import 'package:novel_writer/core/di/providers.dart';
+import 'package:novel_writer/features/project_list/crash_logs_dialog.dart';
 import 'package:novel_writer/features/project_list/project_list_viewmodel.dart';
 import 'package:novel_writer/models/novel.dart';
+import 'package:novel_writer/storage/app_database.dart';
 import 'package:novel_writer/widgets/common.dart';
 
 /// 首页：项目列表（新建 / 打开 / 重命名 / 删除）。
@@ -31,7 +35,23 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
   Widget build(BuildContext context) {
     final ProjectListState state = ref.watch(projectListViewModelProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('墨匠 InkSmith · 我的作品')),
+      appBar: AppBar(
+        title: const Text('墨匠 InkSmith · 我的作品'),
+        actions: <Widget>[
+          IconButton(
+            icon: const Icon(Icons.bug_report_outlined),
+            tooltip: '崩溃日志',
+            onPressed: () async {
+              final Directory supportDir = await AppDatabase.supportDirectory();
+              final Directory crashDir = Directory(
+                '${supportDir.path}${Platform.pathSeparator}crash_logs',
+              );
+              if (!context.mounted) return;
+              await showCrashLogsDialog(context, crashDir);
+            },
+          ),
+        ],
+      ),
       body: _buildBody(context, state),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showCreateDialog(context),
