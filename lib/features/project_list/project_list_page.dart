@@ -47,7 +47,7 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
                 '${supportDir.path}${Platform.pathSeparator}crash_logs',
               );
               if (!context.mounted) return;
-              await showCrashLogsDialog(context, crashDir);
+              await showCrashLogsDialog(context, crashDir, supportDir);
             },
           ),
         ],

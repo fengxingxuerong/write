@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app.dart';
+import 'core/crash_reporter.dart';
 import 'core/di/providers.dart';
 import 'storage/app_database.dart';
 
@@ -17,6 +18,7 @@ import 'storage/app_database.dart';
 /// 便于发布后远程收集与本地排查。日志写失败时静默降级，不阻塞主流程。
 ///
 /// 日志头部附带 machineId（设备标识）与应用版本，供远程崩溃聚合按设备/版本归类。
+/// 若已配置上报 URL（crash_report_config.json），写日志后自动 POST 上报（失败静默）。
 Future<void> main() async {
   // 绑定 Flutter 框架与底层平台通道，必须在异步操作前调用。
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,6 +37,10 @@ Future<void> main() async {
   // 设备标识：首次运行生成并持久化到 <支持目录>/machine_id，之后复用。
   final String machineId = await _loadOrCreateMachineId(supportDir);
 
+  // 上报配置（可能为空 = 不上报）。
+  final CrashReporterConfig reporterConfig =
+      await loadCrashReporterConfig(supportDir);
+
   runZonedGuarded(
     () async {
       try {
@@ -52,7 +58,14 @@ Future<void> main() async {
           ),
         );
       } catch (error, stack) {
-        _writeCrashLog(crashDir, machineId, '启动初始化', error, stack);
+        _writeCrashLog(
+          crashDir,
+          machineId,
+          reporterConfig,
+          '启动初始化',
+          error,
+          stack,
+        );
         // 启动失败不直接退出，仍尝试进入 UI（数据库层有自愈/降级逻辑）。
         runApp(
           ProviderScope(
@@ -67,12 +80,26 @@ Future<void> main() async {
       }
     },
     // Zone 未捕获异常（异步错误兜底）。
-    (error, stack) => _writeCrashLog(crashDir, machineId, '异步异常', error, stack),
+    (error, stack) => _writeCrashLog(
+      crashDir,
+      machineId,
+      reporterConfig,
+      '异步异常',
+      error,
+      stack,
+    ),
   );
 
   // 平台通道回调错误（如插件调用异常）。
   PlatformDispatcher.instance.onError = (error, stack) {
-    _writeCrashLog(crashDir, machineId, '平台回调', error, stack);
+    _writeCrashLog(
+      crashDir,
+      machineId,
+      reporterConfig,
+      '平台回调',
+      error,
+      stack,
+    );
     return true; // 已处理，不向 Flutter 上报崩溃
   };
 
@@ -81,6 +108,7 @@ Future<void> main() async {
     _writeCrashLog(
       crashDir,
       machineId,
+      reporterConfig,
       'Flutter',
       details.exception,
       details.stack,
@@ -125,9 +153,11 @@ String _randomHex(int length) {
 }
 
 /// 追加写崩溃日志，单条日志 <= 64KB，写失败静默。
+/// 写入成功后，若已配置上报 URL，异步触发远程上报（失败静默）。
 void _writeCrashLog(
   Directory crashDir,
   String machineId,
+  CrashReporterConfig reporterConfig,
   String kind,
   Object error,
   StackTrace? stack, {
@@ -140,8 +170,9 @@ void _writeCrashLog(
         .replaceAll(':', '-')
         .split('.')
         .first;
+    final String fileName = 'crash-$stamp.log';
     final File file = File(
-      '${crashDir.path}${Platform.pathSeparator}crash-$stamp.log',
+      '${crashDir.path}${Platform.pathSeparator}$fileName',
     );
     final StringBuffer sb = StringBuffer()
       ..writeln('===== 墨匠 InkSmith 崩溃日志 =====')
@@ -163,6 +194,17 @@ void _writeCrashLog(
       mode: FileMode.append,
       flush: true,
     );
+    // 已配置上报 URL → 异步自动上报（失败静默，不阻塞）。
+    if (reporterConfig.enabled) {
+      unawaited(
+        uploadCrashLog(
+          crashDir: crashDir,
+          fileName: fileName,
+          config: reporterConfig,
+          machineId: machineId,
+        ).catchError((_) => false),
+      );
+    }
   } catch (_) {
     // 日志写失败静默降级。
   }
