@@ -35,10 +35,10 @@ Future<void> main() async {
         role: AiRole.planner,
         llm: LlmConfig(
           provider: LlmProvider.openaiCompatible,
-          model: 'deepseek-v4-flash',
-          apiKey: k2,
+          model: 'glm-5.2',
+          apiKey: k1,
           baseUrl: sense,
-          temperature: 0.8,
+          temperature: 1.0,
         ),
       ),
       AiRole.writer: AiRoleConfig(
@@ -56,7 +56,7 @@ Future<void> main() async {
         llm: LlmConfig(
           provider: LlmProvider.openaiCompatible,
           model: 'kimi-k3',
-          apiKey: k1,
+          apiKey: k2,
           baseUrl: sense,
           temperature: 1.0,
         ),
@@ -65,8 +65,8 @@ Future<void> main() async {
         role: AiRole.titler,
         llm: LlmConfig(
           provider: LlmProvider.openaiCompatible,
-          model: 'sensenova-6.8-flash-lite',
-          apiKey: k3,
+          model: 'deepseek-v4-flash',
+          apiKey: k2,
           baseUrl: sense,
           temperature: 0.8,
         ),
@@ -75,10 +75,10 @@ Future<void> main() async {
         role: AiRole.verifier,
         llm: LlmConfig(
           provider: LlmProvider.openaiCompatible,
-          model: 'deepseek-v4-flash',
-          apiKey: k2,
+          model: 'glm-5.2',
+          apiKey: k1,
           baseUrl: sense,
-          temperature: 0.8,
+          temperature: 1.0,
         ),
       ),
     },

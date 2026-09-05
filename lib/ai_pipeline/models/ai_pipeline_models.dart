@@ -21,9 +21,9 @@ extension AiRoleLabel on AiRole {
       };
 
   String get description => switch (this) {
-        AiRole.planner => '全书大纲 + 场景规划（建议 glm/deepseek-pro 等强推理模型）',
+        AiRole.planner => '全书大纲 + 场景规划（glm-5.2 需 temp=1.0 且 maxTokens≥4000，否则输出为空）',
         AiRole.writer => '逐场景正文（建议速度质量均衡的 flash 模型）',
-        AiRole.editor => '整章去AI味润色（建议 kimi/glm 等中文改写强的模型）',
+        AiRole.editor => '整章去AI味润色（kimi/glm 需 temp=1.0；配额紧张时建议留本地兜底）',
         AiRole.titler => '章节标题（轻量模型即可）',
         AiRole.verifier => '跨章一致性校验（每 5 章一次，可选）',
       };
