@@ -501,7 +501,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
             TextField(
               controller: urlCtrl,
               decoration: const InputDecoration(
-                labelText: 'Base URL（含 /chat/completions）',
+                labelText: 'Base URL（自动拼接 /chat/completions，填根地址如 https://xxx/v1）',
                 isDense: true,
                 border: OutlineInputBorder(),
               ),

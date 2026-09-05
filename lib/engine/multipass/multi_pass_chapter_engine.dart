@@ -1,6 +1,6 @@
 import 'dart:async';
-
 import 'package:novel_writer/core/constants/app_constants.dart';
+import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/generation_engine.dart';
 import 'package:novel_writer/engine/llm_engine.dart';
 import 'package:novel_writer/engine/multipass/scene_builder.dart';
@@ -114,7 +114,7 @@ class MultiPassChapterEngine {
         );
         if (text.trim().isNotEmpty) return text;
         // 空响应视为失败
-        lastError = const EngineException('AI 返回空内容');
+        lastError = EngineException('AI 返回空内容');
       } catch (e) {
         lastError = e;
         // 判断是否为可重试错误

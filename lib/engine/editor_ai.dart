@@ -291,8 +291,45 @@ class EditorAi {
     }
   }
 
-  /// 发送单轮对话并返回修正后的文本。
+  /// 释放底层 HTTP 连接（在 EditorAi 生命周期结束时调用）。
+  void dispose() {
+    _client = null;
+    _requestCache.clear();
+  }
+
+  /// 正文输入上限：超过则截取末尾（控制上下文长度）。
+  static const int maxContextChars = 6000;
+
+  // ---- 请求合并（同一秒内相同请求不重复发送） ----
+
+  /// 请求缓存映射：key = hash(system + user)，value = 进行中的请求条目。
+  final Map<int, _RequestCacheEntry> _requestCache = {};
+
+  /// 缓存窗口时长（1 秒内重复请求命中）。
+  static const Duration _requestCacheWindow = Duration(seconds: 1);
+
+  /// 发送单轮对话（带请求合并）。同一秒内相同 system+user 只发一次请求，
+  /// 后续并发调用共享同一个 Future 结果。
   Future<String> _chat(String system, String user) async {
+    final int key = Object.hash(system, user);
+    final DateTime now = DateTime.now();
+    // 清理过期缓存
+    _requestCache.removeWhere(
+        (k, v) => now.difference(v.timestamp) > _requestCacheWindow);
+    // 命中进行中的请求 → 共享结果
+    final existing = _requestCache[key];
+    if (existing != null &&
+        now.difference(existing.timestamp) <= _requestCacheWindow) {
+      return existing.future;
+    }
+    // 发起新请求并缓存
+    final Future<String> future = _performChat(system, user);
+    _requestCache[key] = _RequestCacheEntry(future, now);
+    return future;
+  }
+
+  /// 实际执行 AI 请求（可被重试）。
+  Future<String> _performChat(String system, String user) async {
     final LlmChatClient client = _llmClient;
     try {
       final LlmChatResult res =
@@ -310,14 +347,13 @@ class EditorAi {
       throw EngineException('AI 请求失败：$e', e);
     }
   }
+}
 
-  /// 释放底层 HTTP 连接（在 EditorAi 生命周期结束时调用）。
-  void dispose() {
-    _client = null;
-  }
-
-  /// 正文输入上限：超过则截取末尾（控制上下文长度）。
-  static const int maxContextChars = 6000;
+/// 请求合并缓存条目：记录进行中的请求与其创建时间。
+class _RequestCacheEntry {
+  _RequestCacheEntry(this.future, this.timestamp);
+  final Future<String> future;
+  final DateTime timestamp;
 }
 
 /// 校对问题条目。

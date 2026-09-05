@@ -372,6 +372,7 @@ class _EditorPageState extends ConsumerState<EditorPage>
             ),
           ),
         ),
+        ),
       ],
     );
   }

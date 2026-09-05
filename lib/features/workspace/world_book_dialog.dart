@@ -16,9 +16,13 @@ class WorldBookDialog extends ConsumerStatefulWidget {
 
   /// 打开世界书弹窗（静态入口）。
   static Future<void> show(BuildContext context, Novel novel) {
-    return showDialog<void>(
+    return showGeneralDialog<void>(
       context: context,
-      builder: (_) => Dialog(
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).dialogLabel,
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 250),
+      pageBuilder: (_, __, ___) => Dialog(
         insetPadding: const EdgeInsets.all(24),
         child: SizedBox(
           width: 900,
