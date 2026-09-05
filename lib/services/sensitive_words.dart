@@ -94,6 +94,27 @@ class SensitiveWordsService {
     ],
   };
 
+  /// 上下文白名单：词 → 允许出现的正则（匹配时跳过命中）。
+  ///
+  /// 格式：key 为敏感词（必须出现在 [builtinWords] 中），
+  /// value 为「命中词出现在该上下文时跳过」的正则。
+  ///
+  /// 适用场景：某些敏感词在小说叙事中可能以合法形式出现
+  /// （如「赌博」作为场景道具、「绑架」作为案件描写、「鸦片」作为历史名词）。
+  // RegExp 无 const 构造，只能 final。
+  static final Map<String, RegExp> contextWhitelist = <String, RegExp>{
+    // 赌博：场景道具（赌博场、赌博机、赌场）→ 纯叙事描写非教唆
+    '赌博': RegExp(r'赌博[场机]'),
+    // 绑架：案件描写（绑架案、绑架事件）→ 非教唆
+    '绑架': RegExp(r'绑架[案事件]'),
+    // 鸦片：历史名词（鸦片战争、鸦片贸易）→ 历史题材合法词
+    '鸦片': RegExp(r'鸦片[战争贸易]'),
+    // 卖淫：案件描写（卖淫案、卖淫团伙）→ 新闻报道式描写非教唆
+    '卖淫': RegExp(r'卖淫[案团伙]'),
+    // 嫖娼：案件描写（嫖娼被拘、嫖娼被抓）
+    '嫖娼': RegExp(r'嫖娼[被处罚]'),
+  };
+
   /// 用户自定义词（内存缓存；文件加载）。
   List<String> _customWords = <String>[];
 
@@ -205,6 +226,11 @@ class SensitiveWordsService {
       if (word.isEmpty) return;
       int idx = text.indexOf(word);
       while (idx >= 0) {
+        // 白名单校验：若命中位置的上下文匹配白名单正则 → 跳过
+        if (_isWhitelisted(text, idx, word.length, word)) {
+          idx = text.indexOf(word, idx + word.length);
+          continue;
+        }
         hits.add(SensitiveHit(
           word: word,
           category: category,
@@ -225,6 +251,20 @@ class SensitiveWordsService {
     }
     hits.sort((a, b) => a.start.compareTo(b.start));
     return SensitiveCheckResult(hits);
+  }
+
+  /// 判断命中 [word] 在 [text] 的 [start] 位置是否被上下文白名单覆盖。
+  ///
+  /// 规则：在命中词前后各 6 字符窗口内拼接出上下文片段，若 [word] 注册了
+  /// 白名单正则且匹配该片段 → 返回 true（跳过命中）。
+  static bool _isWhitelisted(
+      String text, int start, int len, String word) {
+    final RegExp? rule = contextWhitelist[word];
+    if (rule == null) return false;
+    final int from = start - 6 < 0 ? 0 : start - 6;
+    final int to = start + len + 6 > text.length ? text.length : start + len + 6;
+    final String window = text.substring(from, to);
+    return rule.hasMatch(window);
   }
 
   /// 取命中词附近的上下文（前后各 12 字符，用 … 截断）。

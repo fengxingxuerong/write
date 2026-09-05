@@ -75,6 +75,8 @@ class ProjectListViewModel extends StateNotifier<ProjectListState> {
       state = state.copyWith(isLoading: false, novels: novels);
     } on AppException catch (e) {
       state = state.copyWith(isLoading: false, error: e.message);
+    } catch (e) {
+      state = state.copyWith(isLoading: false, error: '加载失败：$e');
     }
   }
 

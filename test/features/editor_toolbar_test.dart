@@ -6,13 +6,20 @@ import 'package:novel_writer/features/editor/sensitive_check_dialog.dart';
 import 'package:novel_writer/services/sensitive_words.dart';
 
 void main() {
-  Widget wrap(Widget child) => MaterialApp(home: Scaffold(body: child));
+  // 测试环境说明：Flutter 3.44 的 flutter_tester 无法解码 Material 的
+  // ink_sparkle.frag（runtime stages 版本 0≠2），点击按钮加载水波纹即抛异常。
+  // 用 NoSplash 绕开 shader 加载，仅影响测试，不影响真机。
+  Widget wrap(Widget child) => MaterialApp(
+        theme: ThemeData(splashFactory: NoSplash.splashFactory),
+        home: Scaffold(body: child),
+      );
 
   EditorToolbar buildToolbar({
     VoidCallback? onToggleSearch,
     VoidCallback? onContinueWrite,
     VoidCallback? onShowStats,
     VoidCallback? onSaveDraft,
+    VoidCallback? onShowHistory,
     VoidCallback? onShowCheck,
     bool searchOpen = false,
     bool saved = false,
@@ -25,8 +32,8 @@ void main() {
       searchOpen: searchOpen,
       fontSize: 16,
       lineHeight: 1.6,
-      pomodoroRunning: pomodoroRunning,
-      pomodoroLabel: '24:59',
+      pomodoroRemainNotifier: ValueNotifier<int>(pomodoroRunning ? 1499 : 0),
+      pomodoroRunningNotifier: ValueNotifier<bool>(pomodoroRunning),
       check: check,
       saved: saved,
       onToggleSearch: onToggleSearch ?? () {},
@@ -41,6 +48,7 @@ void main() {
       onRewriteSelected: () {},
       onProofread: () {},
       onSaveDraft: onSaveDraft ?? () {},
+      onShowHistory: onShowHistory ?? () {},
     );
   }
 

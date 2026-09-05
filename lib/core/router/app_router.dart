@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:novel_writer/features/project_list/project_list_page.dart';
 import 'package:novel_writer/features/workspace/workspace_page.dart';
+import 'package:novel_writer/features/workspace/privacy_page.dart';
 
 /// 全局路由表（声明式）。
 ///
@@ -24,6 +25,11 @@ final Provider<GoRouter> routerProvider = Provider<GoRouter>((ref) {
         path: '/novel/:id',
         builder: (BuildContext context, GoRouterState state) =>
             WorkspacePage(novelId: state.pathParameters['id'] ?? ''),
+      ),
+      GoRoute(
+        path: '/privacy',
+        builder: (BuildContext context, GoRouterState state) =>
+            const PrivacyPage(),
       ),
     ],
     errorBuilder: (BuildContext context, GoRouterState state) => Scaffold(

@@ -14,6 +14,8 @@ import 'package:novel_writer/features/workspace/outline_dialog.dart';
 import 'package:novel_writer/features/workspace/volume_outline_dialog.dart';
 import 'package:novel_writer/features/workspace/search_dialog.dart';
 import 'package:novel_writer/features/workspace/setting_panel.dart';
+import 'package:novel_writer/features/workspace/world_book_dialog.dart';
+import 'package:novel_writer/features/workspace/beat_board_dialog.dart';
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/core/di/providers.dart';
@@ -204,28 +206,12 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
         body: const Center(child: Text('项目不存在')),
       );
     }
-    final ThemeMode themeMode = ref.watch(themeModeProvider);
     return Scaffold(
       appBar: AppBar(
         title: Text(novel.title),
         actions: <Widget>[
-          IconButton(
-            icon: Icon(themeMode == ThemeMode.dark
-                ? Icons.dark_mode
-                : themeMode == ThemeMode.light
-                    ? Icons.light_mode
-                    : Icons.brightness_auto),
-            tooltip: '切换主题',
-            onPressed: () {
-              final List<ThemeMode> order = <ThemeMode>[
-                ThemeMode.light,
-                ThemeMode.dark,
-                ThemeMode.system,
-              ];
-              final int next = (order.indexOf(themeMode) + 1) % order.length;
-              ref.read(themeModeProvider.notifier).state = order[next];
-            },
-          ),
+          // 独立 Consumer 隔离 themeMode watch，避免切换主题时整页重建
+          _ThemeToggleButton(),
           IconButton(
             icon: const Icon(Icons.search),
             tooltip: '全文搜索',
@@ -258,6 +244,11 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
             },
           ),
           IconButton(
+            icon: const Icon(Icons.auto_stories_outlined),
+            tooltip: '世界书',
+            onPressed: () => WorldBookDialog.show(context, novel),
+          ),
+          IconButton(
             icon: const Icon(Icons.inventory_2_outlined),
             tooltip: '存稿箱',
             onPressed: () => showDraftBoxDialog(context, novel),
@@ -267,6 +258,21 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
             tooltip: '卷纲总览',
             onPressed: () => _openVolumeOutline(novel),
           ),
+          if (_selectedChapterId != null)
+            IconButton(
+              icon: const Icon(Icons.view_week_outlined),
+              tooltip: '节拍板',
+              onPressed: () {
+                Chapter? ch;
+                for (final c in novel.chapters) {
+                  if (c.id == _selectedChapterId) {
+                    ch = c;
+                    break;
+                  }
+                }
+                if (ch != null) BeatBoardDialog.show(context, novel, ch);
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.auto_awesome_mosaic_outlined),
             tooltip: '封面生成',
@@ -417,6 +423,31 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// 主题切换按钮（独立 Consumer，隔离 themeMode 监听范围，避免切换主题时整页重建）。
+class _ThemeToggleButton extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ThemeMode themeMode = ref.watch(themeModeProvider);
+    return IconButton(
+      icon: Icon(themeMode == ThemeMode.dark
+          ? Icons.dark_mode
+          : themeMode == ThemeMode.light
+              ? Icons.light_mode
+              : Icons.brightness_auto),
+      tooltip: '切换主题',
+      onPressed: () {
+        final List<ThemeMode> order = <ThemeMode>[
+          ThemeMode.light,
+          ThemeMode.dark,
+          ThemeMode.system,
+        ];
+        final int next = (order.indexOf(themeMode) + 1) % order.length;
+        ref.read(themeModeProvider.notifier).state = order[next];
+      },
     );
   }
 }

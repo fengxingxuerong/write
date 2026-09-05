@@ -27,7 +27,8 @@ class SettingPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final SettingRepository repo = ref.watch(settingRepositoryProvider);
+    // settingRepositoryProvider 是 Provider（非 StateNotifier），值不会变，用 read 即可
+    final SettingRepository repo = ref.read(settingRepositoryProvider);
     return SizedBox(
       width: 320,
       child: ListView(

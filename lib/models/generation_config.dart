@@ -86,6 +86,12 @@ class GenerationConfig {
   /// 文风（语言质感：现代网文 / 古龙简洁 / 金庸古典 / 日轻细腻）。
   final ProseStyle proseStyle;
 
+  /// 是否启用多 pass 生成（多场景拆解 + 逐场景生成 + 拼接）。
+  ///
+  /// 仅 LLM 引擎生效；目标字数 ≥ 1500 且 LLM 已配置时建议开启。
+  /// 多 pass 让长章节维持高文学水准不崩坏，但时间成本约为单 pass 的 3~5 倍。
+  final bool enableMultiPass;
+
   /// 生成约束。
   final GenerationConstraints constraints;
 
@@ -103,6 +109,7 @@ class GenerationConfig {
     this.expandOutline = true,
     this.style = WritingStyle.standard,
     this.proseStyle = ProseStyle.web,
+    this.enableMultiPass = false,
     required this.constraints,
   });
 
@@ -123,6 +130,7 @@ class GenerationConfig {
           WritingStyle.standard,
       proseStyle: ProseStyle.values.asNameMap()[json['proseStyle'] as String?] ??
           ProseStyle.web,
+      enableMultiPass: (json['enableMultiPass'] as bool?) ?? false,
       constraints: GenerationConstraints.fromJson(
         (json['constraints'] as Map<String, dynamic>?) ?? <String, dynamic>{},
       ),
@@ -143,6 +151,7 @@ class GenerationConfig {
         'expandOutline': expandOutline,
         'style': style.name,
         'proseStyle': proseStyle.name,
+        'enableMultiPass': enableMultiPass,
         'constraints': constraints.toJson(),
       };
 
@@ -160,6 +169,7 @@ class GenerationConfig {
     bool? expandOutline,
     WritingStyle? style,
     ProseStyle? proseStyle,
+    bool? enableMultiPass,
     GenerationConstraints? constraints,
   }) {
     return GenerationConfig(
@@ -175,6 +185,7 @@ class GenerationConfig {
       expandOutline: expandOutline ?? this.expandOutline,
       style: style ?? this.style,
       proseStyle: proseStyle ?? this.proseStyle,
+      enableMultiPass: enableMultiPass ?? this.enableMultiPass,
       constraints: constraints ?? this.constraints,
     );
   }

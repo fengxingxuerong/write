@@ -23,7 +23,13 @@ void main() {
   });
 
   Widget wrap(Widget child) =>
-      ProviderScope(child: MaterialApp(home: Scaffold(body: child)));
+      ProviderScope(
+        child: MaterialApp(
+          // NoSplash 绕开 flutter_tester 无法解码 ink_sparkle.frag 的环境问题。
+          theme: ThemeData(splashFactory: NoSplash.splashFactory),
+          home: Scaffold(body: child),
+        ),
+      );
 
   testWidgets('干净结果：显示「内容安全」徽标与未发现提示', (tester) async {
     const result = SensitiveCheckResult(<SensitiveHit>[]);

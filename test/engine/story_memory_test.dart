@@ -225,4 +225,123 @@ void main() {
     expect(user, contains('【已有角色】'));
     expect(user, contains('主角'));
   });
+
+  test('伏笔账本全链路：埋设 → 去重 → 回收', () async {
+    // 可编程假 LLM：按序返回两章的提取结果（队列元素 = 内层 content JSON）。
+    final List<String> responses = <String>[
+      // 第 1 章：埋设两条伏笔。
+      jsonEncode(<String, dynamic>{
+        'characters': <dynamic>[],
+        'worldSettings': <dynamic>[],
+        'characterUpdates': <dynamic, dynamic>{},
+        'foreshadowsPlanted': <dynamic>[
+          <String, dynamic>{
+            'title': '铜镜中的影子',
+            'description': '镜中多出的影子身份未明',
+          },
+          <String, dynamic>{
+            'title': '断裂的剑穗',
+            'description': '父亲遗物剑穗被人为割断',
+          },
+        ],
+        'foreshadowsResolved': <dynamic>[],
+      }),
+      // 第 2 章：回收一条 + 重复埋设（应被去重跳过）。
+      jsonEncode(<String, dynamic>{
+        'characters': <dynamic>[],
+        'worldSettings': <dynamic>[],
+        'characterUpdates': <dynamic, dynamic>{},
+        'foreshadowsPlanted': <dynamic>[
+          <String, dynamic>{
+            'title': '断裂的剑穗',
+            'description': '重复埋设应被去重',
+          },
+        ],
+        'foreshadowsResolved': <dynamic>['铜镜中的影子'],
+      }),
+    ];
+    final HttpServer seqServer =
+        await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    seqServer.listen((HttpRequest req) async {
+      await utf8.decoder.bind(req).join();
+      final String resp = jsonEncode(<String, dynamic>{
+        'choices': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'message': <String, dynamic>{'content': responses.removeAt(0)},
+          },
+        ],
+      });
+      req.response
+        ..statusCode = 200
+        ..headers.contentType = ContentType.json
+        ..write(resp);
+      await req.response.close();
+    });
+    addTearDown(seqServer.close);
+
+    final LlmConfig config = LlmConfig(
+      provider: LlmProvider.openaiCompatible,
+      model: 'fake',
+      baseUrl: 'http://127.0.0.1:${seqServer.port}/v1',
+      maxTokens: 4096,
+    );
+    final StoryMemory memory = StoryMemory(
+      config: config,
+      settingRepo: settingRepo,
+    );
+    final Novel novel = await createNovel(makeNovel());
+
+    // 第 1 章：埋设两条。
+    final MemoryWriteSummary s1 = await memory.extractAndMerge(novel, '第一章');
+    expect(s1.plantedForeshadows, equals(2));
+    expect(s1.resolvedForeshadows, equals(0));
+    expect(s1.describe, contains('埋设 2 条伏笔'));
+
+    // 第 2 章：回收一条，重复埋设被去重。
+    final MemoryWriteSummary s2 =
+        await memory.extractAndMerge(novel, '第二章');
+    expect(s2.plantedForeshadows, equals(0));
+    expect(s2.resolvedForeshadows, equals(1));
+
+    // 落库验证。
+    final Novel saved = await db.readNovel('n1');
+    final WorldSetting mirror = saved.worldSettings
+        .firstWhere((WorldSetting w) => w.title == '铜镜中的影子');
+    expect(mirror.category, equals(StoryMemory.foreshadowResolved));
+    final List<WorldSetting> tassel = saved.worldSettings
+        .where((WorldSetting w) => w.title == '断裂的剑穗')
+        .toList();
+    expect(tassel, hasLength(1)); // 去重：只有一条。
+    expect(tassel.single.category, equals(StoryMemory.foreshadowOpen));
+  });
+
+  test('buildForeshadowLedger：过滤未回收 + 条数上限 + 空账本', () {
+    WorldSetting f(String title, String category) => WorldSetting(
+          id: title,
+          novelId: 'n1',
+          title: title,
+          category: category,
+          content: '$title 的悬念',
+        );
+
+    // 空账本。
+    expect(StoryMemory.buildForeshadowLedger(const <WorldSetting>[]), isEmpty);
+    // 只统计未回收（伏笔），不混入普通设定与已回收条目。
+    final String ledger = StoryMemory.buildForeshadowLedger(<WorldSetting>[
+      f('普通设定', '地理'),
+      f('伏笔A', StoryMemory.foreshadowOpen),
+      f('伏笔B', StoryMemory.foreshadowResolved),
+    ]);
+    expect(ledger, contains('伏笔A'));
+    expect(ledger, isNot(contains('普通设定')));
+    expect(ledger, isNot(contains('伏笔B')));
+    // 条数上限：6 条只保留最近 5 条。
+    final List<WorldSetting> many = <WorldSetting>[
+      for (int i = 1; i <= 6; i++) f('伏笔$i', StoryMemory.foreshadowOpen),
+    ];
+    final String capped = StoryMemory.buildForeshadowLedger(many);
+    expect(capped, isNot(contains('伏笔1：')));
+    expect(capped, contains('伏笔2：'));
+    expect(capped, contains('伏笔6：'));
+  });
 }

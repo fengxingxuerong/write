@@ -104,13 +104,18 @@ class GoalRepository {
     }
   }
 
-  /// 保存目标。
+  /// 保存目标（原子写：先写临时文件再重命名，防止崩溃损坏）。
   Future<void> save(WritingGoal goal) async {
+    final File file = File(_filePath);
+    final File tmp = File('${file.path}.tmp');
     try {
-      final File file = File(_filePath);
       await file.parent.create(recursive: true);
-      await file.writeAsString(jsonEncode(goal.toJson()), flush: true);
+      await tmp.writeAsString(jsonEncode(goal.toJson()), flush: true);
+      await tmp.rename(file.path);
     } catch (e) {
+      if (await tmp.exists()) {
+        tmp.delete().ignore();
+      }
       throw StorageException('写作目标保存失败', e);
     }
   }

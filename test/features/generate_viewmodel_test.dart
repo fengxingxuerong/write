@@ -17,12 +17,16 @@ import 'package:novel_writer/storage/chapter_repository.dart';
 import 'package:novel_writer/storage/app_database.dart';
 import 'package:novel_writer/storage/setting_repository.dart';
 
-/// 记录引擎收到的 continuation（验证多章承接传递）。
+/// 记录引擎收到的 continuation 与 plotSummary（验证多章承接/前情提要传递）。
 class _EngineCall {
-  _EngineCall(this.index, this.continuation, this.config);
+  _EngineCall(this.index, this.continuation, this.config, this.ctx);
   final int index;
   final String? continuation;
   final GenerationConfig config;
+  final ContextBundle ctx;
+
+  /// 引擎收到的前情提要文本。
+  String get plotSummary => ctx.plotSummary;
 }
 
 /// 可编程的假引擎：记录每次调用的 continuation，返回固定内容。
@@ -42,7 +46,7 @@ class _FakeEngine implements GenerationEngine {
     void Function(GenerationProgress)? onProgress,
   }) async {
     final int i = _callCount++;
-    calls.add(_EngineCall(i, config.continuation, config));
+    calls.add(_EngineCall(i, config.continuation, config, ctx));
     onProgress?.call(const GenerationProgress(
       charsWritten: 2,
       targetWords: 4,
@@ -340,6 +344,65 @@ void main() {
       expect(vm.state.isGenerating, isFalse);
       expect(vm.state.progress, equals(0));
       expect(vm.state.error, isNull);
+    });
+
+    test('单章生成不注入前情提要（无下一章需要承接）', () async {
+      final engine = _FakeEngine();
+      final vm = GenerateViewModel(
+        engine,
+        _FakeChapterRepo(),
+        _FakeSettingRepo(),
+        'n1',
+        _fakeRef(),
+      );
+
+      await vm.generate(_cfg(), _bundle(), 1, '第1章');
+
+      expect(engine.calls, hasLength(1));
+      expect(engine.calls.single.plotSummary, isEmpty);
+    });
+
+    test('多章连写：从第2章起注入前情提要（本地摘要兜底路径）', () async {
+      final engine = _FakeEngine();
+      final vm = GenerateViewModel(
+        engine,
+        _FakeChapterRepo(),
+        _FakeSettingRepo(),
+        'n1',
+        _fakeRef(),
+      );
+
+      await vm.generate(_cfg(chapterCount: 3), _bundle(), 1, '第1章');
+
+      expect(engine.calls, hasLength(3));
+      // 第1章：无前情提要。
+      expect(engine.calls[0].plotSummary, isEmpty);
+      // 第2章：承接第1章摘要（LLM 未启用 → 本地启发式摘要）。
+      expect(engine.calls[1].plotSummary, contains('第1章：第1章正文'));
+      // 第3章：累积第1、2章摘要，按行分隔。
+      expect(engine.calls[2].plotSummary, contains('第1章：第1章正文'));
+      expect(engine.calls[2].plotSummary, contains('第2章：第2章正文'));
+      expect(engine.calls[2].plotSummary, isNot(contains('\n第0章')));
+    });
+
+    test('前情提要仅保留最近3条（控制注入 prompt 体积）', () async {
+      final engine = _FakeEngine();
+      final vm = GenerateViewModel(
+        engine,
+        _FakeChapterRepo(),
+        _FakeSettingRepo(),
+        'n1',
+        _fakeRef(),
+      );
+
+      await vm.generate(_cfg(chapterCount: 5), _bundle(), 1, '第1章');
+
+      // 生成 5 章 → 积累第 1~4 章摘要，末章只看到最近 3 条（2/3/4）。
+      final String last = engine.calls[4].plotSummary;
+      expect(last, contains('第2章：'));
+      expect(last, contains('第3章：'));
+      expect(last, contains('第4章：'));
+      expect(last, isNot(contains('第1章：')));
     });
   });
 }

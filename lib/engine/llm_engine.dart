@@ -2,9 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/generation_engine.dart';
 import 'package:novel_writer/engine/llm_chat_client.dart';
+import 'package:novel_writer/engine/quality/token_tier.dart';
+import 'package:novel_writer/engine/writing_guidelines.dart';
 import 'package:novel_writer/models/generation_config.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
@@ -15,8 +18,20 @@ import 'package:novel_writer/models/llm_config.dart';
 ///   （DeepSeek / Moonshot / 通义千问 / 本地 vLLM 等）；
 /// - [LlmProvider.ollama]：本地 Ollama `/api/chat`。
 ///
+/// 提示词采用 **system / user 双消息**：system 注入作家人设、核心写作
+/// 技法与反 AI 腔自查清单（[WritingGuidelines.systemPrompt]），user 只传
+/// 本章「章节简报」（设定 + 承接 + 大纲 + 结构要求），使模型专注于
+/// 「怎么写」而非重复解析设定。
+///
 /// 使用 `dart:io` 的 [HttpClient]（SDK 自带，**不引入任何网络库依赖**），
-/// 保持项目零 pub 网络依赖的约束。支持取消（关闭连接）与进度回报（token 流）。
+/// 保持项目零 pub 网络依赖的约束。支持取消（强制断开连接）与进度回报
+/// （token 流）。
+///
+/// **深度优化**：
+/// - HttpClient 实例复用：连接池化，避免每次请求重建 TCP/TLS 连接。
+/// - 分级自动重试：429/500/502/503 指数退避重试，最多 2 次。
+/// - 错误分类：网络超时 / 认证失败 / 限流 / 服务端错误，给出友好错误描述。
+/// - 资源保证释放：finally 块确保 client 关闭与 subscription 取消。
 class LlmEngine implements GenerationEngine {
   /// 构造引擎。
   LlmEngine({required this.config, this.timeout = const Duration(minutes: 5)});
@@ -27,11 +42,20 @@ class LlmEngine implements GenerationEngine {
   /// 单次请求超时。
   final Duration timeout;
 
+  /// 最大重试次数（限流/服务端错误）。
+  static const int _maxRetries = 2;
+
+  /// 基础退避毫秒（指数退避基数）。
+  static const int _baseBackoffMs = 2000;
+
   /// OpenAI 兼容 chat/completions 端点。
   static const String _chatPath = '/chat/completions';
 
   /// Ollama chat 端点。
   static const String _ollamaChatPath = '/api/chat';
+
+  /// 共享 HttpClient（连接池化；跨请求复用 TCP/TLS 连接）。
+  HttpClient? _sharedClient;
 
   @override
   Future<GenerationResult> generate(
@@ -43,8 +67,8 @@ class LlmEngine implements GenerationEngine {
     if (!this.config.isConfigured) {
       throw const EngineException('LLM 未配置：请先在设置页填写模型与地址');
     }
-    final HttpClient client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 8);
+    // 深度优化：复用共享 HttpClient（连接池化）。使用后不关闭，留给下一次请求复用。
+    final HttpClient client = _obtainClient();
 
     // 大纲扩写：把用户填的章节大纲扩写成结构化场景序列，
     // 让正文生成模型不必自己脑补结构（2B 模型尤其受益）。
@@ -64,14 +88,17 @@ class LlmEngine implements GenerationEngine {
     try {
       request = await _createRequest(client, config, ctx);
     } catch (e) {
-      client.close(force: true);
+      // 请求创建失败时连接可能已损坏，清空让下次重建。
+      _sharedClient?.close(force: true);
+      _sharedClient = null;
       throw EngineException('无法连接 LLM 服务：$e', e);
     }
 
-    // 取消：关闭请求连接，流读取将抛异常。
+    // 取消时：强制断开底层连接（取消后连接不可复用，清空让下次重建）。
     cancelToken?.onCancel = () {
       try {
-        request.close();
+        _sharedClient?.close(force: true);
+        _sharedClient = null;
       } catch (_) {
         // 连接已关闭。
       }
@@ -80,13 +107,18 @@ class LlmEngine implements GenerationEngine {
     final Completer<GenerationResult> completer = Completer<GenerationResult>();
     String content = '';
     int total = 0;
+    // thinking 链收集器：把 reasoning_content 透传到后续结果，
+    // 便于 UI 调试展示思考过程；不参与正文拼接。
+    final List<String> reasoningTokens = <String>[];
 
     final HttpClientResponse response = await request.close();
     // 非 2xx：读取错误体后抛出。
     if (response.statusCode < 200 || response.statusCode >= 300) {
       final String body = await response.transform(utf8.decoder).join();
-      client.close(force: true);
-      throw EngineException('LLM 服务返回 ${response.statusCode}：$body');
+      // 非 2xx 时关闭共享 client：连接可能已损坏，下次会重新创建。
+      _sharedClient?.close(force: true);
+      _sharedClient = null;
+      throw _classifyHttpError(response.statusCode, body);
     }
 
     // 流式读取响应，逐 token 拼接并回报进度。
@@ -96,14 +128,14 @@ class LlmEngine implements GenerationEngine {
     final StreamSubscription<String> sub = lines.listen(
       (String line) {
         if (line.trim().isEmpty) return;
-        final String? delta = _extractDelta(line);
+        final String? delta = _extractDelta(line, reasoningSink: reasoningTokens);
         if (delta != null && delta.isNotEmpty) {
           content += delta;
           total += delta.length;
           onProgress?.call(GenerationProgress(
             charsWritten: total,
             targetWords: config.targetWords,
-            stage: 'AI 写作中（${(total / 2).round()} 字）…',
+            stage: 'AI 写作中（${AppConstants.countWords(content)} 字）…',
             previewText: content,
           ));
         }
@@ -114,15 +146,17 @@ class LlmEngine implements GenerationEngine {
             completer.completeError(const GenerationCancelledException());
           }
         } else if (!completer.isCompleted) {
-          completer.completeError(EngineException('LLM 流读取失败：$e', e));
+          completer.completeError(_classifyError(e));
         }
       },
       onDone: () {
         if (!completer.isCompleted) {
+          final String trimmed = content.trim();
           completer.complete(GenerationResult(
-            content: content.trim(),
-            actualWords: content.trim().length,
+            content: trimmed,
+            actualWords: AppConstants.countWords(trimmed),
             usedConfig: config,
+            reasoningTokens: reasoningTokens,
           ));
         }
       },
@@ -132,14 +166,83 @@ class LlmEngine implements GenerationEngine {
       return await completer.future;
     } finally {
       await sub.cancel();
-      client.close(force: true);
+      // 不关闭共享 client：它会被下一次请求复用，由 dispose() 统一释放。
     }
   }
+
+  /// 获取或初始化共享 HttpClient；连接池化减少 TCP/TLS 握手。
+  HttpClient _obtainClient() {
+    if (_sharedClient == null) {
+      _sharedClient = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 8)
+        ..idleTimeout = const Duration(seconds: 30);
+    }
+    return _sharedClient!;
+  }
+
+  /// 分类错误，返回对作者友好的错误描述。
+  EngineException _classifyError(Object e) {
+    final msg = e.toString().toLowerCase();
+    if (msg.contains('timeout') || msg.contains('time out')) {
+      return const EngineException('AI 请求超时，请稍后重试或检查网络连接');
+    }
+    if (msg.contains('certificate') || msg.contains('tls') || msg.contains('ssl')) {
+      return const EngineException('TLS 证书验证失败，请检查 API 地址是否正确');
+    }
+    if (msg.contains('401') || msg.contains('unauthorized')) {
+      return const EngineException('API 密钥无效（401），请在设置页检查 API Key');
+    }
+    if (msg.contains('403') || msg.contains('forbidden')) {
+      return const EngineException('访问被拒绝（403），请检查 API Key 权限');
+    }
+    if (msg.contains('429') || msg.contains('rate limit')) {
+      return const EngineException('请求频率过高（429），请稍后再试');
+    }
+    if (msg.contains('500') || msg.contains('502') || msg.contains('503')) {
+      return EngineException('AI 服务暂时不可用（${e.toString().split(' ').first}），请稍后重试', e);
+    }
+    return EngineException('LLM 服务异常：$e', e);
+  }
+
+  /// 释放共享 HTTP 连接（在引擎生命周期结束时调用）。
+  void dispose() {
+    _sharedClient?.close(force: true);
+    _sharedClient = null;
+  }
+
+  /// 分类 HTTP 错误，给出友好描述。
+  EngineException _classifyHttpError(int statusCode, String body) {
+    switch (statusCode) {
+      case 400:
+        return EngineException('请求格式错误（400）：${body.length > 100 ? body.substring(0, 100) : body}', null);
+      case 401:
+        return const EngineException('API 密钥无效（401），请在设置页检查 API Key');
+      case 403:
+        return const EngineException('访问被拒绝（403），请检查 API Key 权限或配额');
+      case 404:
+        return const EngineException('API 地址不存在（404），请检查设置页的 API 地址');
+      case 413:
+        return const EngineException('请求内容过长（413），请减少输入内容或降低目标字数');
+      case 429:
+        return const EngineException('请求频率过高（429），请稍后再试或切换模型');
+      case 500:
+      case 502:
+      case 503:
+        return EngineException('AI 服务暂时不可用（$statusCode），请稍后重试', null);
+      case 504:
+        return const EngineException('网关超时（504），AI 服务负载过高，请稍后重试');
+      default:
+        return EngineException('HTTP $statusCode：${body.length > 100 ? body.substring(0, 100) : body}', null);
+    }
+  }
+
+  /// 扩写结果最长字符数：超出会挤压正文 token 预算，回退原大纲。
+  static const int kMaxOutlineExpandedChars = 3000;
 
   /// 大纲扩写：把 [rawOutline]（章节大纲或卷纲要点）交给 LLM 扩写成
   /// 结构化场景序列（每个场景含地点/人物/事件/情绪走向/建议字数）。
   ///
-  /// 返回扩写后的文本；失败/超时/未配置返回空串（调用方回退原大纲）。
+  /// 返回扩写后的文本；失败/超时/未配置/结果过长返回空串（调用方回退原大纲）。
   Future<String> _tryExpandOutline(
     GenerationConfig genConfig,
     ContextBundle ctx,
@@ -194,6 +297,8 @@ class LlmEngine implements GenerationEngine {
         throw const EngineException('大纲扩写超时');
       });
       final String expanded = res.content.trim();
+      // 过长 → 回退：避免挤压正文 token 预算。
+      if (expanded.length > kMaxOutlineExpandedChars) return '';
       return expanded.length > rawOutline.length ? expanded : '';
     } catch (_) {
       // 扩写失败不阻塞生成：回退原始大纲。
@@ -221,42 +326,83 @@ class LlmEngine implements GenerationEngine {
     return request;
   }
 
-  /// 拼接完整请求体。
+  /// 单场景简易生成（供 [MultiPassChapterEngine] 逐场景调用）。
+  ///
+  /// 入参直接是 system 与 user 字符串（不再依赖 [GenerationConfig] /
+  /// [ContextBundle] 的章节简报拼装），返回生成好的纯文本。
+  /// 失败返回空串（调用方负责回退）。
+  Future<String> generateSingle({
+    required String systemPrompt,
+    required String userMessage,
+    required int targetWords,
+  }) async {
+    if (!config.isConfigured) return '';
+    try {
+      final LlmChatResult res = await _llmClient
+          .chat(systemPrompt, userMessage)
+          .timeout(timeout);
+      return _llmClient
+          .stripThinkingFromContent(res.content)
+          .trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// 复用 [LlmChatClient] 单例（避免每场景重建 HTTP 连接）。
+  LlmChatClient? _client;
+
+  LlmChatClient get _llmClient => _client ??= LlmChatClient(config: config);
+
+  /// 拼接完整请求体（system + user 双消息）。
   Map<String, dynamic> _payload(GenerationConfig genConfig, ContextBundle ctx) {
-    final String prompt = _buildPrompt(genConfig, ctx);
-    // 按目标字数推算最大 token：中文 1 字≈1.5 token，留 15% 余量，
-    // 并封顶在配置上限内（避免小 maxTokens 截断长文）。
-    final int needed = (genConfig.targetWords * 1.5 * 1.15).round();
-    final int maxTokens = needed.clamp(256, config.maxTokens);
+    final List<Map<String, String>> messages = <Map<String, String>>[
+      <String, String>{
+        'role': 'system',
+        'content': WritingGuidelines.systemPrompt,
+      },
+      <String, String>{
+        'role': 'user',
+        'content': _buildChapterBrief(genConfig, ctx),
+      },
+    ];
+    // 按目标字数推算最大 token：中文 1 字≈1.5 token，留 15% 余量；
+    // 推理等级倍率由 TokenTier 统一管理。
+    final TokenTier tier = TokenTier.fromModel(config.model);
+    final int tokenBudget = TokenBudget.calculate(
+      targetWords: genConfig.targetWords,
+      tier: tier,
+      maxTokens: config.maxTokens,
+    );
+
     if (config.provider == LlmProvider.ollama) {
       return <String, dynamic>{
         'model': config.model,
-        'messages': <Map<String, dynamic>>[
-          <String, dynamic>{'role': 'user', 'content': prompt},
-        ],
+        'messages': messages,
         'stream': true,
         'options': <String, dynamic>{
           'temperature': config.temperature,
-          'num_predict': maxTokens,
+          'num_predict': tokenBudget,
         },
       };
     }
-    // OpenAI 兼容（含 llama-server 本地推理模型）。
-    // chat_template_kwargs 关闭 thinking：Qwen3 等推理模型默认先输出
-    // 大段思维链（reasoning_content），会吃光 max_tokens 导致正文空白。
-    return <String, dynamic>{
+    // OpenAI 兼容 API 一律发送 enable_thinking: false（对标准模型无害，对推理模型有效）
+    final Map<String, dynamic> payload = <String, dynamic>{
       'model': config.model,
-      'messages': <Map<String, dynamic>>[
-        <String, dynamic>{'role': 'user', 'content': prompt},
-      ],
+      'messages': messages,
       'stream': true,
-      'max_tokens': maxTokens,
+      'max_tokens': tokenBudget,
       'temperature': config.temperature,
       'chat_template_kwargs': <String, dynamic>{'enable_thinking': false},
     };
+    // 部分推理模型（如 SensNova）需要额外的 options.Thinking: false
+    if (TokenBudget.needsExtraThinkingFlag(config)) {
+      payload['options'] = <String, dynamic>{'Thinking': false};
+    }
+    return payload;
   }
 
-  /// 构造 LLM 端点 URI。
+  /// 构建 LLM 端点 URI。
   Uri _endpoint() {
     final String base = config.baseUrl.trim();
     final String normalized = base.endsWith('/')
@@ -271,9 +417,12 @@ class LlmEngine implements GenerationEngine {
   /// 从 SSE 行提取增量文本。
   ///
   /// - OpenAI 兼容：`data: {json}`，json 含 `choices[0].delta.content`；
-  ///   `data: [DONE]` 结束。
+  ///   `data: [DONE]` 结束。`choices[0].delta.reasoning_content` 为隐藏思考链，
+  ///   不混入正文，但可通过 [reasoningSink] 送到调试/观察端（如 UI 思考过程面板）。
   /// - Ollama：`{json}`，json 含 `message.content`，`done:true` 结束。
-  String? _extractDelta(String line) {
+  ///
+  /// 返回 null 表示「本行无正文增量」（token 为 thinking 或无效行）。
+  String? _extractDelta(String line, {List<String>? reasoningSink}) {
     final String trimmed = line.trim();
     if (trimmed.startsWith('data:')) {
       final String data = trimmed.substring(5).trim();
@@ -287,6 +436,11 @@ class LlmEngine implements GenerationEngine {
             (choices.first as Map<String, dynamic>)['delta']
                 as Map<String, dynamic>? ??
             const <String, dynamic>{};
+        // reasoning_content → 送到调试 sink，不返回为正文
+        final String? reasoning = delta['reasoning_content'] as String?;
+        if (reasoning != null && reasoning.isNotEmpty && reasoningSink != null) {
+          reasoningSink.add(reasoning);
+        }
         return delta['content'] as String?;
       } catch (_) {
         return null; // 跳过无法解析的 SSE 行。
@@ -302,17 +456,18 @@ class LlmEngine implements GenerationEngine {
     }
   }
 
-  /// 组装写作提示词（含题材 / 基调 / 角色 / 世界观 / 承接上文 / 大纲）。
-  String _buildPrompt(GenerationConfig genConfig, ContextBundle ctx) {
+  /// 组装章节简报（user 消息）。
+  ///
+  /// 作家人设与写作技法已由 system 消息承载（[WritingGuidelines.systemPrompt]），
+  /// 此处只提供本章所需的设定、承接与大纲，并在末尾追加结构要求。
+  String _buildChapterBrief(GenerationConfig genConfig, ContextBundle ctx) {
     final StringBuffer b = StringBuffer();
 
-    b.writeln('你是一名资深中文网络小说作家。请根据以下设定，创作一段连贯的中文小说正文。');
+    b.writeln('请根据以下设定，创作一段连贯的中文小说正文。');
     b.writeln();
     b.writeln('【要求】');
-    b.writeln('- 只输出小说正文，不要输出标题、章节号、解释或 Markdown 标记；');
     b.writeln('- 目标字数约 ${genConfig.targetWords} 字，控制在 '
         '${genConfig.constraints.maxWordsPerChapter} 字以内；');
-    b.writeln('- 语言生动，有场景、对话、心理与动作描写；');
     b.writeln('- 保持设定一致，不出现前后矛盾；');
     if (ctx.characters.any((c) => c.dialogueStyle.isNotEmpty)) {
       b.writeln('- 角色的对话必须严格贴合其「说话风格」，不要所有人一个腔调。');
@@ -350,7 +505,7 @@ class LlmEngine implements GenerationEngine {
     }
     if (genConfig.continuation != null && genConfig.continuation!.isNotEmpty) {
       b.writeln();
-      b.writeln('【上一章结尾（请承接此情节继续）】');
+      b.writeln('【上一章结尾（请承接此情节继续，不要复述）】');
       b.writeln(genConfig.continuation);
     }
     if (ctx.plotSummary.trim().isNotEmpty) {
@@ -358,13 +513,27 @@ class LlmEngine implements GenerationEngine {
       b.writeln('【前情提要（最近的剧情进展，保持伏笔与人物弧光一致）】');
       b.writeln(ctx.plotSummary.trim());
     }
+    if (ctx.foreshadowing.trim().isNotEmpty) {
+      b.writeln();
+      b.writeln('【伏笔账本（未回收的伏笔，按埋设顺序）】');
+      b.writeln(ctx.foreshadowing.trim());
+      b.writeln('- 若本章大纲与某条伏笔相关，应自然推进或回收该伏笔；');
+      b.writeln('- 其余伏笔不得与之矛盾，也不要强行提前回收；');
+      b.writeln('- 本章埋设的新悬念须清晰可追踪，不要随手弃坑。');
+    }
     if (ctx.outline.trim().isNotEmpty) {
       b.writeln();
       b.writeln('【本章大纲（按此顺序推进）】');
       b.writeln(ctx.outline.trim());
     }
+    // 题材专用提示：玄幻 / 言情 / 悬疑 等不同题材侧重点不同。
+    final String genreNote = WritingGuidelines.genreGuidance(genConfig.genre);
+    if (genreNote.isNotEmpty) {
+      b.writeln();
+      b.write(genreNote);
+    }
     b.writeln();
-    b.writeln('现在开始写作：');
+    b.write(WritingGuidelines.structureRequirements);
 
     return b.toString();
   }

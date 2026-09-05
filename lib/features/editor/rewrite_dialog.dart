@@ -194,10 +194,12 @@ class _RewriteDialogState extends ConsumerState<RewriteDialog> {
           }
         },
         onError: (Object e) {
-          setState(() {
-            _streaming = false;
-            _error = '修改中断：$e';
-          });
+          if (mounted) {
+            setState(() {
+              _streaming = false;
+              _error = '修改中断：$e';
+            });
+          }
         },
         onDone: () {
           if (mounted) {

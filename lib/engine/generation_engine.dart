@@ -43,11 +43,18 @@ class GenerationResult {
   /// 实际使用的配置（便于回显/复现）。
   final GenerationConfig usedConfig;
 
+  /// 推理模型生成的思考链（仅 reasoning 模型启用 thinking 时有值）。
+  ///
+  /// 可供 UI 展示给用户（调试/透明度），不参与正文拼接。
+  /// 默认空列表；不影响 [content] 与 [actualWords]。
+  final List<String> reasoningTokens;
+
   /// 构造结果对象。
   const GenerationResult({
     required this.content,
     required this.actualWords,
     required this.usedConfig,
+    this.reasoningTokens = const <String>[],
   });
 }
 
@@ -62,6 +69,15 @@ class CancelToken {
 
   /// 是否已取消。
   bool get isCancelled => _cancelled;
+
+  /// 复位令牌，开启新一轮生成。
+  ///
+  /// 必须在每次 [cancel] 之后、下一次 generate 之前调用：否则令牌停留在
+  /// 已取消态，后续所有生成都会被立即判定为取消。
+  void reset() {
+    _cancelled = false;
+    onCancel = null;
+  }
 
   /// 请求取消。幂等：多次调用仅生效一次。
   void cancel() {
@@ -96,6 +112,10 @@ class ContextBundle {
   /// 生成新章时注入，帮助模型保持跨章人物弧光与伏笔一致。
   final String plotSummary;
 
+  /// 伏笔账本（未回收伏笔，每行一条）：多章连写时随记忆刷新注入，
+  /// 提醒模型推进/回收伏笔并避免矛盾。空串表示无账本。
+  final String foreshadowing;
+
   /// 构造上下文包。
   const ContextBundle({
     required this.characters,
@@ -104,17 +124,25 @@ class ContextBundle {
     required this.plotSkeleton,
     this.outline = '',
     this.plotSummary = '',
+    this.foreshadowing = '',
   });
 
-  /// 不可变更新副本（多章连写时替换大纲用）。
-  ContextBundle copyWith({String? outline, String? plotSummary}) {
+  /// 不可变更新副本（多章连写时替换大纲/角色/设定用）。
+  ContextBundle copyWith({
+    String? outline,
+    String? plotSummary,
+    String? foreshadowing,
+    List<Character>? characters,
+    List<WorldSetting>? worldSettings,
+  }) {
     return ContextBundle(
-      characters: characters,
-      worldSettings: worldSettings,
+      characters: characters ?? this.characters,
+      worldSettings: worldSettings ?? this.worldSettings,
       genrePreset: genrePreset,
       plotSkeleton: plotSkeleton,
       outline: outline ?? this.outline,
       plotSummary: plotSummary ?? this.plotSummary,
+      foreshadowing: foreshadowing ?? this.foreshadowing,
     );
   }
 }

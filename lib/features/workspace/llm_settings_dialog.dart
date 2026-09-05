@@ -26,9 +26,6 @@ class LlmSettingsDialog extends ConsumerStatefulWidget {
 
 class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
   late LlmProvider _provider;
-  late String _model;
-  late String _apiKey;
-  late String _baseUrl;
   late double _temperature;
   late int _maxTokens;
   late bool _autoMemory;
@@ -36,17 +33,30 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
   String? _testResult;
   bool _testing = false;
 
+  // 提升为 State 字段，避免每次 build 新建导致泄漏
+  late final TextEditingController _modelCtrl;
+  late final TextEditingController _apiKeyCtrl;
+  late final TextEditingController _baseUrlCtrl;
+
   @override
   void initState() {
     super.initState();
     final LlmConfig c = ref.read(llmSettingsProvider).config;
     _provider = c.provider;
-    _model = c.model;
-    _apiKey = c.apiKey;
-    _baseUrl = c.baseUrl;
     _temperature = c.temperature;
     _maxTokens = c.maxTokens;
     _autoMemory = ref.read(llmSettingsProvider).autoMemory;
+    _modelCtrl = TextEditingController(text: c.model);
+    _apiKeyCtrl = TextEditingController(text: c.apiKey);
+    _baseUrlCtrl = TextEditingController(text: c.baseUrl);
+  }
+
+  @override
+  void dispose() {
+    _modelCtrl.dispose();
+    _apiKeyCtrl.dispose();
+    _baseUrlCtrl.dispose();
+    super.dispose();
   }
 
   String get _defaultBaseUrl =>
@@ -59,9 +69,9 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
     setState(() => _saving = true);
     final LlmConfig config = LlmConfig(
       provider: _provider,
-      model: _model.trim().isEmpty ? _defaultModel : _model.trim(),
-      apiKey: _apiKey.trim(),
-      baseUrl: _baseUrl.trim().isEmpty ? _defaultBaseUrl : _baseUrl.trim(),
+      model: _modelCtrl.text.trim().isEmpty ? _defaultModel : _modelCtrl.text.trim(),
+      apiKey: _apiKeyCtrl.text.trim(),
+      baseUrl: _baseUrlCtrl.text.trim().isEmpty ? _defaultBaseUrl : _baseUrlCtrl.text.trim(),
       temperature: _temperature,
       maxTokens: _maxTokens,
     );
@@ -80,9 +90,9 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
     });
     final LlmConfig config = LlmConfig(
       provider: _provider,
-      model: _model.trim().isEmpty ? _defaultModel : _model.trim(),
-      apiKey: _apiKey.trim(),
-      baseUrl: _baseUrl.trim().isEmpty ? _defaultBaseUrl : _baseUrl.trim(),
+      model: _modelCtrl.text.trim().isEmpty ? _defaultModel : _modelCtrl.text.trim(),
+      apiKey: _apiKeyCtrl.text.trim(),
+      baseUrl: _baseUrlCtrl.text.trim().isEmpty ? _defaultBaseUrl : _baseUrlCtrl.text.trim(),
       temperature: _temperature,
       maxTokens: _maxTokens,
     );
@@ -171,9 +181,9 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
             if (mounted) {
               setState(() {
                 _provider = LlmProvider.openaiCompatible;
-                _model = model;
-                _baseUrl = base;
-                _apiKey = '';
+                _modelCtrl.text = model;
+                _baseUrlCtrl.text = base;
+                _apiKeyCtrl.text = '';
                 _testing = false;
                 _testResult = '✅ 发现 ${t.name}（$model）\n已自动填入，可直接保存。';
               });
@@ -224,14 +234,14 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
                   if (v == null) return;
                   setState(() {
                     _provider = v;
-                    if (_model.isEmpty) _model = _defaultModel;
-                    if (_baseUrl.isEmpty) _baseUrl = _defaultBaseUrl;
+                    if (_modelCtrl.text.isEmpty) _modelCtrl.text = _defaultModel;
+                    if (_baseUrlCtrl.text.isEmpty) _baseUrlCtrl.text = _defaultBaseUrl;
                   });
                 },
               ),
               const SizedBox(height: 12),
               TextField(
-                controller: TextEditingController(text: _model),
+                controller: _modelCtrl,
                 decoration: InputDecoration(
                   labelText: '模型名',
                   hintText: _defaultModel,
@@ -240,12 +250,11 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
                       : '如 deepseek-chat / qwen-max',
                 ),
                 enabled: !_testing,
-                onChanged: (v) => _model = v,
               ),
               const SizedBox(height: 12),
               if (_provider == LlmProvider.openaiCompatible) ...<Widget>[
                 TextField(
-                  controller: TextEditingController(text: _apiKey),
+                  controller: _apiKeyCtrl,
                   decoration: const InputDecoration(
                     labelText: 'API Key',
                     hintText: 'sk-...',
@@ -253,18 +262,16 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
                   ),
                   obscureText: true,
                   enabled: !_testing,
-                  onChanged: (v) => _apiKey = v,
                 ),
                 const SizedBox(height: 12),
               ],
               TextField(
-                controller: TextEditingController(text: _baseUrl),
+                controller: _baseUrlCtrl,
                 decoration: InputDecoration(
                   labelText: 'Base URL',
                   hintText: _defaultBaseUrl,
                 ),
                 enabled: !_testing,
-                onChanged: (v) => _baseUrl = v,
               ),
               const SizedBox(height: 12),
               Text('温度：${_temperature.toStringAsFixed(1)}（越低越稳定）'),

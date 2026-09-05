@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import 'package:novel_writer/features/editor/sensitive_check_dialog.dart';
 import 'package:novel_writer/services/sensitive_words.dart';
@@ -16,8 +16,8 @@ class EditorToolbar extends StatelessWidget {
     required this.searchOpen,
     required this.fontSize,
     required this.lineHeight,
-    required this.pomodoroRunning,
-    required this.pomodoroLabel,
+    required this.pomodoroRemainNotifier,
+    required this.pomodoroRunningNotifier,
     required this.check,
     required this.saved,
     required this.onToggleSearch,
@@ -32,6 +32,7 @@ class EditorToolbar extends StatelessWidget {
     required this.onRewriteSelected,
     required this.onProofread,
     required this.onSaveDraft,
+    required this.onShowHistory,
   });
 
   /// 章节标题（无章节时显示占位）。
@@ -49,11 +50,11 @@ class EditorToolbar extends StatelessWidget {
   /// 当前行距。
   final double lineHeight;
 
-  /// 番茄钟运行中。
-  final bool pomodoroRunning;
+  /// 番茄钟剩余秒数通知器（ValueListenableBuilder 隔离重建）。
+  final ValueNotifier<int> pomodoroRemainNotifier;
 
-  /// 番茄钟剩余时间文本。
-  final String pomodoroLabel;
+  /// 番茄钟运行状态通知器。
+  final ValueNotifier<bool> pomodoroRunningNotifier;
 
   /// 敏感词检测结果（null 时不显示徽标）。
   final SensitiveCheckResult? check;
@@ -96,6 +97,9 @@ class EditorToolbar extends StatelessWidget {
 
   /// 把当前正文存入存稿箱。
   final VoidCallback onSaveDraft;
+
+  /// 打开历史版本（回滚）。
+  final VoidCallback onShowHistory;
 
   @override
   Widget build(BuildContext context) {
@@ -191,18 +195,38 @@ class EditorToolbar extends StatelessWidget {
             visualDensity: VisualDensity.compact,
             onPressed: onSaveDraft,
           ),
-          // 番茄钟。
-          TextButton.icon(
-            onPressed: onTogglePomodoro,
-            icon: Icon(
-              pomodoroRunning ? Icons.timer_off : Icons.timer_outlined,
-              size: 16,
-            ),
-            label: Text(pomodoroRunning ? pomodoroLabel : '番茄钟'),
-            style: TextButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-            ),
+          // 历史版本（回滚）。
+          IconButton(
+            icon: const Icon(Icons.history, size: 18),
+            tooltip: '历史版本',
+            visualDensity: VisualDensity.compact,
+            onPressed: onShowHistory,
+          ),
+          // 番茄钟（ValueListenableBuilder 隔离重建范围，避免每秒重建整个工具栏）。
+          ValueListenableBuilder<bool>(
+            valueListenable: pomodoroRunningNotifier,
+            builder: (context, running, _) {
+              return ValueListenableBuilder<int>(
+                valueListenable: pomodoroRemainNotifier,
+                builder: (context, remain, _) {
+                  final label = running
+                      ? '${(remain ~/ 60).toString().padLeft(2, '0')}:${(remain % 60).toString().padLeft(2, '0')}'
+                      : '番茄钟';
+                  return TextButton.icon(
+                    onPressed: onTogglePomodoro,
+                    icon: Icon(
+                      running ? Icons.timer_off : Icons.timer_outlined,
+                      size: 16,
+                    ),
+                    label: Text(label),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                  );
+                },
+              );
+            },
           ),
           if (check != null)
             SensitiveBadge(check: check!, onTap: onShowCheck),

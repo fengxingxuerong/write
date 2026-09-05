@@ -29,7 +29,11 @@ void main() {
   });
 
   Widget wrap(Widget child) =>
-      MaterialApp(home: Scaffold(body: child));
+      // NoSplash 绕开 flutter_tester 无法解码 ink_sparkle.frag 的环境问题。
+      MaterialApp(
+        theme: ThemeData(splashFactory: NoSplash.splashFactory),
+        home: Scaffold(body: child),
+      );
 
   void seedLog(String name, String content) {
     File('${crashDir.path}/$name').writeAsStringSync(content);

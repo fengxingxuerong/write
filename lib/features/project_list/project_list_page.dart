@@ -50,6 +50,11 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
               await showCrashLogsDialog(context, crashDir, supportDir);
             },
           ),
+          IconButton(
+            icon: const Icon(Icons.shield_outlined),
+            tooltip: '隐私与合规',
+            onPressed: () => context.push('/privacy'),
+          ),
         ],
       ),
       body: _buildBody(context, state),

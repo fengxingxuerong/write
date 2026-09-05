@@ -13,6 +13,7 @@ import 'package:novel_writer/models/reader_settings.dart';
 import 'package:novel_writer/services/sensitive_words.dart';
 import 'package:novel_writer/storage/app_database.dart';
 import 'package:novel_writer/storage/chapter_repository.dart';
+import 'package:novel_writer/storage/chapter_snapshot_service.dart';
 import 'package:novel_writer/storage/goal_repository.dart';
 import 'package:novel_writer/storage/novel_repository.dart';
 import 'package:novel_writer/storage/setting_repository.dart';
@@ -51,7 +52,10 @@ final Provider<NovelRepository> novelRepositoryProvider =
 /// 章节仓库：在单 json 内对 chapters 做增删改与排序、自动保存。
 final Provider<ChapterRepository> chapterRepositoryProvider =
     Provider<ChapterRepository>((ref) {
-  return ChapterRepository(ref.watch(appDatabaseProvider));
+  return ChapterRepository(
+    ref.watch(appDatabaseProvider),
+    snapshots: ref.watch(chapterSnapshotServiceProvider),
+  );
 });
 
 /// 设定仓库：角色 / 世界观的 CRUD（同样落盘到单 json）。
@@ -68,14 +72,29 @@ final Provider<GoalRepository> goalRepositoryProvider =
 
 /// 生成引擎（可插拔）。默认使用 [TemplateEngine]（纯离线模板），
 /// 用户可在设置页切换为 [LlmEngine]（云端 API / 本地 Ollama）。
+///
+/// 修复：使用 select 仅监听 useLlm 和 config 的实质变化，避免 settings
+/// 对象每次更新都重建引擎（导致进行中的生成任务丢失）。
 final Provider<GenerationEngine> generationEngineProvider =
     Provider<GenerationEngine>((ref) {
-  // 引擎类型按全局设置选择；LlmEngine 需注入最新 LLM 配置。
-  final LlmSettingsState settings = ref.watch(llmSettingsProvider);
-  if (settings.useLlm) {
-    return LlmEngine(config: settings.config);
+  final bool useLlm = ref.watch(
+    llmSettingsProvider.select((s) => s.useLlm),
+  );
+  if (useLlm) {
+    final LlmConfig config = ref.watch(
+      llmSettingsProvider.select((s) => s.config),
+    );
+    return LlmEngine(config: config);
   }
   return const TemplateEngine();
+});
+
+/// 章节版本快照服务（编辑器历史版本 / AI 覆盖留底）。
+final Provider<ChapterSnapshotService> chapterSnapshotServiceProvider =
+    Provider<ChapterSnapshotService>((ref) {
+  return ChapterSnapshotService(
+    directory: ref.watch(appDatabaseProvider).directory.path,
+  );
 });
 
 /// LLM 设置状态。
@@ -154,9 +173,9 @@ final StateNotifierProvider<LlmSettingsController, LlmSettingsState>
   );
 });
 
-/// 快捷读取：当前是否使用 AI 引擎。
+/// 快捷读取：当前是否使用 AI 引擎（select 避免连锁重建）。
 final Provider<bool> useLlmProvider = Provider<bool>((ref) {
-  return ref.watch(llmSettingsProvider).useLlm;
+  return ref.watch(llmSettingsProvider.select((s) => s.useLlm));
 });
 
 /// 阅读器设置：全局唯一，启动自动加载、变更自动落盘。
@@ -194,7 +213,8 @@ class ReaderSettingsController extends StateNotifier<ReaderSettings> {
   }
 }
 
-/// 快速读取：当前阅读器设置。
+/// 快速读取：当前阅读器设置（select 仅监听必要字段时由调用方自行决定）。
+@Deprecated('直接 watch readerSettingsProvider 即可，无需通过此中间层')
 final Provider<ReaderSettings> readerSettingsStateProvider =
     Provider<ReaderSettings>((ref) {
   return ref.watch(readerSettingsProvider);

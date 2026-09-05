@@ -1,19 +1,49 @@
+import 'dart:async';
+
 import 'package:uuid/uuid.dart';
 
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/chapter_draft.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/storage/app_database.dart';
+import 'package:novel_writer/storage/chapter_snapshot_service.dart';
 
 /// 章节仓库：在单 json 内对 chapters 做增删改、排序与自动保存。
 ///
 /// 所有写操作均读取整本 [Novel] → 局部修改 → 原子落盘，保证数据一致。
+/// 若注入 [ChapterSnapshotService]，内容写入时自动留底版本快照。
 class ChapterRepository {
-  /// 构造仓库。
-  const ChapterRepository(this.db);
+  /// 构造仓库。[snapshots] 可选：注入后启用版本快照。
+  const ChapterRepository(this.db, {this.snapshots});
 
   /// 数据库句柄。
   final AppDatabase db;
+
+  /// 版本快照服务（null 表示禁用快照）。
+  final ChapterSnapshotService? snapshots;
+
+  /// 发起一次快照（fire-and-forget：失败不影响保存主流程）。
+  void _snap(
+    String novelId,
+    String chapterId, {
+    required String title,
+    required String content,
+    bool force = false,
+  }) {
+    final ChapterSnapshotService? s = snapshots;
+    if (s == null) return;
+    unawaited(
+      s.capture(
+        novelId,
+        chapterId,
+        title: title,
+        content: content,
+        force: force,
+      ).catchError((Object _) {
+        // 快照失败静默：绝不能影响保存。
+      }),
+    );
+  }
 
   /// 列出章节（按 order 升序）。
   Future<List<Chapter>> listChapters(String novelId) async {
@@ -58,12 +88,17 @@ class ChapterRepository {
     String content,
   ) async {
     final Novel novel = await db.readNovel(novelId);
+    final Chapter? target =
+        novel.chapters.where((c) => c.id == chapterId).firstOrNull;
     final List<Chapter> chapters = novel.chapters.map((c) {
       return c.id == chapterId
           ? c.copyWith(content: content, updatedAt: DateTime.now())
           : c;
     }).toList();
     await db.writeNovel(novel.copyWith(chapters: chapters));
+    if (target != null) {
+      _snap(novelId, chapterId, title: target.title, content: content);
+    }
   }
 
   /// 更新整个章节对象（标题等）。返回更新后的章节。
@@ -79,6 +114,9 @@ class ChapterRepository {
   }
 
   /// 生成结果落库：按 order 覆盖或新增章节。返回落库后的章节。
+  ///
+  /// 覆盖已有章节时，先把**旧正文**强制留底快照（force：跳过节流）——
+  /// AI 重新生成/手动覆盖是内容丢失的最高风险场景。
   Future<Chapter> saveGeneratedChapter(
     String novelId,
     int order,
@@ -87,6 +125,17 @@ class ChapterRepository {
   ) async {
     final Novel novel = await db.readNovel(novelId);
     final DateTime now = DateTime.now();
+    final Chapter? overwritten =
+        novel.chapters.where((c) => c.order == order).firstOrNull;
+    if (overwritten != null) {
+      _snap(
+        novelId,
+        overwritten.id,
+        title: overwritten.title,
+        content: overwritten.content,
+        force: true,
+      );
+    }
     final List<Chapter> chapters = novel.chapters.map((c) {
       return c.order == order
           ? c.copyWith(content: content, title: title, updatedAt: now)

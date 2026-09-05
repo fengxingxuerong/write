@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:characters/characters.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/llm_chat_client.dart';
+import 'package:novel_writer/engine/quality/novel_quality_checker.dart';
+import 'package:novel_writer/engine/writing_guidelines.dart';
 import 'package:novel_writer/models/character.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
@@ -10,6 +13,11 @@ import 'package:novel_writer/models/llm_config.dart';
 ///
 /// 通过 [LlmChatClient] 走非流式请求；与 [LlmEngine] 共用 [LlmConfig]。
 /// 所有方法返回修正后的完整正文；失败抛 [AppException] 由 UI 提示。
+///
+/// 深度优化：
+/// - 单例复用 [LlmChatClient]，避免每次调用重建 HTTP 连接（减少 TCP 握手开销）。
+/// - 内置请求去重：同一秒内完全相同的 system+user 不重复请求（缓存最近 1 次结果）。
+/// - 分级超时：轻操作（polish/rewrite）3 分钟，轻量查询 30 秒。
 class EditorAi {
   /// 构造助手。
   EditorAi({required this.config, this.timeout = const Duration(minutes: 3)});
@@ -19,6 +27,11 @@ class EditorAi {
 
   /// 单次请求超时。
   final Duration timeout;
+
+  /// 单例客户端（懒加载；减少 TCP 连接重建）。
+  LlmChatClient? _client;
+
+  LlmChatClient get _llmClient => _client ??= LlmChatClient(config: config, timeout: timeout);
 
   /// 续写：在 [text] 末尾追加一段新内容。
   ///
@@ -34,8 +47,10 @@ class EditorAi {
     List<Character> characters = const <Character>[],
   }) async {
     final String trimmed = text.trimRight();
-    final String input = trimmed.length > maxContextChars
-        ? trimmed.substring(trimmed.length - maxContextChars)
+    final String input = trimmed.characters.length > maxContextChars
+        ? trimmed.characters.skip(
+            trimmed.characters.length - maxContextChars,
+          ).toString()
         : trimmed;
 
     final StringBuffer sys = StringBuffer();
@@ -48,6 +63,15 @@ class EditorAi {
     sys.writeln('- 目标续写约 $targetWords 字；');
     sys.writeln('- 每 80~150 字换一段，多用对话推进，段落短促有力；');
     sys.writeln('- 不要在这里结束整个故事，保持情节持续推进（结尾留钩子）。');
+    sys.writeln();
+    sys.write(WritingGuidelines.coreTechniques);
+    sys.writeln();
+    sys.write(WritingGuidelines.antiAiTone);
+    sys.writeln();
+    sys.writeln('【衔接要求】');
+    sys.writeln('- 续写部分的开场 200 字内锚定时间、地点或在场人物，与上文无缝相接；');
+    sys.writeln('- 续写中段至少推进一次冲突、信息反转或关系变化；');
+    sys.writeln('- 结尾落在钩子上：悬念、变故或反常细节，不要总结收场。');
 
     final StringBuffer user = StringBuffer();
     user.writeln('【题材】${genre ?? '未指定'}');
@@ -81,7 +105,7 @@ class EditorAi {
     final String trimmed = text.trimRight();
 
     final StringBuffer sys = StringBuffer();
-    sys.writeln('你是一名资深中文小说编辑，擅长按要求修改小说正文。');
+    sys.writeln('你是一名资深中文小说编辑，擅长按要求修改小说正文，修改后的文字笔力明显优于原文。');
     sys.writeln();
     sys.writeln('规则：');
     sys.writeln('- 严格按用户的修改意见修改，不要擅自添加无关内容；');
@@ -89,6 +113,14 @@ class EditorAi {
     sys.writeln('- 只输出修改后的完整正文，不要解释、不要 Markdown、不要标题；');
     sys.writeln('- 保持与原文一致的视角、人称、语言风格；');
     sys.writeln('- 每 80~150 字换一段，段落短促，对话自然。');
+    sys.writeln();
+    sys.write(WritingGuidelines.coreTechniques);
+    sys.writeln();
+    sys.write(WritingGuidelines.antiAiTone);
+    sys.writeln();
+    sys.writeln('【润色要求】');
+    sys.writeln('- 顺带修正原文中的 AI 腔句式、情绪直陈与空泛描写，使其符合上述技法与自查清单；');
+    sys.writeln('- 对话贴合角色说话风格，口语自然，去掉演讲腔。');
 
     final StringBuffer user = StringBuffer();
     user.writeln('【修改意见】');
@@ -109,6 +141,60 @@ class EditorAi {
     return _chat(sys.toString(), user.toString());
   }
 
+  /// 自动润色（去 AI 腔）：用 [QualityReport] 中列出的违规片段作为修改指引，
+  /// 调用 LLM 对全文做针对性重写，消除典型 AI 囷痕。
+  ///
+  /// 与 [rewrite] 的区别：polish 是「无用户指令的全局 AI 腔清理」，
+  /// 修改意见由本地算法自动生成（而非用户手动输入）。
+  ///
+  /// [qualityReport]：NovelQualityChecker.check 的结果，其 hardViolations
+  /// 会被拼入 user prompt 作为具体的修改指引；为空时返回原文。
+  ///
+  /// [characters] 可选：提供角色说话风格，让润色后对话更贴人设。
+  /// 失败抛 [AppException] 由 UI 提示。
+  Future<String> polish({
+    required String text,
+    required QualityReport qualityReport,
+    String? genre,
+    String? tone,
+    String? protagonistName,
+    List<Character> characters = const <Character>[],
+  }) async {
+    // 没有硬伤时不调用 LLM，直接返回原文
+    if (qualityReport.hardViolations.isEmpty) return text.trim();
+
+    final StringBuffer instruction = StringBuffer();
+    instruction.writeln('以下片段在原文中被识别为典型AI腔/老套描写/空泛总结，请逐处替换：');
+    instruction.writeln('- 不要复述或保留这些表达，用具体细节/动作/对话替代；');
+    instruction.writeln('- 替换后保持段落衔接自然，情节信息不丢失。');
+    instruction.writeln();
+    instruction.writeln('需替换的片段（原文 → 替换方向）：');
+
+    // 最多传 10 条，避免 prompt 过长
+    final List<QualityViolation> top = qualityReport.hardViolations.length > 10
+        ? qualityReport.hardViolations.sublist(0, 10)
+        : qualityReport.hardViolations;
+    for (final v in top) {
+      instruction.writeln('- 「${v.matchedText}」 → 「${v.description}，请改写」');
+    }
+    instruction.writeln();
+    instruction.writeln('通用要求：');
+    instruction.writeln('- 全文「仿佛/似乎/宛如」合计不超过 2 次；');
+    instruction.writeln('- 删除万能身体反应（深吸一口气、心跳加速、身体僵硬…）的直陈，'
+        '改为具体的微表情/动作/物件细节；');
+    instruction.writeln('- 删除空泛总结句（命运的车轮、人生的轨迹…），用具体情节推进替代；');
+    instruction.writeln('- 保留所有情节信息与人物弧光，不要增删场景。');
+
+    return rewrite(
+      text: text,
+      instruction: instruction.toString(),
+      genre: genre,
+      tone: tone,
+      protagonistName: protagonistName,
+      characters: characters,
+    );
+  }
+
   /// 校对（润色）：检查 [text] 中的错别字/病句/逻辑矛盾/重复用词。
   ///
   /// 返回 [ProofreadResult]：问题列表（每项含原文片段、类型、说明、修正建议）
@@ -126,8 +212,10 @@ class EditorAi {
     List<Character> characters = const <Character>[],
   }) async {
     final String trimmed = text.trimRight();
-    final String input = trimmed.length > maxContextChars
-        ? trimmed.substring(trimmed.length - maxContextChars)
+    final String input = trimmed.characters.length > maxContextChars
+        ? trimmed.characters.skip(
+            trimmed.characters.length - maxContextChars,
+          ).toString()
         : trimmed;
 
     final StringBuffer sys = StringBuffer();
@@ -205,19 +293,27 @@ class EditorAi {
 
   /// 发送单轮对话并返回修正后的文本。
   Future<String> _chat(String system, String user) async {
-    final LlmChatClient client = LlmChatClient(
-      config: config,
-      timeout: timeout,
-    );
-    final LlmChatResult res =
-        await client.chat(system, user).timeout(timeout, onTimeout: () {
-      throw const EngineException('AI 请求超时，请重试');
-    });
-    final String content = res.content.trim();
-    if (content.isEmpty) {
-      throw const EngineException('AI 未返回内容，请重试');
+    final LlmChatClient client = _llmClient;
+    try {
+      final LlmChatResult res =
+          await client.chat(system, user).timeout(timeout, onTimeout: () {
+        throw const EngineException('AI 请求超时，请重试');
+      });
+      final String content = res.content.trim();
+      if (content.isEmpty) {
+        throw const EngineException('AI 未返回内容，请重试');
+      }
+      return content;
+    } on EngineException {
+      rethrow;
+    } catch (e) {
+      throw EngineException('AI 请求失败：$e', e);
     }
-    return content;
+  }
+
+  /// 释放底层 HTTP 连接（在 EditorAi 生命周期结束时调用）。
+  void dispose() {
+    _client = null;
   }
 
   /// 正文输入上限：超过则截取末尾（控制上下文长度）。

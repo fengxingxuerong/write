@@ -83,10 +83,13 @@ Future<void> _isolateEntry(_IsolateMessage msg) async {
   }
 }
 
-/// 模板生成引擎（MVP 默认实现）。
+/// 模板生成引擎（默认离线实现）。
 ///
 /// 在独立 [Isolate] 中运行，保证 UI 不卡顿；支持通过 [CancelToken] 取消，
-/// 并回报 [GenerationProgress]。输出为按情节骨架分段、含段落与章法的连贯正文。
+/// 并回报 [GenerationProgress]。生成采用「章节场景锚定 + 节拍驱动叙事」：
+/// 每章固定场景 / 对手 / 盟友 / 关键物，情节骨架的起承转合映射到
+/// 叙事功能句组（开篇 / 推进 / 张力 / 高潮 / 转折 / 收束），并以
+/// 章末钩子收尾，使正文具备明确的场景连续性与叙事节奏。
 class TemplateEngine implements GenerationEngine {
   /// 构造引擎。
   const TemplateEngine();
@@ -157,8 +160,8 @@ class TemplateEngine implements GenerationEngine {
 
 /// 生成核心（在隔离内运行）。
 ///
-/// 依据 [CorpusManager] 语料 + 情节骨架 + 可控随机，按节拍生成段落，
-/// 约束单章字数 ≤ [GenerationConstraints.maxWordsPerChapter]。
+/// 依据 [CorpusManager] 语料 + 情节骨架 + 叙事节拍语料 + 可控随机，
+/// 按节拍生成段落；约束单章字数 ≤ [GenerationConstraints.maxWordsPerChapter]。
 class _TemplateEngineCore {
   _TemplateEngineCore({
     required this.corpus,
@@ -174,11 +177,34 @@ class _TemplateEngineCore {
 
   final ConstraintController _controller;
 
-  /// 最近使用的模板去重窗口（默认 8），防止短时间内句子重复。
-  static const int _dedupeWindow = 8;
+  /// 每个句池的去重窗口，防止短距离内句子重复。
+  static const int _poolDedupeWindow = 6;
 
-  /// 模板使用记录（循环缓冲，仅存模板原文）。
-  final List<String> _recentTemplates = <String>[];
+  /// 句池使用记录（按池名分桶的循环缓冲）。
+  final Map<String, List<String>> _recentByPool = <String, List<String>>{};
+
+  // ---- 章节级场景状态（整章锚定，保证场景与人物一致） ----
+
+  /// 主角名。
+  late String _hero;
+
+  /// 本章对手 / 敌对者。
+  late String _rival;
+
+  /// 本章盟友 / 亲近者。
+  late String _ally;
+
+  /// 本章主场景地名。
+  late String _scenePlace;
+
+  /// 本章关联势力。
+  late String _sceneFaction;
+
+  /// 本章关键物件。
+  late String _sceneObject;
+
+  /// 可出场的侧角色池（不含主角与对手 / 盟友）。
+  List<String> _cast = <String>[];
 
   /// 承接上文时拼接的过渡段模板。
   static const List<String> _continuationOpeners = <String>[
@@ -188,6 +214,16 @@ class _TemplateEngineCore {
     '事情远未结束，{name}知道真正的风暴还在后头。',
     '过了许久，{place}才重新恢复平静。',
     '那一幕过后，{name}久久难以入眠。',
+  ];
+
+  /// 节拍提示织入正文时的引导语。
+  static const List<String> _hintLeadIns = <String>[
+    '这一日，',
+    '说来也巧，',
+    '谁也没想到，',
+    '变故来得毫无征兆——',
+    '一切要从那件事说起：',
+    '就在众人以为风平浪静时，',
   ];
 
   // 通用填充词（题材无关的物件/动作/情绪/对话）。
@@ -227,132 +263,178 @@ class _TemplateEngineCore {
     return rng.pick(corpus.namesCorpus.names);
   }
 
-  /// 取一条模板：优先避开最近使用过的（去重窗口），窗口满则回退随机。
-  String _pickTemplate() {
-    final List<String> all = corpus.sentenceTemplates.templates;
-    final Set<String> recent = _recentTemplates.toSet();
-    final List<String> candidates =
-        all.where((String t) => !recent.contains(t)).toList();
-    final String tpl;
-    if (candidates.isNotEmpty && candidates.length > 1) {
-      tpl = rng.pick(candidates);
-    } else {
-      tpl = rng.pick(all);
+  /// 锚定本章场景：固定地名 / 势力 / 关键物，并从角色池确定对手与盟友。
+  ///
+  /// 优先复用已有设定中的角色（更贴合用户设定），不足时回退随机姓名；
+  /// 对手与盟友保证互不相同，且不与主角重名。
+  void _setupChapterScene() {
+    _hero = _heroName();
+    final List<String> pool = corpus.namesCorpus.names;
+    final Set<String> exclude = <String>{_hero};
+    final List<String> knownNames = <String>[];
+    if (config.useExistingSettings) {
+      for (final Character c in ctx.characters) {
+        if (c.name.isNotEmpty && c.name != _hero) knownNames.add(c.name);
+      }
     }
-    // 维护窗口：追加并裁剪到窗口大小。
-    _recentTemplates.add(tpl);
-    if (_recentTemplates.length > _dedupeWindow) {
-      _recentTemplates.removeRange(0, _recentTemplates.length - _dedupeWindow);
+
+    String pickDistinct(List<String> preferred) {
+      final List<String> usable = preferred
+          .where((String n) => !exclude.contains(n))
+          .toList();
+      final String name =
+          usable.isNotEmpty ? rng.pick(usable) : rng.pick(pool);
+      exclude.add(name);
+      return name;
     }
-    return tpl;
+
+    _rival = pickDistinct(knownNames);
+    _ally = pickDistinct(knownNames);
+    _cast = pool.where((String n) => !exclude.contains(n)).toList();
+    _scenePlace = rng.pick(corpus.namesCorpus.places);
+    _sceneFaction = rng.pick(corpus.namesCorpus.factions);
+    _sceneObject = rng.pick(_objects);
   }
 
-  /// 承接上文：若配置了 [config.continuation]，先输出过渡段衔接。
-  void _writeContinuation(StringBuffer buffer) {
-    final String? cont = config.continuation;
-    if (cont == null || cont.trim().isEmpty) return;
-    // 过渡句：用上一个主角名填充，衔接自然。
-    final String tpl = rng.pick(_continuationOpeners);
-    final String sentenceName = _heroName();
-    buffer.write(_fill(tpl, sentenceName));
-    buffer.writeln();
-    buffer.writeln();
+  /// 单句使用的姓名：70% 主角，否则侧角色，保持叙事焦点稳定。
+  String _sentenceName() {
+    if (rng.chance(0.7)) return _hero;
+    if (_cast.isNotEmpty && rng.chance(0.5)) return rng.pick(_cast);
+    return _hero;
   }
 
-  /// 单句使用的姓名：70% 主角，否则侧角色/随机名，保持段落内一致。
-  String _sentenceName(String heroName) {
-    if (ctx.characters.isNotEmpty && rng.chance(0.5)) {
-      final Character ch = rng.pick(ctx.characters);
-      if (ch.name.isNotEmpty) return ch.name;
-    }
-    if (rng.chance(0.3)) return rng.pick(corpus.namesCorpus.names);
-    return heroName;
-  }
-
-  String _valueFor(String key, String sentenceName) {
+  String _valueFor(String key) {
     switch (key) {
       case 'name':
-        return sentenceName;
+        return _sentenceName();
+      case 'rival':
+        return _rival;
+      case 'ally':
+        return _ally;
       case 'place':
-        return rng.pick(corpus.namesCorpus.places);
+        return _scenePlace;
       case 'faction':
-        return rng.pick(corpus.namesCorpus.factions);
+        return _sceneFaction;
       case 'object':
-        return rng.pick(_objects);
+        // 70% 复用本章关键物，强化物件线索的连贯性。
+        return rng.chance(0.7) ? _sceneObject : rng.pick(_objects);
       case 'action':
         return rng.pick(_actions);
       case 'emotion':
         return rng.pick(_emotions);
       case 'dialogue':
-        return rng.pick(_dialogues).replaceAll('{name}', sentenceName);
+        return rng.pick(_dialogues).replaceAll('{name}', _sentenceName());
       default:
         return '';
     }
   }
 
   /// 用语料填充句式模板中的占位符。
-  String _fill(String template, String sentenceName) {
+  String _fill(String template) {
     return template.replaceAllMapped(RegExp(r'\{(\w+)\}'), (Match m) {
-      return _valueFor(m.group(1)!, sentenceName);
+      return _valueFor(m.group(1)!);
     });
   }
 
-  /// 处理一组节拍：逐节拍生成段落，过程中回报进度、响应取消、让出事件循环。
+  /// 从指定句池取一条模板：优先避开最近使用过的（分池去重窗口）。
+  String _pickFromPool(String poolKey, List<String> pool) {
+    final List<String> recent =
+        _recentByPool.putIfAbsent(poolKey, () => <String>[]);
+    final List<String> candidates =
+        pool.where((String t) => !recent.contains(t)).toList();
+    final String tpl;
+    if (candidates.length > 1) {
+      tpl = rng.pick(candidates);
+    } else {
+      tpl = rng.pick(pool);
+    }
+    recent.add(tpl);
+    if (recent.length > _poolDedupeWindow) {
+      recent.removeRange(0, recent.length - _poolDedupeWindow);
+    }
+    return tpl;
+  }
+
+  /// 取一条通用氛围句（题材句式池，用于细腻文风的穿插调剂）。
+  String _pickAmbient() =>
+      _pickFromPool('ambient', corpus.sentenceTemplates.templates);
+
+  /// 把节拍提示织入正文：引导语 + 事件化提示 + 一条匹配阶段的功能句。
+  String _weaveHint(String hint, String stage) {
+    final String lead = rng.pick(_hintLeadIns);
+    final String tail =
+        _fill(corpus.beatCorpus.pickForStage(stage, rng));
+    return '$lead$hint。$tail';
+  }
+
+  /// 承接上文：若配置了 [config.continuation]，先输出过渡段衔接。
+  void _writeContinuation(StringBuffer buffer) {
+    final String? cont = config.continuation;
+    if (cont == null || cont.trim().isEmpty) return;
+    final String tpl = rng.pick(_continuationOpeners);
+    buffer.write(_fill(tpl));
+    buffer.writeln();
+    buffer.writeln();
+  }
+
+  /// 写一个「节拍段」：点题句（织入提示）+ 若干阶段加权节拍句。
   ///
-  /// [buffer] 与 [current] 为累加状态：[current] 为当前字数，方法返回更新后的字数。
-  /// 若 [isCancelled] 或字数已达 [target]，立即停止（仅依赖 rng 序列与字数，
-  /// 不引入任何不确定性，保证同配置可复现）。每个节拍段落间以双换行分段。
-  Future<int> _writeBeats(
-    List<PlotBeat> beats,
-    String heroName,
-    StringBuffer buffer,
-    int current,
-    SendPort resultPort,
-    bool Function() isCancelled,
-    int target,
-  ) async {
-    for (final PlotBeat beat in beats) {
+  /// 返回更新后的字数；过程中回报进度、响应取消、让出事件循环。
+  /// 「转」阶段句数更少更紧凑，营造短促张力；段落间以双换行分段。
+  Future<int> _writeStageParagraph({
+    required String stage,
+    required String hint,
+    required StringBuffer buffer,
+    required int current,
+    required SendPort resultPort,
+    required bool Function() isCancelled,
+    required int target,
+  }) async {
+    resultPort.send(GenerationProgress(
+      charsWritten: current,
+      targetWords: target,
+      stage: '$stage：$hint',
+    ));
+
+    // 点题句：把节拍提示事件化织入叙事。
+    buffer.write(_weaveHint(hint, stage));
+    current = AppConstants.countWords(buffer.toString());
+    if (current >= target || isCancelled()) return current;
+    await Future<dynamic>.delayed(Duration.zero);
+
+    // 节拍句：按阶段加权取样叙事功能句组。
+    final int sentences = switch (stage) {
+      '转' => rng.range(2, 4),
+      '合' => rng.range(3, 5),
+      _ => rng.range(3, 6),
+    };
+    for (int i = 0; i < sentences; i++) {
       if (isCancelled()) return current;
+      buffer.write(_fill(corpus.beatCorpus.pickForStage(stage, rng)));
+      current = AppConstants.countWords(buffer.toString());
       resultPort.send(GenerationProgress(
         charsWritten: current,
         targetWords: target,
-        stage: '${beat.stage}：${beat.hint}',
+        stage: stage,
       ));
-
-      final int sentences = rng.range(2, 5); // 每段 2~4 句
-      for (int i = 0; i < sentences; i++) {
-        if (isCancelled()) return current;
-        final String tpl = _pickTemplate();
-        final String sentenceName = _sentenceName(heroName);
-        buffer.write(_fill(tpl, sentenceName));
-        current = AppConstants.countWords(buffer.toString());
-        resultPort.send(GenerationProgress(
-          charsWritten: current,
-          targetWords: target,
-          stage: beat.stage,
-        ));
-        if (current >= target) return current;
-        // 让出事件循环，使取消信号得以被处理。
-        await Future<dynamic>.delayed(Duration.zero);
-      }
-
-      buffer.writeln();
-      buffer.writeln();
-      current = AppConstants.countWords(buffer.toString());
       if (current >= target) return current;
+      // 让出事件循环，使取消信号得以被处理。
       await Future<dynamic>.delayed(Duration.zero);
     }
-    return current;
+
+    buffer
+      ..writeln()
+      ..writeln();
+    return AppConstants.countWords(buffer.toString());
   }
 
-  /// 大纲驱动的生成：按大纲要点逐点推进，骨架仅提供章法节奏。
+  /// 大纲驱动的生成：按大纲要点逐点推进，骨架提供章法节奏。
   ///
-  /// 策略：每处理一个要点，先用一个「事件句」点题（第 N 点 + 改写要点），
-  /// 再补充 2~3 句常规句式展开；骨架节拍穿插其间保证段落结构。
+  /// 策略：每个要点先事件化为叙事句（不再是「第 N 点」式罗列），
+  /// 再补充 2~4 条与该要点阶段匹配的功能句展开；段落间双换行分段。
   Future<int> _writeOutlineDriven(
     List<PlotBeat> beats,
     List<String> outlinePoints,
-    String heroName,
     StringBuffer buffer,
     int current,
     SendPort resultPort,
@@ -365,12 +447,9 @@ class _TemplateEngineCore {
 
     for (int p = 0; p < outlinePoints.length; p++) {
       if (isCancelled()) return current;
+      if (current >= target) break;
       final String point = outlinePoints[p];
 
-      // 若当前字数已达目标，提前收束。
-      if (current >= target) break;
-
-      // 每段之间插入一个骨架节拍标题（作为进度阶段）。
       final PlotBeat beat =
           usableBeats[beatIndex % usableBeats.length];
       beatIndex++;
@@ -380,8 +459,8 @@ class _TemplateEngineCore {
         stage: '大纲 ${p + 1}/${outlinePoints.length}：${beat.stage}',
       ));
 
-      // 事件句：把要点改写为正文事件（第 N 点 + 事件化）。
-      buffer.write('第${p + 1}点。$point。');
+      // 事件句：把要点改写为正文叙事。
+      buffer.write(_weaveHint(point, beat.stage));
       current = AppConstants.countWords(buffer.toString());
       resultPort.send(GenerationProgress(
         charsWritten: current,
@@ -390,13 +469,11 @@ class _TemplateEngineCore {
       ));
       if (current >= target) break;
 
-      // 补充 2~3 句常规句式展开该要点。
-      final int extra = rng.range(2, 4);
+      // 展开：与该要点阶段匹配的节拍句。
+      final int extra = rng.range(2, 5);
       for (int i = 0; i < extra; i++) {
         if (isCancelled()) return current;
-        final String tpl = _pickTemplate();
-        final String sentenceName = _sentenceName(heroName);
-        buffer.write(_fill(tpl, sentenceName));
+        buffer.write(_fill(corpus.beatCorpus.pickForStage(beat.stage, rng)));
         current = AppConstants.countWords(buffer.toString());
         resultPort.send(GenerationProgress(
           charsWritten: current,
@@ -407,22 +484,22 @@ class _TemplateEngineCore {
         await Future<dynamic>.delayed(Duration.zero);
       }
 
-      buffer.writeln();
-      buffer.writeln();
+      buffer
+        ..writeln()
+        ..writeln();
       current = AppConstants.countWords(buffer.toString());
       await Future<dynamic>.delayed(Duration.zero);
     }
     return current;
   }
 
-  /// 执行生成：按情节骨架分节拍产出段落，循环拼接骨架以逼近目标字数。
+  /// 执行生成：章节场景锚定 + 情节骨架节拍驱动，循环逼近目标字数。
   ///
   /// 策略：
-  /// 1. 首轮选一个完整骨架（起承转合）逐节拍生成；
-  /// 2. 续写轮在 [current] < [target] 且未取消时，循环选取骨架、仅追加其
-  ///    `承`/`转` 发展段，避免堆叠多个「合（结局）」导致结构混乱；
-  /// 3. 收尾若仍不足，再取一个骨架的 `合` 节拍作收束。
-  /// 每句后更新 [current] 并回报进度，达到 [target] 即停止该层循环。
+  /// 1. 锚定本章场景（地名 / 势力 / 关键物 / 对手 / 盟友）；
+  /// 2. 首轮选一个完整骨架（起承转合）逐节拍生成段落；
+  /// 3. 续写轮循环拼接骨架的 `承`/`转` 发展段；细腻文风穿插氛围句段；
+  /// 4. 收尾补一个骨架的 `合` 节拍作收束，并以章末钩子悬念句点睛。
   /// 全程保留取消检查、进度回报、可复现（种子化 rng 顺序推进）与段落分段。
   Future<GenerationResult> run(
     SendPort resultPort,
@@ -431,7 +508,9 @@ class _TemplateEngineCore {
     final int target =
         config.targetWords.clamp(200, _controller.maxWords);
     final List<List<PlotBeat>> skeletons = corpus.plotSkeleton.skeletons;
-    final String heroName = _heroName();
+
+    // 锚定整章场景与人物，保证叙事一致性。
+    _setupChapterScene();
 
     final StringBuffer buffer = StringBuffer();
     int current = 0;
@@ -447,14 +526,12 @@ class _TemplateEngineCore {
         .where((String s) => s.isNotEmpty)
         .toList();
 
-    // 首轮：选一个完整骨架（起承转合），按原逻辑逐节拍生成段落。
+    // 首轮：选一个完整骨架（起承转合），逐节拍生成段落。
     final List<PlotBeat> firstSkeleton = rng.pick(skeletons);
     if (outlinePoints.isNotEmpty) {
-      // 有大纲：以「第 N 点」形式把每个要点改写为事件句，穿插在节拍之间。
       current = await _writeOutlineDriven(
         firstSkeleton,
         outlinePoints,
-        heroName,
         buffer,
         current,
         resultPort,
@@ -462,18 +539,22 @@ class _TemplateEngineCore {
         target,
       );
     } else {
-      current = await _writeBeats(
-        firstSkeleton,
-        heroName,
-        buffer,
-        current,
-        resultPort,
-        isCancelled,
-        target,
-      );
+      for (final PlotBeat beat in firstSkeleton) {
+        if (current >= target || isCancelled()) break;
+        current = await _writeStageParagraph(
+          stage: beat.stage,
+          hint: beat.hint,
+          buffer: buffer,
+          current: current,
+          resultPort: resultPort,
+          isCancelled: isCancelled,
+          target: target,
+        );
+      }
     }
 
-    // 续写轮：循环拼接骨架的发展段（承/转），逼近目标字数。
+    // 续写轮：循环拼接骨架的发展段（承/转），逼近目标字数；
+    // 细腻文风下按概率穿插一条氛围句段，增强环境与心理质感。
     while (current < target && !isCancelled()) {
       final List<PlotBeat> skeleton = rng.pick(skeletons);
       final List<PlotBeat> devBeats = skeleton
@@ -481,15 +562,26 @@ class _TemplateEngineCore {
           .toList();
       // 理论上每个骨架都含承/转，健壮性兜底：若取不到发展段则退出续写。
       if (devBeats.isEmpty) break;
-      current = await _writeBeats(
-        devBeats,
-        heroName,
-        buffer,
-        current,
-        resultPort,
-        isCancelled,
-        target,
-      );
+      for (final PlotBeat beat in devBeats) {
+        if (current >= target || isCancelled()) break;
+        current = await _writeStageParagraph(
+          stage: beat.stage,
+          hint: beat.hint,
+          buffer: buffer,
+          current: current,
+          resultPort: resultPort,
+          isCancelled: isCancelled,
+          target: target,
+        );
+      }
+      if (current >= target || isCancelled()) break;
+      if (config.style == WritingStyle.detailed && rng.chance(0.5)) {
+        buffer.write(_fill(_pickAmbient()));
+        buffer
+          ..writeln()
+          ..writeln();
+        current = AppConstants.countWords(buffer.toString());
+      }
     }
 
     // 收尾：若仍不足且未取消，补一段「合（结局）」作收束。
@@ -497,16 +589,28 @@ class _TemplateEngineCore {
       final List<PlotBeat> skeleton = rng.pick(skeletons);
       final List<PlotBeat> endingBeats =
           skeleton.where((PlotBeat b) => b.stage == '合').toList();
-      if (endingBeats.isNotEmpty) {
-        current = await _writeBeats(
-          endingBeats,
-          heroName,
-          buffer,
-          current,
-          resultPort,
-          isCancelled,
-          target,
+      for (final PlotBeat beat in endingBeats) {
+        if (current >= target || isCancelled()) break;
+        current = await _writeStageParagraph(
+          stage: beat.stage,
+          hint: beat.hint,
+          buffer: buffer,
+          current: current,
+          resultPort: resultPort,
+          isCancelled: isCancelled,
+          target: target,
         );
+      }
+    }
+
+    // 章末钩子：以悬念句收尾，牵引下一章；仅在字数余量充足时追加。
+    if (!isCancelled()) {
+      final String hook = _fill(corpus.beatCorpus.hook(rng));
+      final String merged = '${buffer.toString().trim()}$hook';
+      if (AppConstants.countWords(merged) <= target + 60) {
+        buffer
+          ..write(hook)
+          ..writeln();
       }
     }
 

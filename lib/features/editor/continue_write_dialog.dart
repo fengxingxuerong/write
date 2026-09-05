@@ -50,11 +50,13 @@ class _ContinueWriteDialogState extends ConsumerState<ContinueWriteDialog> {
   String? _finalText;
   StreamSubscription<String>? _sub;
   final FocusNode _focusNode = FocusNode();
+  final ScrollController _scrollCtrl = ScrollController();
 
   @override
   void dispose() {
     _sub?.cancel();
     _focusNode.dispose();
+    _scrollCtrl.dispose();
     super.dispose();
   }
 
@@ -182,10 +184,12 @@ class _ContinueWriteDialogState extends ConsumerState<ContinueWriteDialog> {
           }
         },
         onError: (Object e) {
-          setState(() {
-            _streaming = false;
-            _error = '续写中断：$e';
-          });
+          if (mounted) {
+            setState(() {
+              _streaming = false;
+              _error = '续写中断：$e';
+            });
+          }
         },
         onDone: () {
           if (mounted) {
@@ -341,7 +345,7 @@ class _ContinueWriteDialogState extends ConsumerState<ContinueWriteDialog> {
                   ),
                   padding: const EdgeInsets.all(10),
                   child: SingleChildScrollView(
-                    controller: ScrollController(),
+                    controller: _scrollCtrl,
                     child: SelectableText(
                       _streamText,
                       style: const TextStyle(fontSize: 14, height: 1.5),

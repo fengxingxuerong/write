@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -22,6 +23,28 @@ class AppDatabase {
   final Directory directory;
 
   static AppDatabase? _instance;
+
+  /// per-novelId 异步锁，保证同一小说的读写串行化、不同小说可并发。
+  static final Map<String, Completer<void>> _locks = <String, Completer<void>>{};
+
+  /// 获取指定 novelId 的排他锁并执行 [action]。
+  ///
+  /// 锁粒度为 per-novelId：不同小说的 [action] 可并发，同一小说的 [action] 严格串行。
+  /// 使用 [Completer] 链实现 FIFO 排队，避免 read-modify-write 竞争导致数据丢失。
+  Future<T> withNovelLock<T>(String novelId, Future<T> Function() action) async {
+    // 等待当前锁释放（FIFO 排队）。
+    while (_locks.containsKey(novelId)) {
+      await _locks[novelId]!.future;
+    }
+    final Completer<void> completer = Completer<void>();
+    _locks[novelId] = completer;
+    try {
+      return await action();
+    } finally {
+      _locks.remove(novelId);
+      completer.complete();
+    }
+  }
 
   /// 初始化并缓存单例。确保目录存在。必须在 [runApp] 前调用。
   static Future<AppDatabase> init() async {
