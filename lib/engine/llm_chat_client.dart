@@ -32,7 +32,11 @@ class LlmChatClient {
   final Duration timeout;
 
   /// 发送一轮对话，返回完整回复。
-  Future<LlmChatResult> chat(String system, String user, {String? role}) async {
+  ///
+  /// [temperature] 可选：不传时保持默认 0.2（向后兼容既有调用方）；
+  /// 流水线等高级调用方可显式传入角色所需温度（如 glm/kimi 需 1.0）。
+  Future<LlmChatResult> chat(String system, String user,
+      {String? role, double? temperature}) async {
     if (!config.isConfigured) {
       throw const EngineException('LLM 未配置：请先在设置页填写模型与地址');
     }
@@ -72,7 +76,7 @@ class LlmChatClient {
           'model': config.model,
           'stream': false,
           'max_tokens': _calcTokenBudget(),
-          'temperature': 0.2,
+          'temperature': temperature ?? 0.2,
           'messages': _buildMessages(system, user, role),
         };
         // OpenAI 兼容 API 一律发送 enable_thinking: false（对标准模型无害，对推理模型有效）

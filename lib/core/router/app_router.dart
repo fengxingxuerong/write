@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:novel_writer/features/ai_pipeline/ai_pipeline_pages.dart';
 import 'package:novel_writer/features/project_list/project_list_page.dart';
 import 'package:novel_writer/features/workspace/workspace_page.dart';
 import 'package:novel_writer/features/workspace/privacy_page.dart';
@@ -30,6 +31,21 @@ final Provider<GoRouter> routerProvider = Provider<GoRouter>((ref) {
         path: '/privacy',
         builder: (BuildContext context, GoRouterState state) =>
             const PrivacyPage(),
+      ),
+      GoRoute(
+        path: '/ai-pipeline',
+        builder: (BuildContext context, GoRouterState state) =>
+            const AiPipelineHomePage(),
+      ),
+      GoRoute(
+        path: '/ai-pipeline/config',
+        builder: (BuildContext context, GoRouterState state) =>
+            const AiPipelineConfigPage(),
+      ),
+      GoRoute(
+        path: '/ai-pipeline/run/:id',
+        builder: (BuildContext context, GoRouterState state) =>
+            AiPipelineRunPage(taskId: state.pathParameters['id'] ?? ''),
       ),
     ],
     errorBuilder: (BuildContext context, GoRouterState state) => Scaffold(

@@ -1,0 +1,411 @@
+import 'dart:convert';
+
+import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
+import 'package:novel_writer/ai_pipeline/prompts/pipeline_prompts.dart';
+import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
+import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
+import 'package:novel_writer/core/errors/app_exceptions.dart';
+import 'package:novel_writer/engine/llm_chat_client.dart';
+
+/// 多模型协作长篇小说流水线（Dart 原生编排）。
+///
+/// 流程：
+/// 1. 总规划官规划全书大纲（JSON）；
+/// 2. 逐章：规划官拆场景 → 写手逐场景生成 → 编辑去AI味润色 →
+///    标题官提炼章名 → 每 5 章审校官一致性校验 → 本地质检；
+/// 3. 断点续传：每章完成后原子落盘，中断后可从下一章继续。
+///
+/// 网络层复用 [LlmChatClient]（OpenAI 兼容非流式，支持 enable_thinking）。
+class AiPipelineService {
+  /// 构造服务。
+  AiPipelineService(this._storage);
+
+  final PipelineStorage _storage;
+
+  /// 当前任务（run 期间有效）。
+  AiPipelineTask? _task;
+
+  /// 各角色客户端缓存（按角色名）。
+  final Map<String, LlmChatClient> _clients = <String, LlmChatClient>{};
+
+  /// 获取任务的某角色客户端。
+  LlmChatClient _clientFor(AiRoleConfig cfg) {
+    return _clients.putIfAbsent(
+      cfg.role.name,
+      () => LlmChatClient(config: cfg.llm),
+    );
+  }
+
+  /// 调用某角色模型（带 429/5xx 指数退避重试）。失败返回空串。
+  Future<String> _call(
+    AiRole role,
+    String system,
+    String user, {
+    double? temperature,
+  }) async {
+    final AiPipelineTask task = _task!;
+    final AiRoleConfig cfg = task.config.roleOf(role);
+    if (!cfg.enabled) return '';
+    if (!cfg.llm.isConfigured) {
+      task.addLog('  [配置] ${role.label} 未配置模型，跳过');
+      return '';
+    }
+    final LlmChatClient client = _clientFor(cfg);
+    for (int attempt = 0; attempt <= 2; attempt++) {
+      try {
+        final LlmChatResult r = await client.chat(
+          system,
+          user,
+          temperature: temperature ?? cfg.llm.temperature,
+        );
+        final String content = r.content.trim();
+        if (content.isNotEmpty) return content;
+        task.addLog('  [空响应] ${role.label}（${cfg.llm.model}）');
+        return '';
+      } on EngineException catch (e) {
+        final String msg = e.toString();
+        final bool retriable = msg.contains('429') ||
+            msg.contains('500') ||
+            msg.contains('502') ||
+            msg.contains('503');
+        if (retriable && attempt < 2) {
+          final int wait = (3 * (attempt + 1)) * 5 + 3;
+          task.addLog('  [重试 ${attempt + 1}/3] ${role.label} $msg（等 ${wait}s）');
+          await Future<void>.delayed(Duration(seconds: wait));
+          continue;
+        }
+        task.addLog('  [HTTP] ${role.label} ${cfg.llm.model}: $msg');
+        return '';
+      } catch (e) {
+        if (attempt < 2) {
+          task.addLog('  [重试 ${attempt + 1}/3] ${role.label}: ${e.toString().substring(0, 80)}');
+          await Future<void>.delayed(Duration(seconds: (3 * (attempt + 1)) * 3));
+          continue;
+        }
+        task.addLog('  [错误] ${role.label}: ${e.toString().substring(0, 120)}');
+        return '';
+      }
+    }
+    return '';
+  }
+
+  /// 从 LLM 文本提取首个 JSON 对象（失败返回 null）。
+  Map<String, dynamic>? _parseJsonObject(String text) {
+    if (text.isEmpty) return null;
+    final int s = text.indexOf('{');
+    final int e = text.lastIndexOf('}');
+    if (s < 0 || e <= s) return null;
+    try {
+      final dynamic decoded = jsonDecode(text.substring(s, e + 1));
+      return decoded is Map<String, dynamic> ? decoded : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 校验五角色配置是否就绪（用于 UI 启动前提示）。
+  static List<AiRole> missingRoles(AiPipelineConfig config) {
+    return AiRole.values
+        .where((AiRole r) {
+          final AiRoleConfig cfg = config.roleOf(r);
+          if (r == AiRole.writer) return !cfg.llm.isConfigured;
+          if (r == AiRole.planner) return !cfg.llm.isConfigured;
+          if (r == AiRole.editor) {
+            return config.useEditor && !cfg.llm.isConfigured;
+          }
+          if (r == AiRole.titler) return !cfg.llm.isConfigured;
+          if (r == AiRole.verifier) {
+            return config.useVerifier && !cfg.llm.isConfigured;
+          }
+          return false;
+        })
+        .toList();
+  }
+
+  /// 运行（或续跑）一个任务，直到完成/取消/失败。
+  ///
+  /// [isCancelled] 每章节循环节点检查；[onProgress] 每章节完成后回调。
+  Future<void> run(
+    AiPipelineTask task, {
+    required bool Function() isCancelled,
+    required void Function() onProgress,
+  }) async {
+    _task = task;
+    task.status = PipelineTaskStatus.running;
+    task.error = null;
+    task.finishedAt = null;
+    await _storage.saveTask(task);
+    task.addLog('[流水线] 启动：目标 ${task.config.totalWords} 字');
+
+    // ===== Phase 1：总规划官规划全书大纲 =====
+    if (task.outline.isEmpty) {
+      task.addLog('[规划官] 规划全书大纲...');
+      final String raw = await _call(
+        AiRole.planner,
+        plannerSystemPrompt,
+        planningPrompt(
+          totalWords: task.config.totalWords,
+          genre: task.config.genre,
+          protagonist: task.config.protagonist,
+        ),
+      );
+      final Map<String, dynamic>? outline = _parseJsonObject(raw);
+      final List<dynamic>? chars =
+          outline?['chapter_outlines'] as List<dynamic>?;
+      if (outline == null || chars == null || chars.isEmpty) {
+        task.status = PipelineTaskStatus.failed;
+        task.error = '大纲规划失败：${raw.substring(0, raw.length > 120 ? 120 : raw.length)}';
+        task.finishedAt = DateTime.now();
+        await _storage.saveTask(task);
+        return;
+      }
+      task.outline = outline;
+      task.addLog('[规划官] 《${outline['title']}》共 ${chars.length} 章');
+      await _storage.saveTask(task);
+    } else {
+      task.addLog('[续传] 《${task.title}》已有 ${task.chapterCount} 章');
+    }
+
+    final List<dynamic> chars =
+        (task.outline['chapter_outlines'] as List<dynamic>?) ?? <dynamic>[];
+    if (isCancelled()) {
+      _finishCancel(task);
+      await _storage.saveTask(task);
+      return;
+    }
+
+    // ===== Phase 2：逐章多角色协作 =====
+    for (final dynamic ch in chars) {
+      if (isCancelled()) {
+        _finishCancel(task);
+        await _storage.saveTask(task);
+        return;
+      }
+      final int idx = (ch['idx'] as num?)?.toInt() ?? 0;
+      if (task.chapters.any((PipelineChapter c) => c.idx == idx)) continue;
+      if (task.totalWords >= task.config.totalWords) break;
+      if (idx > task.config.maxChapters) break;
+
+      final String goal = (ch['goal'] as String?) ?? '';
+      final int target = (ch['target'] as num?)?.toInt() ?? 3000;
+      final String lastSummary = _lastChapterTail(task);
+      task.addLog('===== 第 $idx 章（目标 $target 字）：$goal =====');
+
+      // 1) 场景规划（重试 2 次 → 默认骨架兜底）
+      List<Map<String, dynamic>> scenes = <Map<String, dynamic>>[];
+      for (int attempt = 0; attempt < 2; attempt++) {
+        final String raw = await _call(
+          AiRole.planner,
+          plannerSystemPrompt,
+          scenePlanningPrompt(goal, lastSummary),
+        );
+        final Map<String, dynamic>? plan = _parseJsonObject(raw);
+        final List<dynamic>? list = plan?['scenes'] as List<dynamic>?;
+        if (list != null && list.isNotEmpty) {
+          scenes = list
+              .whereType<Map<String, dynamic>>()
+              .toList();
+          break;
+        }
+      }
+      if (scenes.isEmpty) {
+        scenes = defaultScenePlan(target);
+        task.addLog('  [规划] LLM 场景规划失败，使用默认「起承转合」骨架');
+      }
+      task.addLog('  [规划] ${scenes.length} 场景：${scenes.map((s) => s['stage']).join('/')}');
+
+      // 2) 逐场景正文（写手）
+      final List<String> sceneTexts = <String>[];
+      String prevText = lastSummary;
+      for (int si = 0; si < scenes.length; si++) {
+        final Map<String, dynamic> sc = scenes[si];
+        final String stage = (sc['stage'] as String?) ?? '承';
+        final String goalS = (sc['goal'] as String?) ?? '';
+        final List<String> beats = ((sc['beats'] as List<dynamic>?) ?? <dynamic>[])
+            .map((dynamic e) => e.toString())
+            .toList();
+        final int tw = ((sc['targetWords'] as num?)?.toInt() ?? 600).clamp(300, 1500);
+        task.addLog('  [场景 ${si + 1}/${scenes.length}] $stage：$goalS（目标 $tw 字）');
+        String text = await _call(
+          AiRole.writer,
+          writerSystemPrompt,
+          scenePrompt(
+            sceneNo: si + 1,
+            totalScenes: scenes.length,
+            stage: stage,
+            goal: goalS,
+            beats: beats,
+            prevText: prevText,
+          ),
+        );
+        text = text.trim();
+        final int w = text.isEmpty ? 0 : _countWords(text);
+        task.addLog('    -> $w 字');
+        if (text.isNotEmpty) {
+          sceneTexts.add(text);
+          prevText = text;
+        }
+        // 字数不足补充续写
+        if (w > 50 && w < tw * 0.4) {
+          final String add = await _call(
+            AiRole.writer,
+            writerSystemPrompt,
+            '请续写 300 字，承接：\n${_tail(text, 100)}\n\n只输出续写正文：',
+          );
+          if (add.trim().isNotEmpty) {
+            sceneTexts.add('\n\n${add.trim()}');
+          }
+        }
+      }
+
+      String fullText = sceneTexts.join('\n\n');
+      int w = _countWords(fullText);
+      if (w < target * 0.5) {
+        task.addLog('  [WARN] 仅 $w 字，整章续写...');
+        final String add = await _call(
+          AiRole.writer,
+          writerSystemPrompt,
+          '请将下面章节内容扩充到 $target 字以上，保留原意，只输出正文：\n${_tail(fullText, 500)}...',
+        );
+        if (add.trim().isNotEmpty) {
+          fullText = '$fullText\n\n${add.trim()}';
+          w = _countWords(fullText);
+        }
+      }
+
+      // 3) 去AI味润色（编辑）
+      int rawWords = w;
+      if (task.config.useEditor) {
+        final String edited = await _call(
+          AiRole.editor,
+          editorSystemPrompt,
+          editorPrompt(fullText),
+        );
+        if (edited.isNotEmpty) {
+          final int wEdited = _countWords(edited);
+          task.addLog('  [编辑] 润色完成 $w -> $wEdited 字');
+          fullText = edited;
+        } else {
+          task.addLog('  [编辑] 润色失败，保留原文');
+        }
+      }
+
+      // 4) 章节标题（标题官）
+      String title = (ch['title'] as String?) ?? '第$idx章';
+      final String t = await _call(
+        AiRole.titler,
+        titlerSystemPrompt,
+        titlerPrompt(fullText),
+      );
+      if (t.isNotEmpty) {
+        title = t.length > 30 ? t.substring(0, 30) : t;
+      }
+      task.addLog('  [标题] $title');
+
+      // 5) 每 5 章一致性审校（审校官，只记录）
+      final List<String> issues = <String>[];
+      if (task.config.useVerifier && idx % 5 == 0 && task.chapters.isNotEmpty) {
+        final String chapList = task.chapters
+            .where((PipelineChapter c) => c.idx >= idx - 4)
+            .map((PipelineChapter c) => '第${c.idx}章《${c.title}》')
+            .join('\n');
+        final String v = await _call(
+          AiRole.verifier,
+          verifierSystemPrompt,
+          verifierPrompt(jsonEncode(task.outline), chapList),
+        );
+        final Map<String, dynamic>? parsed = _parseJsonObject(v);
+        final List<dynamic>? issueList = parsed?['issues'] as List<dynamic>?;
+        if (issueList != null) {
+          for (final dynamic it in issueList) {
+            final Map<String, dynamic> m = it as Map<String, dynamic>;
+            final String desc =
+                '第${m['chapter']}章 ${m['type']}: ${m['desc']}';
+            issues.add(desc);
+            task.addLog('  [审校] ⚠ $desc');
+          }
+        }
+      }
+
+      // 6) 本地质检：世界观冲突检测
+      final List<String> conflicts = PipelineQa.worldConflicts(
+        task.chapters.toList(),
+        PipelineChapter(
+          idx: idx,
+          title: title,
+          content: fullText,
+          rawWords: rawWords,
+          words: _countWords(fullText),
+        ),
+      );
+      for (final String c in conflicts) {
+        issues.add(c);
+        task.addLog('  [质检] ⚠ $c');
+      }
+
+      final PipelineChapter chapter = PipelineChapter(
+        idx: idx,
+        title: title,
+        content: fullText,
+        rawWords: rawWords,
+        words: _countWords(fullText),
+        issues: issues,
+      );
+      task.chapters.add(chapter);
+      task.chapters.sort((a, b) => a.idx.compareTo(b.idx));
+      task.totalWords += chapter.words;
+      task.addLog('  [完成] 第 $idx 章：${chapter.words} 字 | 累计 ${task.totalWords} 字');
+      await _storage.saveTask(task);
+      onProgress();
+    }
+
+    // ===== Phase 3：完成 =====
+    task.addLog('[流水线] 完成：${task.chapterCount} 章 / ${task.totalWords} 字');
+    task.status = PipelineTaskStatus.done;
+    task.finishedAt = DateTime.now();
+    await _storage.saveTask(task);
+  }
+
+  /// 取消时的状态收尾。
+  void _finishCancel(AiPipelineTask task) {
+    task.status = PipelineTaskStatus.cancelled;
+    task.finishedAt = DateTime.now();
+    task.addLog('[流水线] 已取消');
+  }
+
+  /// 最后一章内容尾部（用于跨章承接）。
+  String _lastChapterTail(AiPipelineTask task) {
+    if (task.chapters.isEmpty) return '';
+    final PipelineChapter last =
+        task.chapters.reduce((a, b) => a.idx > b.idx ? a : b);
+    return _tail(last.content, 200);
+  }
+
+  /// 取文本尾部 N 字符。
+  String _tail(String text, int n) {
+    if (text.length <= n) return text;
+    return text.substring(text.length - n);
+  }
+
+  /// 字数统计（复用 AppConstants.countWords 的语义）。
+  int _countWords(String text) {
+    int count = 0;
+    bool inAscii = false;
+    for (final int code in text.codeUnits) {
+      final int r = code;
+      if ((r >= 0x4E00 && r <= 0x9FFF) || (r >= 0xF900 && r <= 0xFAFF)) {
+        count++;
+        inAscii = false;
+      } else if (r >= 0x30 && r <= 0x39) {
+        count++;
+        inAscii = false;
+      } else if ((r >= 0x41 && r <= 0x5A) || (r >= 0x61 && r <= 0x7A)) {
+        if (!inAscii) count++;
+        inAscii = true;
+      } else {
+        inAscii = false;
+      }
+    }
+    return count;
+  }
+}

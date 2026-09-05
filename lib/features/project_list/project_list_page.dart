@@ -39,6 +39,11 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
         title: const Text('墨匠 InkSmith · 我的作品'),
         actions: <Widget>[
           IconButton(
+            icon: const Icon(Icons.auto_awesome),
+            tooltip: 'AI 长篇小说流水线',
+            onPressed: () => context.push('/ai-pipeline'),
+          ),
+          IconButton(
             icon: const Icon(Icons.bug_report_outlined),
             tooltip: '崩溃日志',
             onPressed: () async {
