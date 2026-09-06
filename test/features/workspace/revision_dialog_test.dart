@@ -9,7 +9,6 @@ void main() {
   Widget wrap(Widget child) => MaterialApp(
         theme: ThemeData(splashFactory: NoSplash.splashFactory),
         home: Builder(builder: (_) => child),
-        ),
       );
 
   group('RevisionDialog diff view', () {

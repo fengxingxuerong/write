@@ -191,13 +191,17 @@ class AiPipelineService {
       final String lastSummary = _lastChapterTail(task);
       task.addLog('===== 第 $idx 章（目标 $target 字）：$goal =====');
 
-      // 1) 场景规划（重试 2 次 → 默认骨架兜底）
+      // 1) 场景规划（重试 2 次 → 默认骨架兜底），注入跨章状态
       List<Map<String, dynamic>> scenes = <Map<String, dynamic>>[];
       for (int attempt = 0; attempt < 2; attempt++) {
         final String raw = await _call(
           AiRole.planner,
           plannerSystemPrompt,
-          scenePlanningPrompt(goal, lastSummary),
+          scenePlanningPrompt(
+            goal,
+            lastSummary,
+            state: task.config.useStateTrack ? task.stateTrack : '',
+          ),
         );
         final Map<String, dynamic>? plan = _parseJsonObject(raw);
         final List<dynamic>? list = plan?['scenes'] as List<dynamic>?;
@@ -236,6 +240,7 @@ class AiPipelineService {
             goal: goalS,
             beats: beats,
             prevText: prevText,
+            state: task.config.useStateTrack ? task.stateTrack : '',
           ),
         );
         text = text.trim();
@@ -327,7 +332,7 @@ class AiPipelineService {
         }
       }
 
-      // 6) 本地质检：世界观冲突检测
+      // 6) 本地质检：世界观冲突 + 商业向（钩子/开场节奏）
       final List<String> conflicts = PipelineQa.worldConflicts(
         task.chapters.toList(),
         PipelineChapter(
@@ -342,6 +347,72 @@ class AiPipelineService {
         issues.add(c);
         task.addLog('  [质检] ⚠ $c');
       }
+      // 商业向质检：章末钩子缺失 / 黄金三章开场迟缓（只记录不阻塞）。
+      final List<String> commercial = PipelineQa.chapterIssues(
+        PipelineChapter(
+          idx: idx,
+          title: title,
+          content: fullText,
+          rawWords: rawWords,
+          words: _countWords(fullText),
+        ),
+      );
+      for (final String c in commercial) {
+        issues.add(c);
+        task.addLog('  [质检] ⚠ $c');
+      }
+
+      // 7) 语义级质量评分（审校官五维打分，每 N 章一次，只记录不阻塞）
+      if (task.config.useQualityReview &&
+          idx % task.config.qualityReviewEvery == 0) {
+        final String qr = await _call(
+          AiRole.verifier,
+          verifierSystemPrompt,
+          qualityReviewPrompt(fullText),
+        );
+        final Map<String, dynamic>? parsed = _parseJsonObject(qr);
+        final Map<String, dynamic>? scores =
+            parsed?['scores'] as Map<String, dynamic>?;
+        final int overall = (parsed?['overall'] as num?)?.toInt() ?? -1;
+        if (overall >= 0) {
+          final String comment = (parsed?['comment'] as String?) ?? '';
+          task.addLog('  [评分] 第 $idx 章 综合 $overall 分'
+              '（开篇${scores?['opening'] ?? '-'}/爽点${scores?['thrill'] ?? '-'}'
+              '/钩子${scores?['hook'] ?? '-'}/动机${scores?['motivation'] ?? '-'}'
+              '/节奏${scores?['rhythm'] ?? '-'}）$comment');
+          if (overall < 60) {
+            issues.add('第 $idx 章 语义质量评分 $overall 分（<60）：$comment');
+            task.addLog('  [评分] ⚠ 低于 60 分，建议人工关注或触发重写');
+          }
+          // 低分自动重写：低于阈值时由编辑官定向重写，当场修复。
+          if (task.config.autoRewriteLowScore &&
+              overall < task.config.rewriteThreshold) {
+            task.addLog('  [重写] 第 $idx 章 $overall 分 < ${task.config.rewriteThreshold}，触发自动重写...');
+            final String rewritten = await _call(
+              AiRole.editor,
+              editorSystemPrompt,
+              rewritePrompt(
+                text: fullText,
+                reviewComment: comment,
+                scores: scores,
+              ),
+            );
+            if (rewritten.trim().isNotEmpty) {
+              final int wNew = _countWords(rewritten.trim());
+              task.addLog('  [重写] 第 $idx 章 $w 字 -> $wNew 字');
+              fullText = rewritten.trim();
+              w = wNew;
+              // 低分告警替换为「已重写」记录。
+              issues.removeWhere((String e) => e.contains('语义质量评分'));
+              issues.add('第 $idx 章 质量评分 $overall 分（<${task.config.rewriteThreshold}），已自动重写');
+            } else {
+              task.addLog('  [重写] 第 $idx 章 重写失败，保留原文');
+            }
+          }
+        } else {
+          task.addLog('  [评分] 第 $idx 章 评分解析失败，跳过（不影响生成）');
+        }
+      }
 
       final PipelineChapter chapter = PipelineChapter(
         idx: idx,
@@ -354,6 +425,23 @@ class AiPipelineService {
       task.chapters.add(chapter);
       task.chapters.sort((a, b) => a.idx.compareTo(b.idx));
       task.totalWords += chapter.words;
+
+      // 8) 跨章状态提取：维护状态清单供下一章写作遵守（失败保留旧状态）
+      if (task.config.useStateTrack) {
+        final String st = await _call(
+          AiRole.verifier,
+          verifierSystemPrompt,
+          stateExtractPrompt(fullText, task.stateTrack),
+        );
+        if (st.trim().isNotEmpty) {
+          task.stateTrack = st.trim();
+          final int stLines = st.trim().split('\n').length;
+          task.addLog('  [状态] 已更新跨章状态清单（$stLines 行）');
+        } else {
+          task.addLog('  [状态] 提取失败，保留旧状态');
+        }
+      }
+
       task.addLog('  [完成] 第 $idx 章：${chapter.words} 字 | 累计 ${task.totalWords} 字');
       await _storage.saveTask(task);
       onProgress();

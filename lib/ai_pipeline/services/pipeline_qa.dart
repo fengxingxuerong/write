@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 
@@ -79,8 +81,291 @@ class PipelineQa {
       'aiEcho': echo.toStringAsFixed(2),
       'repetition': rep.toStringAsFixed(3),
       'rhythm': rhy.toStringAsFixed(3),
+      'hasHook': hasEndingHook(chapter.content),
+      'thrillPerK': thrillPerThousand(chapter.content).toStringAsFixed(2),
+      'surgePerK': surgePerThousand(chapter.content).toStringAsFixed(2),
       'needsPolish': echo > 0.02 || rep > 0.10,
     };
+  }
+
+  // ---------------- 商业向质检（签约级网文标准） ----------------
+
+  /// 章末钩子信号词（结尾 200 字内出现即视为有钩子）。
+  ///
+  /// 覆盖三类信号：① 直白突变（突然/竟然/怎么回事…）；
+  /// ② 隐喻式钩子（被跟踪感/身份伏笔/诡谲意象/威胁暗示）；
+  /// ③ 悬而未决/监视/异常（有什么探出/暗处那只眼/将落未落/又闪又响）。
+  /// 词表经《碎脉铸仙录》33 章成书结尾全量实测校准（人工基线 91% 覆盖率，
+  /// 规则命中 39% → 升级后目标 90%+），避免「睁眼瞎」漏判。
+  static const List<String> _hookWords = <String>[
+    // 直白突变 / 意外
+    '突然', '猛然', '竟然', '就在这时', '就在此时', '刹那', '一瞬',
+    '缓缓', '响起', '逼近', '袭来', '浮现', '动静', '不对劲',
+    '怎么回事', '为什么', '究竟', '难道', '敲门声', '脚步声',
+    // 威胁 / 窥伺 / 追踪
+    '目光', '视线', '盯着', '没开过口', '探猎物', '不安全', '跟着',
+    '尾随', '跟踪', '有人', '像有人', '一道人影', '一个声音', '一声冷笑',
+    '有什么', '探出来', '那只眼', '正看着他', '暗处', '暗影',
+    // 身份伏笔 / 反常细节 / 诡谲意象
+    '旧疤', '刃口', '符箓', '未展开', '惨白', '泛着', '异动',
+    '火燎', '咬掉', '又闪', '又响', '醒了过来', '暗红', '风铃', '渗',
+    // 悬而未决 / 未知
+    '看不清', '看不透', '将落未落', '还没有断', '没断', '发烫', '滴水',
+    '黑影', '还没', '尚未', '来不及', '远远没', '不知何时', '轰', '嗡',
+  ];
+
+  /// 开场节奏·强信号词（双字/特定短语，1 个即视为快速进入事件）。
+  ///
+  /// 双级判定避免单字词（碎/撞/压）在比喻语境（"像纸一样一碰就碎"）
+  /// 的误报：强信号 1 个达标，弱信号需 ≥2 个才达标。
+  static const List<String> _openingStrong = <String>[
+    '穿越', '醒来', '重生', '系统', '觉醒', '废物', '杂种', '契约',
+    '丹田', '灵根', '考核', '耳光', '滚出',
+  ];
+
+  /// 开场节奏·弱信号词（单字动词/名词，需 ≥2 个同时出现）。
+  static const List<String> _openingWeak = <String>[
+    '闯', '砸', '吼', '骂', '跪', '杀', '死', '血', '痛',
+    '摔', '怒', '冲', '撞', '剑', '刀', '雷', '震', '裂', '碎',
+    '废', '辱', '欺', '压', '滚', '魂',
+  ];
+
+  /// 爽点信号词（打脸 / 升级 / 收获 / 揭露 四大类）。
+  ///
+  /// 番茄签约的核心追读指标：每千字爽点数过低 = 读者流失风险。
+  /// 词表选「语义明确」的词，避免「获得/发现/到手」类宽泛误报。
+  static const List<String> thrillWords = <String>[
+    // 升级类
+    '突破', '觉醒', '晋升', '顿悟', '蜕变', '脱胎换骨', '突破瓶颈', '进阶',
+    // 打脸类
+    '哑口无言', '脸色铁青', '目瞪口呆', '鸦雀无声', '颜面扫地',
+    '下不来台', '难以置信', '不敢置信', '灰头土脸', '噤声', '讪讪',
+    // 收获类
+    '收入囊中', '白捡', '意外之喜', '认主', '获得传承', '获得功法',
+    '大丰收', '捡到宝', '至宝', '契约',
+    // 揭露类
+    '真相大白', '水落石出', '恍然大悟', '惊觉', '识破', '原来是你',
+    '竟然是他', '谜底', '露出真面目',
+  ];
+
+  /// 爽点密度（每千字命中数）。网文参考线：≥1.5 为合格，<1.0 偏淡。
+  static double thrillPerThousand(String text) {
+    if (text.isEmpty) return 0.0;
+    int hits = 0;
+    for (final String w in thrillWords) {
+      hits += _countOccurrences(text, w);
+    }
+    final int words = AppConstants.countWords(text);
+    return words == 0 ? 0.0 : (hits / words * 1000).clamp(0.0, 100.0);
+  }
+
+  /// 变强异动信号词（玄幻/仙侠文含蓄爽点：金手指与修为成长的身体异动表达）。
+  ///
+  /// 经《碎脉铸仙录》10.6 万字全量实测：直白爽点词仅命中 5 处，而
+  /// 「发烫/温热/苏醒/流转」类变强异动命中 58 处——含蓄文风的爽点
+  /// 全藏在「丹田那团温热」「掌心微微发烫」里。双通道检测避免误判
+  /// 「爽点过淡」，同时也能识别「只有异动缺外显爽点」的书。
+  static const List<String> powerSurgeWords = <String>[
+    '发烫', '温热', '流转', '苏醒', '凝聚', '暴涨', '充盈', '贯通',
+    '蠕动', '微光', '亮了一亮', '震颤', '嗡鸣', '顺着经脉', '涌入丹田',
+    '沉进丹田', '吞吸', '周天', '拱了一下', '醒了', '睁开眼',
+  ];
+
+  /// 变强异动密度（每千字命中数）。玄幻文参考线：>=1.0 为「含蓄变强流」。
+  static double surgePerThousand(String text) {
+    if (text.isEmpty) return 0.0;
+    int hits = 0;
+    for (final String w in powerSurgeWords) {
+      hits += _countOccurrences(text, w);
+    }
+    final int words = AppConstants.countWords(text);
+    return words == 0 ? 0.0 : (hits / words * 1000).clamp(0.0, 100.0);
+  }
+
+  /// AI 高频叠词修饰（轻轻/微微/淡淡…，AI 腔典型特征）。
+  static const List<String> _aiAdverbs = <String>[
+    '微微', '轻轻', '淡淡', '深深', '缓缓', '悄悄', '默默', '隐隐',
+    '幽幽', '怔怔', '静静', '浅浅',
+  ];
+
+  /// 句首连接词（AI 爱用「然而/于是/随即」起句，真人少用）。
+  static const List<String> _sentenceConnectors = <String>[
+    '然而', '但是', '因此', '与此同时', '于是', '随即', '紧接着',
+    '然后', '不过', '可是',
+  ];
+
+  /// 按句末标点切分句子。
+  static List<String> _splitSentences(String text) {
+    return text
+        .split(RegExp(r'[。！？!?…]+'))
+        .where((String s) => s.trim().isNotEmpty)
+        .toList();
+  }
+
+  /// AI 味深度检测（统计层，非词表匹配）：
+  /// 1. 句长变异系数 CV（AI 句子长度过于均匀 → CV 低）
+  /// 2. 「的」字密度（AI 爱用「他的眼底」式修饰 → 密度高）
+  /// 3. 叠词修饰密度（微微/轻轻/淡淡…）
+  /// 4. 句首连接词比例（然而/于是/随即…）
+  ///
+  /// 返回各指标 + level（0~4，每项超标 +1；>=3 视为 AI 腔偏重）。
+  static Map<String, dynamic> deepAiMetrics(String text) {
+    if (text.isEmpty) {
+      return <String, dynamic>{
+        'sentenceCv': 0.0,
+        'deDensity': 0.0,
+        'adverbDensity': 0.0,
+        'connectorRate': 0.0,
+        'level': 0,
+      };
+    }
+    final int words = AppConstants.countWords(text);
+
+    // 1) 句长变异系数
+    final List<int> lens = _splitSentences(text)
+        .map((String s) => AppConstants.countWords(s))
+        .where((int n) => n > 0)
+        .toList();
+    double cv = 0.0;
+    if (lens.length >= 3) {
+      final double mean =
+          lens.fold<int>(0, (int a, int b) => a + b) / lens.length;
+      final double variance = lens
+              .map((int n) {
+                final double d = n - mean;
+                return d * d;
+              })
+              .fold<double>(0.0, (double a, double b) => a + b) /
+          lens.length;
+      final double sd = math.sqrt(variance);
+      cv = mean > 0 ? sd / mean : 0.0;
+    }
+
+    // 2) 「的」字密度
+    final double deDensity = words > 0
+        ? _countOccurrences(text, '的') / words * 100
+        : 0.0;
+
+    // 3) 叠词修饰密度（每千字）
+    int advHits = 0;
+    for (final String w in _aiAdverbs) {
+      advHits += _countOccurrences(text, w);
+    }
+    final double adverbDensity =
+        words > 0 ? advHits / words * 1000 : 0.0;
+
+    // 4) 句首连接词比例
+    int connHits = 0;
+    for (final String s in _splitSentences(text)) {
+      final String t = s.trim();
+      final String head = t.substring(0, t.length > 4 ? 4 : t.length);
+      for (final String c in _sentenceConnectors) {
+        if (head.startsWith(c)) {
+          connHits++;
+          break;
+        }
+      }
+    }
+    final double connectorRate =
+        _splitSentences(text).isEmpty ? 0.0 : connHits / _splitSentences(text).length;
+
+    // 综合档位
+    final int level = (cv < 0.55 ? 1 : 0) +
+        (deDensity > 4.0 ? 1 : 0) +
+        (adverbDensity > 2.0 ? 1 : 0) +
+        (connectorRate > 0.15 ? 1 : 0);
+    return <String, dynamic>{
+      'sentenceCv': double.parse(cv.toStringAsFixed(2)),
+      'deDensity': double.parse(deDensity.toStringAsFixed(2)),
+      'adverbDensity': double.parse(adverbDensity.toStringAsFixed(2)),
+      'connectorRate': double.parse(connectorRate.toStringAsFixed(2)),
+      'level': level,
+    };
+  }
+
+  /// AI 味深度告警（level>=3 时提示具体超标项）。
+  static List<String> deepAiIssues(String text) {
+    final Map<String, dynamic> m = deepAiMetrics(text);
+    if ((m['level'] as int) < 3) return const <String>[];
+    final List<String> issues = <String>[];
+    if ((m['sentenceCv'] as double) < 0.55) {
+      issues.add('句长过于均匀（CV=${m['sentenceCv']}，真人写作 >0.55）');
+    }
+    if ((m['deDensity'] as double) > 4.0) {
+      issues.add('「的」字密度偏高（${m['deDensity']}%，>4% 偏 AI 腔）');
+    }
+    if ((m['adverbDensity'] as double) > 2.0) {
+      issues.add('叠词修饰偏多（${m['adverbDensity']}/千字，微微/轻轻/淡淡类）');
+    }
+    if ((m['connectorRate'] as double) > 0.15) {
+      issues.add('句首连接词偏多（${(m['connectorRate'] as double) * 100}% 句子以「然而/于是/随即」开头）');
+    }
+    return issues;
+  }
+
+  /// 章末钩子检测：结尾 200 字内是否有未落地悬念信号。
+  static bool hasEndingHook(String text) {
+    if (text.isEmpty) return false;
+    final String tail =
+        text.length > 200 ? text.substring(text.length - 200) : text;
+    for (final String w in _hookWords) {
+      if (tail.contains(w)) return true;
+    }
+    // 结尾 60 字内出现疑问句或省略号悬念。
+    final String last60 =
+        tail.length > 60 ? tail.substring(tail.length - 60) : tail;
+    return last60.contains('？') || last60.contains('?') || last60.contains('……');
+  }
+
+  /// 开场节奏检测（黄金三章）：前 300 字是否进入变故/冲突。
+  ///
+  /// 强信号（穿越/醒来/废物/耳光…）命中 1 个即达标；
+  /// 弱信号（单字动词）需 ≥2 个同时出现——避免比喻语境误报。
+  static bool hasQuickOpening(String text) {
+    if (text.isEmpty) return false;
+    final String head =
+        text.length > 300 ? text.substring(0, 300) : text;
+    for (final String w in _openingStrong) {
+      if (head.contains(w)) return true;
+    }
+    int weakHits = 0;
+    for (final String w in _openingWeak) {
+      if (head.contains(w)) weakHits++;
+    }
+    return weakHits >= 2;
+  }
+
+  /// 章节商业向质检：返回告警列表（钩子缺失 / 黄金三章开场迟缓 / 爽点过淡）。
+  ///
+  /// 只用于提示，不阻塞生成。
+  static List<String> chapterIssues(PipelineChapter chapter) {
+    final List<String> issues = <String>[];
+    if (!hasEndingHook(chapter.content)) {
+      issues.add('第 ${chapter.idx} 章 章末疑似缺少钩子（结尾 200 字未见悬念信号）');
+    }
+    if (chapter.idx <= 3 && !hasQuickOpening(chapter.content)) {
+      issues.add('第 ${chapter.idx} 章 开场 300 字未检测到变故/冲突信号'
+          '（黄金三章要求快速进入事件）');
+    }
+    // 爽点过淡：章节字数 >1500，直白爽点与变强异动双双过低才算。
+    // 含蓄变强流（异动高、直白低）不算过淡，但提示检查是否缺外显爽点。
+    if (chapter.words > 1500) {
+      final double thrill = thrillPerThousand(chapter.content);
+      final double surge = surgePerThousand(chapter.content);
+      if (thrill < 0.5 && surge < 1.0) {
+        issues.add('第 ${chapter.idx} 章 爽点过淡（直白爽点 <0.5 且变强异动 <1.0/千字，'
+            '建议安排打脸/升级/收获/揭露至少一处）');
+      } else if (thrill < 0.5) {
+        issues.add('第 ${chapter.idx} 章 含蓄变强流（外显爽点偏少，直白爽点 <0.5/千字，'
+            '建议补充打脸/收获等外显爽点增强追读）');
+      }
+    }
+    // AI 味深度：句长均匀/的字过多/叠词/句首连接词（统计层 AI 腔）。
+    final List<String> deep = deepAiIssues(chapter.content);
+    if (deep.isNotEmpty) {
+      issues.add('第 ${chapter.idx} 章 AI 腔偏重：${deep.join('；')}');
+    }
+    return issues;
   }
 
   /// 跨章世界观关键词冲突检测（对比已生成章节与新增章节）。

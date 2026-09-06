@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 import 'package:novel_writer/ai_pipeline/services/ai_pipeline_service.dart';
+import 'package:novel_writer/ai_pipeline/services/novel_importer.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
 import 'package:novel_writer/core/di/providers.dart';
@@ -22,6 +23,15 @@ final Provider<PipelineStorage> pipelineStorageProvider =
 final Provider<AiPipelineService> aiPipelineServiceProvider =
     Provider<AiPipelineService>((ref) {
   return AiPipelineService(ref.watch(pipelineStorageProvider));
+});
+
+/// 书架导入 provider。
+final Provider<NovelImporter> novelImporterProvider =
+    Provider<NovelImporter>((ref) {
+  return NovelImporter(
+    ref.watch(novelRepositoryProvider),
+    ref.watch(appDatabaseProvider),
+  );
 });
 
 // ============================================================
@@ -175,6 +185,30 @@ class _TaskCard extends ConsumerWidget {
                     onChanged();
                   case 'report':
                     _showReport(context, task);
+                  case 'import':
+                    final NovelImporter importer =
+                        ref.read(novelImporterProvider);
+                    try {
+                      final String id = await importer.importTask(task);
+                      task.importedNovelId = id;
+                      await ref
+                          .read(pipelineStorageProvider)
+                          .saveTask(task);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('已导入书架：《${task.title}》')),
+                        );
+                      }
+                      onChanged();
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('导入失败：$e')),
+                        );
+                      }
+                    }
+                  case 'open':
+                    context.push('/novel/${task.importedNovelId}');
                   case 'delete':
                     final bool? ok = await showDialog<bool>(
                       context: context,
@@ -209,6 +243,12 @@ class _TaskCard extends ConsumerWidget {
                   const PopupMenuItem<String>(
                     value: 'run',
                     child: Text('查看'),
+                  ),
+                if (task.chapterCount > 0 &&
+                    task.status == PipelineTaskStatus.done)
+                  PopupMenuItem<String>(
+                    value: task.importedNovelId == null ? 'import' : 'open',
+                    child: Text(task.importedNovelId == null ? '导入书架' : '打开作品'),
                   ),
                 if (task.chapterCount > 0)
                   const PopupMenuItem<String>(value: 'report', child: Text('质检报告')),
@@ -294,11 +334,35 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
   bool _useEditor = true;
   bool _useVerifier = true;
 
-  /// 五角色配置（默认值）。
-  final Map<AiRole, AiRoleConfig> _roles = <AiRole, AiRoleConfig>{
+  /// 五角色配置（默认值；可从最近任务配置加载）。
+  Map<AiRole, AiRoleConfig> _roles = <AiRole, AiRoleConfig>{
     for (final AiRole r in AiRole.values)
       r: AiRoleConfig(role: r, llm: LlmConfig(temperature: r.defaultTemperature)),
   };
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRecent();
+  }
+
+  /// 加载最近一次任务配置并预填表单。
+  Future<void> _loadRecent() async {
+    final AiPipelineConfig? cfg =
+        await ref.read(pipelineStorageProvider).loadRecentConfig();
+    if (cfg == null || !mounted) return;
+    setState(() {
+      _wordsCtrl.text = cfg.totalWords.toString();
+      _chaptersCtrl.text = cfg.maxChapters.toString();
+      _genreCtrl.text = cfg.genre;
+      _protagonistCtrl.text = cfg.protagonist;
+      _useEditor = cfg.useEditor;
+      _useVerifier = cfg.useVerifier;
+      _roles = <AiRole, AiRoleConfig>{
+        for (final AiRole r in AiRole.values) r: cfg.roleOf(r),
+      };
+    });
+  }
 
   @override
   void dispose() {
@@ -337,6 +401,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
       config: config,
       createdAt: DateTime.now(),
     );
+    await ref.read(pipelineStorageProvider).saveRecentConfig(config);
     await ref.read(pipelineStorageProvider).saveTask(task);
     if (!context.mounted) return;
     await context.push('/ai-pipeline/run/${task.id}');
@@ -650,6 +715,32 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
     );
   }
 
+  Future<void> _importToShelf() async {
+    final AiPipelineTask task = _task!;
+    final NovelImporter importer = ref.read(novelImporterProvider);
+    try {
+      final String novelId = await importer.importTask(task);
+      task.importedNovelId = novelId;
+      await ref.read(pipelineStorageProvider).saveTask(task);
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已导入书架：《${task.title}》共 ${task.chapterCount} 章'),
+          action: SnackBarAction(
+            label: '打开',
+            onPressed: () => context.push('/novel/$novelId'),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('导入失败：$e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final AiPipelineTask? task = _task;
@@ -667,12 +758,25 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
       appBar: AppBar(
         title: Text('《${task.title}》'),
         actions: <Widget>[
-          if (task.status == PipelineTaskStatus.done)
+          if (task.status == PipelineTaskStatus.done) ...<Widget>[
+            if (task.importedNovelId == null || task.importedNovelId!.isEmpty)
+              IconButton(
+                tooltip: '导入书架（生成章节写入作品库，可继续编辑/导出）',
+                icon: const Icon(Icons.library_add_outlined),
+                onPressed: _importToShelf,
+              )
+            else
+              IconButton(
+                tooltip: '打开作品',
+                icon: const Icon(Icons.open_in_new),
+                onPressed: () => context.push('/novel/${task.importedNovelId}'),
+              ),
             IconButton(
               tooltip: '导出 TXT',
               icon: const Icon(Icons.download),
               onPressed: _exportTxt,
             ),
+          ],
         ],
       ),
       body: Column(

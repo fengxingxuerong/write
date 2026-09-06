@@ -1,3 +1,5 @@
+import 'dart:isolate';
+
 import 'package:characters/characters.dart';
 
 /// 小说生成结果的自动化质量检查器。
@@ -10,11 +12,15 @@ import 'package:characters/characters.dart';
 /// 5. 对话占比：对话行数占总行数的比例
 ///
 /// 适合用于「生成后自动质检 → 决定是否需要 LLM 润色」的决策依据。
+///
+/// **深度优化**：长文本（>5000 字）质检使用 [checkInIsolate] 在独立 Isolate
+/// 中运行，避免阻塞 UI 线程。短文本直接用同步 [check] 即可。
 class NovelQualityChecker {
   /// 私有构造，使用静态方法即可。
   const NovelQualityChecker._();
 
   /// 对 [text] 执行全套质检，返回 [QualityReport]。
+  /// 纯同步方法；适合短线检查。
   static QualityReport check(String text) {
     return QualityReport(
       aiEchoScore: _calcAiEchoScore(text),
@@ -25,6 +31,17 @@ class NovelQualityChecker {
       totalWords: _countWords(text),
       hardViolations: _findHardViolations(text),
     );
+  }
+
+  /// 异步质检（Isolate 化）：长文本下不阻塞 UI。
+  ///
+  /// 自动判断：短文本（<5000 字）直接同步计算；长文本走独立 Isolate。
+  /// 返回的 [Future] 在计算完成后 resolve 为 [QualityReport]。
+  static Future<QualityReport> checkAsync(String text) {
+    if (text.length < 5000) {
+      return Future.value(check(text));
+    }
+    return Isolate.run(() => check(text));
   }
 
   /// 硬伤数量超过阈值则标记需要 LLM 润色。

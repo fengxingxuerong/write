@@ -20,17 +20,23 @@ void main() {
         id: 'n1',
         title: 'Test',
         genre: 'xuanhuan',
+        tone: 'standard',
         targetWordsPerChapter: 3000,
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 1),
+        chapters: const [],
         characters: const [],
         worldSettings: const [],
       );
 
-  Chapter _testChapter() => const Chapter(
+  Chapter _testChapter() => Chapter(
         id: 'ch1',
         novelId: 'n1',
         title: 'Chapter 1',
         order: 0,
         content: '',
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 1),
       );
 
   group('BeatBoardDialog beat board', () {
@@ -53,6 +59,10 @@ void main() {
     });
 
     testWidgets('shows 4 initial beat cards', (tester) async {
+      // 调大视口使弹窗内 4 张节拍卡全部构建（弹窗高 = 视口高 × 0.8）。
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
       final novel = _testNovel();
       final ch = _testChapter();
       await tester.pumpWidget(
@@ -67,11 +77,11 @@ void main() {
       );
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
-      // 玄幻 has at least 4 beats in the first skeleton
-      expect(find.text('起'), findsOneWidget);
-      expect(find.text('承'), findsOneWidget);
-      expect(find.text('转'), findsOneWidget);
-      expect(find.text('合'), findsOneWidget);
+      // 玄幻首套骨架含起承转合四拍（节拍文本为「第N拍 · 阶段」组合）。
+      expect(find.textContaining('· 起'), findsOneWidget);
+      expect(find.textContaining('· 承'), findsOneWidget);
+      expect(find.textContaining('· 转'), findsOneWidget);
+      expect(find.textContaining('· 合'), findsOneWidget);
     });
 
     testWidgets('skeleton chip selector shows count', (tester) async {

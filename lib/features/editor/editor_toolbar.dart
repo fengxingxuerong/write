@@ -118,10 +118,13 @@ class EditorToolbar extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          // 实时字数（中文统计）。
-          Text(
-            '$wordCount 字',
-            style: Theme.of(context).textTheme.bodySmall,
+          // 实时字数（中文统计）。Flexible 保证按钮区不被挤压，窄窗口下省略。
+          Flexible(
+            child: Text(
+              '$wordCount 字',
+              style: Theme.of(context).textTheme.bodySmall,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
           const SizedBox(width: 12),
           // 查找替换（Ctrl+F）。

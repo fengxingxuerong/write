@@ -35,11 +35,25 @@ class LlmChatClient {
   ///
   /// [temperature] 可选：不传时保持默认 0.2（向后兼容既有调用方）；
   /// 流水线等高级调用方可显式传入角色所需温度（如 glm/kimi 需 1.0）。
+  ///
+  /// 带整体超时保护：服务端接受请求后长时间不响应时，
+  /// 在 [timeout] 后抛超时异常，避免调用方无限挂起。
   Future<LlmChatResult> chat(String system, String user,
       {String? role, double? temperature}) async {
     if (!config.isConfigured) {
       throw const EngineException('LLM 未配置：请先在设置页填写模型与地址');
     }
+    return _doChat(system, user, role, temperature).timeout(
+      timeout,
+      onTimeout: () => throw EngineException(
+        'LLM 请求超时（超过 ${timeout.inSeconds}s，请检查网络或服务状态）',
+      ),
+    );
+  }
+
+  /// 实际执行请求（被 [chat] 的 timeout 保护）。
+  Future<LlmChatResult> _doChat(
+      String system, String user, String? role, double? temperature) async {
     final HttpClient client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 15);
     try {

@@ -77,6 +77,10 @@ class SceneBuilder {
     b.writeln('整章总目标字数：$chapterTargetWords 字。高潮/战斗/反转场景多分一些，');
     b.writeln('过场少分一些，每场景控制在 400~1000 字。');
     b.writeln();
+    b.writeln('【规划要求】');
+    b.writeln('- 本章至少安排 1 个爽点场景（打脸/升级/收获/秘密揭露四选一），放在后半段；');
+    b.writeln('- 最后一个场景必须是「合」：收束本章并埋下章末钩子（未落地悬念）。');
+    b.writeln();
     b.writeln('题材：$genre | 基调：$tone');
     if (prevSceneSummary != null && prevSceneSummary.trim().isNotEmpty) {
       b.writeln();
@@ -139,8 +143,8 @@ class SceneBuilder {
       ScenePlan(
         index: 3,
         stage: '合',
-        goal: '收束本幕，留出钩子',
-        beats: const <String>['余波收尾', '悬念钩子'],
+        goal: '收束本幕，留下章末钩子（悬念/变故/未落地威胁）',
+        beats: const <String>['余波收尾', '章末钩子强制'],
         targetWords: per,
       ),
     ];

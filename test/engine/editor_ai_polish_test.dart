@@ -87,7 +87,7 @@ void main() {
     });
 
     test('言情题材返回专属提示', () {
-      final String g = WritingGuidelines.genreGuidance('都市情感');
+      final String g = WritingGuidelines.genreGuidance('yanqing');
       expect(g, contains('言情'));
     });
 

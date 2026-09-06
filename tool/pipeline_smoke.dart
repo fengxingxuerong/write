@@ -23,9 +23,15 @@ Future<void> main() async {
   const String sense = 'https://token.sensenova.cn/v1';
   const String amdUrl = 'https://developer.amd.com.cn/radeon/api/v1';
 
+  // 规模由环境变量控制：SMOKE_WORDS / SMOKE_CHAPTERS（默认 4000 字 / 2 章）
+  final int totalWords =
+      int.tryParse(Platform.environment['SMOKE_WORDS'] ?? '') ?? 4000;
+  final int maxChapters =
+      int.tryParse(Platform.environment['SMOKE_CHAPTERS'] ?? '') ?? 2;
+
   final AiPipelineConfig config = AiPipelineConfig(
-    totalWords: 4000,
-    maxChapters: 2,
+    totalWords: totalWords,
+    maxChapters: maxChapters,
     genre: '玄幻',
     protagonist: '陆沉',
     useEditor: true,
@@ -109,6 +115,14 @@ Future<void> main() async {
     onProgress: () {
       log.writeln(
           '[SMOKE] 进度：${task.chapterCount} 章 / ${task.totalWords} 字');
+      // 实时进度落盘（stdout 重定向有块缓冲，文件最可靠）
+      final File progressFile = File(
+          '$dirPath${Platform.pathSeparator}smoke_progress.txt');
+      progressFile.writeAsStringSync(
+        '${DateTime.now().toIso8601String().substring(11, 19)} '
+        '${task.chapterCount} 章 / ${task.totalWords} 字\n',
+        mode: FileMode.append,
+      );
     },
   );
 

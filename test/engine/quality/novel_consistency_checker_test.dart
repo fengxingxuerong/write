@@ -23,11 +23,15 @@ void main() {
         makeChapter(0, '王小明走进院落。王小明不太高兴。'),
         makeChapter(1, '另一天，王小明继续走。王小明说话了。'),
         makeChapter(2, '第三天，王晓明出现了。王晓明回头看了一眼。'),
+        makeChapter(3, '第四天，王晓明继续赶路。王晓明走了过去。'),
       ]);
-      // 「王小明」与「王晓明」编辑距离 = 1，且各自跨多章
+      // 「王小明」与「王晓明」编辑距离 = 1，且各自跨 ≥ 2 章
       expect(r.nameIssues.isNotEmpty, isTrue);
-      expect(r.nameIssues.first.reason, contains('王小明'));
-      expect(r.nameIssues.first.reason, contains('王晓明'));
+      expect(
+        r.nameIssues.any((i) =>
+            i.reason.contains('王小明') && i.reason.contains('王晓明')),
+        isTrue,
+      );
     });
 
     test('世界观冲突检测', () {

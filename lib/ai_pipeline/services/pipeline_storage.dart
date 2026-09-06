@@ -18,6 +18,9 @@ class PipelineStorage {
   /// 任务文件。
   File taskFile(String id) => File('$directory/$id.json');
 
+  /// 最近一次任务配置（配置页预填）。
+  File get recentConfigFile => File('$directory/recent_config.json');
+
   /// 索引文件。
   File get indexFile => File('$directory/index.json');
 
@@ -79,6 +82,33 @@ class PipelineStorage {
       return tasks;
     } catch (_) {
       return <AiPipelineTask>[];
+    }
+  }
+
+  /// 保存最近一次任务配置（原子写）。
+  Future<void> saveRecentConfig(AiPipelineConfig config) async {
+    await ensureDir();
+    final File file = recentConfigFile;
+    final File tmp = File('${file.path}.tmp');
+    try {
+      await tmp.writeAsString(jsonEncode(config.toJson()), flush: true);
+      await tmp.rename(file.path);
+    } catch (e) {
+      if (await tmp.exists()) await tmp.delete().ignore();
+      // 配置记忆失败不阻塞主流程。
+    }
+  }
+
+  /// 读取最近一次任务配置；无则返回 null。
+  Future<AiPipelineConfig?> loadRecentConfig() async {
+    final File file = recentConfigFile;
+    if (!await file.exists()) return null;
+    try {
+      final Map<String, dynamic> json =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      return AiPipelineConfig.fromJson(json);
+    } catch (_) {
+      return null;
     }
   }
 

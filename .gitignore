@@ -32,3 +32,19 @@ Thumbs.db
 # 测试/覆盖率
 coverage/
 *.log
+
+# 大体积数据与生成产物（不入库）
+data/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 密钥与敏感文件（严禁入库，一律走环境变量注入）
+.env
+.env.*
+*.key
+
+# 含内置 API Key 的生成/守护脚本（密钥一律走环境变量注入，不入库）
+scripts/generate_novel.py
+scripts/watchdog_pipeline.ps1

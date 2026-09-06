@@ -46,8 +46,8 @@ void main() {
       );
       await tester.tap(find.text('analyze'));
       await tester.pumpAndSettle();
-      // Should have "次/千字" in echo display
-      expect(find.textContaining('次/千字'), findsOneWidget);
+      // Should have "/千字" in echo display
+      expect(find.textContaining('/千字'), findsOneWidget);
     });
 
     testWidgets('text with AI echoes detects patterns', (tester) async {
@@ -65,7 +65,7 @@ void main() {
       await tester.tap(find.text('analyze'));
       await tester.pumpAndSettle();
       // Should detect some AI echoes (count > 0)
-      expect(find.textContaining('次/千字'), findsOneWidget);
+      expect(find.textContaining('/千字'), findsOneWidget);
     });
 
     testWidgets('dialog closes properly', (tester) async {

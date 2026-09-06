@@ -180,6 +180,11 @@ class MultiPassChapterEngine {
       b.writeln();
       b.write(WritingGuidelines.genreGuidance(chapterConfig.genre));
     }
+    if (scene.isEnding) {
+      b.writeln();
+      b.writeln('这是本章最后一个场景：结尾必须落在未落地的钩子上'
+          '（悬念/变故/威胁逼近/秘密将揭），禁止平稳收尾，让读者必须看下一章。');
+    }
     b.writeln();
     b.writeln('只输出场景正文：');
     return b.toString();

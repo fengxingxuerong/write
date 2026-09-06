@@ -29,6 +29,32 @@ class WritingGuidelines {
         '高潮段落一句一段，制造阅读加速度。');
     b.writeln('6. 结尾留钩：收尾必须落在悬念、变故、反常细节或未落地的威胁上，'
         '让读者不得不看下一章。');
+    b.writeln('7. 变强具象化（含蓄爽点）：主角成长不写总结（不直说「他突破了」），'
+        '写身体异动——丹田里那团温热像种子顶开土、掌心旧疤开始发烫、'
+        '经脉深处有什么东西苏醒、一缕气顺着脊骨往上爬、第一圈周天成了。'
+        '金手指要有生命感：像鱼翻了个身、像沉睡的东西睁开眼。');
+    return b.toString();
+  }
+
+  /// 【网文商业结构】块：黄金三章 / 爽点密度 / 章末钩子 / 追读欲。
+  ///
+  /// 面向番茄小说签约/上架的商业标准：单章必须给读者「继续读下去的理由」，
+  /// 开篇必须快速建立代入感与追读欲。与核心技法正交，技法管「怎么写」，
+  /// 本块管「结构上必须有什么」。
+  static String get webNovelStructure {
+    final StringBuffer b = StringBuffer();
+    b.writeln('【网文商业结构（番茄签约级）】');
+    b.writeln('- 黄金三章：第 1 章前 300 字内必须发生变故/异象/羞辱/获得，'
+        '让主角立刻陷入非解决不可的局面并显露身份落差；'
+        '前 3 章各埋一个让读者「必须往下看」的理由（秘密、危机、诱惑三选一）；');
+    b.writeln('- 爽点优先：每章至少 1 个爽点——打脸、升级、收获、秘密揭露四选一，'
+        '放在章内后半段（先抑后扬，压抑后释放）。玄幻/仙侠的升级爽点'
+        '优先用「变强具象化」含蓄写法（见核心技法 7），直白词（突破/觉醒）'
+        '至多出现 1 次，其余靠身体异动承载；');
+    b.writeln('- 章末钩子强制：每一章结尾必须落在未落地的悬念上'
+        '（敌人逼近、秘密将揭、奖励未取、威胁升级），禁止平稳收尾；');
+    b.writeln('- 追读欲：章末 100 字内制造信息差——读者知道某事将要发生，'
+        '或人物即将面对未知，让「不看完下一章」变得难受。');
     return b.toString();
   }
 
@@ -66,6 +92,8 @@ class WritingGuidelines {
       ..writeln()
       ..write(coreTechniques)
       ..writeln()
+      ..write(webNovelStructure)
+      ..writeln()
       ..write(antiAiTone)
       ..writeln()
       ..write(outputRules);
@@ -89,7 +117,21 @@ class WritingGuidelines {
   /// 不同题材对"节奏""用词""矛盾类型"有不同偏好：玄幻偏升级与伏笔，
   /// 言情偏内心与对白，悬疑偏信息差，科幻偏设定硬度。统一从本方法取。
   static String genreGuidance(String genre) {
-    final String g = genre.toLowerCase();
+    // 英文题材 key → 中文题材名（与 GenrePresets 内置题材对齐）；
+    // 同时兼容调用方直接传中文题材名/描述的写法（保留下方中文关键词匹配）。
+    const Map<String, String> keyLabels = <String, String>{
+      'xuanhuan': '玄幻',
+      'xianxia': '仙侠',
+      'dushi': '都市',
+      'lishi': '历史',
+      'kehuan': '科幻',
+      'yanqing': '言情',
+      'xuanyi': '悬疑',
+      'kongbu': '恐怖',
+      'game': '游戏',
+      'jingsai': '竞技',
+    };
+    final String g = (keyLabels[genre.toLowerCase()] ?? genre).toLowerCase();
     if (g.contains('玄幻') || g.contains('仙侠') || g.contains('修真')) {
       return '【玄幻专属】废柴逆袭开篇须有「灵气/修炼体系」的具象锚点，'
           '让前 100 字就建立等级落差；高潮留一个「上古 / 失传 / 异象」钩子。';

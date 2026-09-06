@@ -4,7 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/chapter_snapshot.dart';
+import 'package:novel_writer/models/character.dart';
 import 'package:novel_writer/models/novel.dart';
+import 'package:novel_writer/models/world_setting.dart';
 import 'package:novel_writer/storage/app_database.dart';
 import 'package:novel_writer/storage/chapter_repository.dart';
 import 'package:novel_writer/storage/chapter_snapshot_service.dart';
@@ -32,8 +34,8 @@ void main() {
         tone: 'standard',
         targetWordsPerChapter: 0,
         chapters: <Chapter>[chapter],
-        characters: const <dynamic>[],
-        worldSettings: const <dynamic>[],
+        characters: const <Character>[],
+        worldSettings: const <WorldSetting>[],
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
       );
@@ -129,7 +131,13 @@ void main() {
           ChapterRepository(db, snapshots: service);
 
       await repo.updateChapterContent('novelA', 'c1', 'new content');
-      final List<ChapterSnapshot> snaps = await service.list('novelA', 'c1');
+      // _snap 为 fire-and-forget 异步落盘，轮询等待快照生成。
+      List<ChapterSnapshot> snaps = const <ChapterSnapshot>[];
+      for (int i = 0; i < 20; i++) {
+        snaps = await service.list('novelA', 'c1');
+        if (snaps.isNotEmpty) break;
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
       expect(snaps, isNotEmpty);
       expect(snaps.first.content, 'new content');
     });

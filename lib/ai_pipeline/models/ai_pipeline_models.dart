@@ -98,6 +98,22 @@ class AiPipelineConfig {
   /// 是否启用一致性审校（每 5 章）。
   final bool useVerifier;
 
+  /// 是否启用语义级质量评分（审校官五维打分，每 [qualityReviewEvery] 章一次，
+  /// 只记录不阻塞）。
+  final bool useQualityReview;
+
+  /// 质量评分间隔（每几章评一次，默认 3）。
+  final int qualityReviewEvery;
+
+  /// 是否自动重写低分章节（评分低于 [rewriteThreshold] 时触发编辑重写）。
+  final bool autoRewriteLowScore;
+
+  /// 低分触发重写的阈值（默认 55，低于告警线 60，只重写明显差的章节）。
+  final int rewriteThreshold;
+
+  /// 是否启用跨章状态追踪（每章提取状态清单，注入下一章防穿帮）。
+  final bool useStateTrack;
+
   /// 各角色配置（未配置的默认启用，模型需用户在配置页填写）。
   final Map<AiRole, AiRoleConfig> roles;
 
@@ -109,6 +125,11 @@ class AiPipelineConfig {
     this.protagonist = '',
     this.useEditor = true,
     this.useVerifier = true,
+    this.useQualityReview = true,
+    this.qualityReviewEvery = 3,
+    this.autoRewriteLowScore = true,
+    this.rewriteThreshold = 55,
+    this.useStateTrack = true,
     this.roles = const <AiRole, AiRoleConfig>{},
   });
 
@@ -130,6 +151,11 @@ class AiPipelineConfig {
         'protagonist': protagonist,
         'useEditor': useEditor,
         'useVerifier': useVerifier,
+        'useQualityReview': useQualityReview,
+        'qualityReviewEvery': qualityReviewEvery,
+        'autoRewriteLowScore': autoRewriteLowScore,
+        'rewriteThreshold': rewriteThreshold,
+        'useStateTrack': useStateTrack,
         'roles': roles.values.map((AiRoleConfig e) => e.toJson()).toList(),
       };
 
@@ -147,6 +173,11 @@ class AiPipelineConfig {
       protagonist: json['protagonist'] as String? ?? '',
       useEditor: json['useEditor'] as bool? ?? true,
       useVerifier: json['useVerifier'] as bool? ?? true,
+      useQualityReview: json['useQualityReview'] as bool? ?? true,
+      qualityReviewEvery: json['qualityReviewEvery'] as int? ?? 3,
+      autoRewriteLowScore: json['autoRewriteLowScore'] as bool? ?? true,
+      rewriteThreshold: json['rewriteThreshold'] as int? ?? 55,
+      useStateTrack: json['useStateTrack'] as bool? ?? true,
       roles: roles,
     );
   }
@@ -257,6 +288,12 @@ class AiPipelineTask {
   /// 失败原因（status=failed 时）。
   String? error;
 
+  /// 导入书架后的 Novel 项目 id（幂等导入依据）。
+  String? importedNovelId;
+
+  /// 跨章状态清单（每章提取的人物伤势/修为/物品/承诺，注入下一章防穿帮）。
+  String stateTrack;
+
   /// 构造任务。
   AiPipelineTask({
     required this.id,
@@ -269,6 +306,8 @@ class AiPipelineTask {
     required this.createdAt,
     this.finishedAt,
     this.error,
+    this.importedNovelId,
+    this.stateTrack = '',
   })  : chapters = chapters ?? <PipelineChapter>[],
         log = log ?? <String>[];
 
@@ -303,6 +342,8 @@ class AiPipelineTask {
         'createdAt': createdAt.toIso8601String(),
         'finishedAt': finishedAt?.toIso8601String(),
         'error': error,
+        'importedNovelId': importedNovelId,
+        'stateTrack': stateTrack,
       };
 
   /// 反序列化。
@@ -329,6 +370,8 @@ class AiPipelineTask {
               DateTime.now(),
       finishedAt: DateTime.tryParse(json['finishedAt'] as String? ?? ''),
       error: json['error'] as String?,
+      importedNovelId: json['importedNovelId'] as String?,
+      stateTrack: json['stateTrack'] as String? ?? '',
     );
   }
 }

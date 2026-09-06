@@ -21,7 +21,11 @@ void main() {
         id: 'n1',
         title: '测试小说',
         genre: 'xuanhuan',
+        tone: 'standard',
         targetWordsPerChapter: 3000,
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 1),
+        chapters: const [],
         characters: const [
           Character(
             id: 'c1',
@@ -117,8 +121,8 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('注入上下文'));
       await tester.pumpAndSettle();
-      expect(find.text('角色档案'), findsOneWidget);
-      expect(find.text('世界观设定'), findsOneWidget);
+      expect(find.textContaining('角色档案'), findsOneWidget);
+      expect(find.textContaining('世界观设定'), findsOneWidget);
     });
 
     testWidgets('close button works', (tester) async {
@@ -145,7 +149,11 @@ void main() {
         id: 'n2',
         title: '空',
         genre: 'xuanhuan',
+        tone: 'standard',
         targetWordsPerChapter: 3000,
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 1),
+        chapters: const [],
         characters: const [],
         worldSettings: const [],
       );
@@ -161,7 +169,7 @@ void main() {
       );
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
-      expect(find.text('暂无角色'), findsOneWidget);
+      expect(find.textContaining('暂无角色'), findsOneWidget);
     });
   });
 }

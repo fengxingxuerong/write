@@ -174,6 +174,94 @@ def verifier_prompt(outline, chapters):
 {chapters}"""
 
 
+def quality_review_prompt(text):
+    """语义级五维评分（开篇/爽点/钩子/动机/节奏），输出 JSON。"""
+    return f"""请以网文编辑的眼光为下面的章节打分（每项 0~100）：
+1. opening：开篇是否快速进入事件、有代入感（黄金三章标准）
+2. thrill：爽点密度与强度（打脸/升级/收获/秘密揭露；含蓄变强具象化也算）
+3. hook：章末钩子是否让人想看下一章（悬念/变故/威胁）
+4. motivation：人物动机是否清晰、行为是否合理
+5. rhythm：节奏是否张弛有度、无注水、无流水账
+
+严格输出 JSON（不要 Markdown 包裹）：
+{{"scores":{{"opening":85,"thrill":60,"hook":90,"motivation":75,"rhythm":80}},"overall":78,"comment":"一句话点评（30字内）"}}
+
+【章节正文】
+{text}"""
+
+
+def rewrite_prompt(text, comment, scores):
+    """低分章节定向重写（保留情节与钩子，针对薄弱维度改进）。"""
+    dims = ""
+    if scores:
+        dims = "薄弱维度参考：" + " ".join(f"{k}={v}" for k, v in scores.items())
+    return f"""你是资深网文编辑。下面的章节质量评分偏低，请重写以提升质量：
+
+- 保留原情节、人物、伏笔、章末钩子，不新增、不删减剧情
+- 针对薄弱维度重点改进：开篇快速进入事件 / 爽点密度 / 章末钩子 / 人物动机 / 节奏
+- 反AI腔：全篇「仿佛/似乎/宛如」合计不超过 2 次，禁用万能描写
+- 保持原有段落结构，总字数与原作相当（只多不少）
+
+原评语：{comment}
+{dims}
+
+【章节正文】
+{text}
+
+只输出重写后的完整正文，不要任何解释或前缀。"""
+
+
+def state_extract_prompt(text, prev_state):
+    """跨章状态提取：维护状态清单供下一章写作遵守（防人物状态断片）。"""
+    prev = prev_state if prev_state and prev_state.strip() else "（无）"
+    return f"""你是长篇小说状态管理员。请根据本章内容，维护一份「跨章状态清单」，供下一章写作时遵守，防止人物状态断片（如上一章断腿、下一章健步如飞）。
+
+只记录硬状态：
+- 人物伤势（含恢复情况）、修为/境界变化
+- 随身物品的获得/丢失
+- 承诺、恩怨、伪装身份
+- 关键地点变化
+
+要求：
+1. 在旧状态基础上增删改，不要整段重写
+2. 每条一行，格式：人物：状态；物品：xxx
+3. 输出 3~8 行，简洁具体
+4. 只输出状态清单文本，不要任何解释或 Markdown
+
+【旧状态】（首次为空）
+{prev}
+
+【本章内容】
+{text}"""
+
+
+# ============================================================
+# 跨章状态持久化（写入 jsonl 的 type=state_track 行）
+# ============================================================
+def load_state_track(path):
+    """从进度文件恢复跨章状态清单（无则返回空串）。"""
+    if not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if rec.get("type") == "state_track":
+                return rec.get("data", "")
+    return ""
+
+
+def save_state_track(path, data):
+    """追加跨章状态清单到进度文件。"""
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"type": "state_track", "data": data}, ensure_ascii=False) + "\n")
+
+
 # ============================================================
 # 主线
 # ============================================================
@@ -190,6 +278,9 @@ def main():
 
     state = load_state(args.output, min_words=0)
     outline = state["outline"]
+    state_track = load_state_track(args.output)
+    if state_track:
+        print(f"[RESUME] 已恢复跨章状态清单（{len(state_track.splitlines())} 行）")
 
     # ===== Phase 1：总规划官 =====
     if not outline:
@@ -232,10 +323,12 @@ def main():
         target = ch.get("target", 3000)
         print(f"\n{'=' * 60}\n[CH {idx}] {chapter_title}（目标 {target} 字）\n  章纲：{goal}\n{'=' * 60}")
 
-        # 1) 场景规划（planner 链 + 默认骨架兜底）
+        # 1) 场景规划（planner 链 + 默认骨架兜底），注入跨章状态
         plan = None
         for attempt in range(2):
-            raw = call_chain(PLANNER_CHAIN, PLANNER_SYS, scene_planning_prompt(goal, last_summary), max_tokens=2000)
+            raw = call_chain(PLANNER_CHAIN, PLANNER_SYS,
+                             scene_planning_prompt(goal, last_summary, state_track),
+                             max_tokens=2000)
             plan = parse_json_from_llm(raw)
             if plan and plan.get("scenes"):
                 break
@@ -260,7 +353,7 @@ def main():
             tw = sc.get("targetWords", 600)
             print(f"  [场景 {si+1}/{len(scenes)}] {stage}：{goal_s}（目标 {tw} 字）")
             text = call_chain(WRITER_CHAIN, SYSTEM_PROMPT,
-                              scene_prompt(si + 1, len(scenes), stage, goal_s, beats, prev_text, "玄幻"),
+                              scene_prompt(si + 1, len(scenes), stage, goal_s, beats, prev_text, "玄幻", state_track),
                               max_tokens=int(tw * 2.2))
             text = text.strip()
             w = count_words(text)
@@ -313,6 +406,35 @@ def main():
                 for it in issues:
                     print(f"  [审校] ⚠ 第{it.get('chapter','?')}章 {it.get('type','')}: {it.get('desc','')}")
 
+        # 6) 语义质量评分（每 3 章，verifier）+ 低分自动重写（editor）
+        if idx % 3 == 0:
+            qr = llm_call(VERIFIER, VERIFIER_SYS, quality_review_prompt(final_text), max_tokens=1000)
+            parsed = parse_json_from_llm(qr, repair=False)
+            overall, scores, comment = -1, None, ""
+            if parsed:
+                scores = parsed.get("scores") or {}
+                overall = int(parsed.get("overall", -1))
+                comment = str(parsed.get("comment", ""))
+            if overall >= 0:
+                dims = " ".join(f"{k}={v}" for k, v in scores.items()) if scores else "-"
+                print(f"  [评分] 第 {idx} 章 综合 {overall} 分（{dims}）{comment}")
+                if overall < 55:
+                    print(f"  [重写] 第 {idx} 章 {overall} 分 < 55，触发自动重写...")
+                    rw = call_chain(EDITOR_CHAIN, EDITOR_SYS,
+                                    rewrite_prompt(final_text, comment, scores),
+                                    max_tokens=int(w * 1.6) + 500)
+                    if rw and len(rw.strip()) > 100:
+                        w_old = count_words(final_text)
+                        final_text = rw.strip()
+                        w = count_words(final_text)
+                        issues.append({"chapter": idx, "type": "auto_rewrite",
+                                       "desc": f"{overall} 分已自动重写"})
+                        print(f"  [重写] 第 {idx} 章 {w_old} 字 -> {w} 字")
+                    else:
+                        print(f"  [重写] 失败，保留原文")
+            else:
+                print(f"  [评分] 第 {idx} 章 评分解析失败，跳过（不影响生成）")
+
         chapter_record = {
             "idx": idx,
             "title": title_ok,
@@ -326,6 +448,17 @@ def main():
         append_state(args.output, "chapter", chapter_record)
         total_words += chapter_record["words"]
         last_summary = final_text[-200:] if len(final_text) > 200 else final_text
+
+        # 7) 跨章状态提取：维护状态清单供下一章写作遵守（失败保留旧状态）
+        st = llm_call(VERIFIER, VERIFIER_SYS,
+                      state_extract_prompt(final_text, state_track), max_tokens=800)
+        if st and st.strip():
+            state_track = st.strip()
+            save_state_track(args.output, state_track)
+            print(f"  [状态] 已更新跨章状态清单（{len(state_track.splitlines())} 行）")
+        else:
+            print(f"  [状态] 提取失败，保留旧状态")
+
         print(f"  [完成] 第 {idx} 章：{chapter_record['words']} 字 | 累计 {total_words} 字")
 
     # ===== Phase 3：质检汇总 =====
@@ -336,7 +469,9 @@ def main():
         conflicts = ch.get("_world_conflicts", [])
         total_conflicts += len(conflicts)
         flag = "⚠" if conflicts else "✓"
-        print(f"  {flag} 第 {ch['idx']} 章：{ch.get('_words',0)} 字｜AI味 {ch.get('_ai_echo_pct',0)}%")
+        hook_flag = "🪝" if ch.get("_has_hook") else "✗无钩"
+        open_flag = "⚡" if ch.get("_has_quick_opening", True) else "✗开场慢"
+        print(f"  {flag} 第 {ch['idx']} 章：{ch.get('_words',0)} 字｜AI味 {ch.get('_ai_echo_pct',0)}%｜{hook_flag}｜{open_flag}")
     print(f"  世界观冲突：{total_conflicts} 处 | 审校问题：{sum(len(c.get('issues',[])) for c in state['chapters'])} 处")
 
     # ===== Phase 4：导出 =====
