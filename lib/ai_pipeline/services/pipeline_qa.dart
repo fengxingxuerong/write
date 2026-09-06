@@ -10,6 +10,14 @@ import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 /// - 相邻段落重复率：Jaccard 相似度均值
 /// - 节奏失衡：超长/超短段落占比
 /// - 世界观关键词冲突：同一关键词在不同章节「肯定/否定」表述相反
+///
+/// 双端同步须知：本文件的词表常量（aiClicheWords / _hookWords /
+/// _openingStrong / _openingWeak / thrillWords / powerSurgeWords /
+/// _aiAdverbs / _sentenceConnectors / worldKeywords）与 deepAiMetrics
+/// 四项统计阈值，与 `scripts/generate_novel.py` 的对应常量（HOOK_WORDS /
+/// OPENING_STRONG / OPENING_WEAK / THRILL_WORDS / POWER_SURGE_WORDS /
+/// AI_ADVERBS / SENTENCE_CONNECTORS）及 deep_ai_metrics 阈值同步维护，
+/// 调优时必须同一次同时更新两端，防止标准漂移。
 class PipelineQa {
   PipelineQa._();
 
@@ -75,6 +83,7 @@ class PipelineQa {
     final double echo = aiEchoPct(chapter.content);
     final double rep = adjacentRepetition(chapter.content);
     final double rhy = rhythmScore(chapter.content);
+    final Map<String, dynamic> deep = deepAiMetrics(chapter.content);
     return <String, dynamic>{
       'idx': chapter.idx,
       'words': chapter.words,
@@ -84,7 +93,11 @@ class PipelineQa {
       'hasHook': hasEndingHook(chapter.content),
       'thrillPerK': thrillPerThousand(chapter.content).toStringAsFixed(2),
       'surgePerK': surgePerThousand(chapter.content).toStringAsFixed(2),
-      'needsPolish': echo > 0.02 || rep > 0.10,
+      'aiDeepLevel': deep['level'],
+      // 口径与 chapterIssues 保持一致：词表密度、重复率或统计层 AI 味
+      // （level>=3）任一超标即需润色，避免报告与告警列表矛盾。
+      'needsPolish':
+          echo > 0.02 || rep > 0.10 || (deep['level'] as int) >= 3,
     };
   }
 

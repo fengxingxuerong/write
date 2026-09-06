@@ -23,7 +23,7 @@ except Exception:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generate_novel import (has_ending_hook, has_quick_opening, count_words,
-                            thrill_per_thousand, AI_CLICHE,
+                            thrill_per_thousand, surge_per_thousand, AI_CLICHE,
                             OPENING_ACTION_WORDS, deep_ai_metrics)
 
 
@@ -259,7 +259,10 @@ def main():
         rows.append({
             "idx": idx, "title": title, "words": words,
             "has_hook": hook, "has_quick_opening": opening,
+            # 兼容黄金三章/签约报告读取的简名键（print_golden_three 等）
+            "hook": hook, "opening": opening,
             "ai_echo_pct": echo, "thrill_per_k": thrill,
+            "surge_per_k": surge_per_thousand(content),
         })
 
     if args.json:
