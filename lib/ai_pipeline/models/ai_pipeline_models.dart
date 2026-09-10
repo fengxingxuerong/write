@@ -39,6 +39,9 @@ extension AiRoleLabel on AiRole {
 }
 
 /// 单个角色的模型配置（复用 [LlmConfig]，含 provider/model/key/baseUrl/温度）。
+///
+/// 支持**有序备用链** [fallbacks]：主 [llm] 失败/空响应/冷却时沿链切换，
+/// 对齐 Python `scripts/novel_pipeline.py` 的 `PLANNER_CHAIN` 等 failover 语义。
 class AiRoleConfig {
   /// 角色。
   final AiRole role;
@@ -46,21 +49,31 @@ class AiRoleConfig {
   /// 是否启用该角色（停用后由兜底逻辑或本地规则替代）。
   final bool enabled;
 
-  /// 模型连接配置。
+  /// 主模型连接配置。
   final LlmConfig llm;
+
+  /// 备用端点（有序）：主模型失败后按序尝试，直到拿到非空正文。
+  ///
+  /// 空列表 = 只有主模型（与旧版行为一致）。序列化缺省时保持向后兼容。
+  final List<LlmConfig> fallbacks;
 
   /// 构造配置。
   const AiRoleConfig({
     required this.role,
     this.enabled = true,
     this.llm = const LlmConfig(),
+    this.fallbacks = const <LlmConfig>[],
   });
+
+  /// 有效调用链：主 + 备（保持主在前）。
+  List<LlmConfig> get chain => <LlmConfig>[llm, ...fallbacks];
 
   /// 序列化。
   Map<String, dynamic> toJson() => <String, dynamic>{
         'role': role.name,
         'enabled': enabled,
         'llm': llm.toJson(),
+        'fallbacks': fallbacks.map((LlmConfig e) => e.toJson()).toList(),
       };
 
   /// 反序列化。
@@ -74,6 +87,10 @@ class AiRoleConfig {
       llm: LlmConfig.fromJson(
         (json['llm'] as Map<String, dynamic>?) ?? <String, dynamic>{},
       ),
+      fallbacks: (json['fallbacks'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(LlmConfig.fromJson)
+          .toList(),
     );
   }
 }
@@ -294,6 +311,9 @@ class AiPipelineTask {
   /// 跨章状态清单（每章提取的人物伤势/修为/物品/承诺，注入下一章防穿帮）。
   String stateTrack;
 
+  /// 伏笔台账 JSON（每章提取的未收伏笔清单，防长篇丢伏笔/改设定）。
+  String foreshadowLedger;
+
   /// 构造任务。
   AiPipelineTask({
     required this.id,
@@ -308,6 +328,7 @@ class AiPipelineTask {
     this.error,
     this.importedNovelId,
     this.stateTrack = '',
+    this.foreshadowLedger = '[]',
   })  : chapters = chapters ?? <PipelineChapter>[],
         log = log ?? <String>[];
 
@@ -344,6 +365,7 @@ class AiPipelineTask {
         'error': error,
         'importedNovelId': importedNovelId,
         'stateTrack': stateTrack,
+        'foreshadowLedger': foreshadowLedger,
       };
 
   /// 反序列化。
@@ -372,6 +394,7 @@ class AiPipelineTask {
       error: json['error'] as String?,
       importedNovelId: json['importedNovelId'] as String?,
       stateTrack: json['stateTrack'] as String? ?? '',
+      foreshadowLedger: json['foreshadowLedger'] as String? ?? '[]',
     );
   }
 }

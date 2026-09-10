@@ -344,7 +344,7 @@ def main():
         words = count_words(content)
         hook = has_ending_hook(content)
         opening = has_quick_opening(content)
-        thrill = thrill_per_thousand(content)
+        thrill = thrill_per_thousand(content, args.genre)
         hits = sum(content.count(c) for c in AI_CLICHE)
         echo = round(hits / words * 100, 2) if words > 0 else 0.0
         total_hook += 1 if hook else 0
@@ -356,7 +356,7 @@ def main():
             # 兼容黄金三章/签约报告读取的简名键（print_golden_three 等）
             "hook": hook, "opening": opening,
             "ai_echo_pct": echo, "thrill_per_k": thrill,
-            "surge_per_k": surge_per_thousand(content),
+            "surge_per_k": surge_per_thousand(content, args.genre),
         })
 
     if args.json:

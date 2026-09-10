@@ -11,6 +11,7 @@ import 'package:novel_writer/core/utils/text_fmt.dart';
 import 'package:novel_writer/features/project_list/crash_logs_dialog.dart';
 import 'package:novel_writer/features/project_list/novel_card.dart';
 import 'package:novel_writer/features/project_list/project_list_viewmodel.dart';
+import 'package:novel_writer/features/workspace/book_qa_report_dialog.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/storage/app_database.dart';
 import 'package:novel_writer/widgets/app_card.dart';
@@ -84,6 +85,7 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
                     state: state,
                     sort: _sort,
                     onOpen: (NovelSummary n) => context.push('/novel/${n.id}'),
+                    onQa: _showBookQa,
                     onRename: _showRenameDialog,
                     onArchive: (NovelSummary n) => ref
                         .read(projectListViewModelProvider.notifier)
@@ -108,6 +110,24 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
         .create(draft.title, draft.genre, draft.tone);
     if (!mounted) return;
     AppToast.success(context, '《${draft.title}》已创建');
+  }
+
+  /// 全书体检：加载完整项目后弹出报告（NovelSummary 不含正文，需先取全量）。
+  Future<void> _showBookQa(NovelSummary summary) async {
+    final Novel novel;
+    try {
+      novel = await ref.read(novelRepositoryProvider).getNovel(summary.id);
+    } catch (_) {
+      if (!mounted) return;
+      AppToast.error(context, '项目数据读取失败，请重试');
+      return;
+    }
+    if (!mounted) return;
+    if (novel.chapters.isEmpty) {
+      AppToast.warn(context, '《${novel.title}》还没有章节，先写或生成一章再体检');
+      return;
+    }
+    await showBookQaReportDialog(context, novel);
   }
 
   Future<void> _showRenameDialog(NovelSummary novel) async {
@@ -373,6 +393,7 @@ class _Bookshelf extends StatelessWidget {
     required this.state,
     required this.sort,
     required this.onOpen,
+    required this.onQa,
     required this.onRename,
     required this.onArchive,
     required this.onDelete,
@@ -382,6 +403,7 @@ class _Bookshelf extends StatelessWidget {
   final ProjectListState state;
   final String sort;
   final ValueChanged<NovelSummary> onOpen;
+  final ValueChanged<NovelSummary> onQa;
   final ValueChanged<NovelSummary> onRename;
   final ValueChanged<NovelSummary> onArchive;
   final ValueChanged<NovelSummary> onDelete;
@@ -434,6 +456,7 @@ class _Bookshelf extends StatelessWidget {
                     width: cardW,
                     height: cardH,
                     onOpen: () => onOpen(n),
+                    onQa: () => onQa(n),
                     onRename: () => onRename(n),
                     onArchive: () => onArchive(n),
                     onDelete: () => onDelete(n),

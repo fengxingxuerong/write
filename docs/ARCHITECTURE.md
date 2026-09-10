@@ -142,6 +142,47 @@ generate()
 
 **校对客户端修正**：`proofread` 只返回问题数组（省 token），`_applyFixes` 把 `suggestion` replaceFirst 回 `original`（跳过 suggestion==original 的凑数条目）。
 
+## 4.5 AI 长篇小说流水线与多模型路由
+
+`lib/ai_pipeline/` 是应用内「多角色协作」流水线（与 `scripts/novel_pipeline.py` 双端同步）：
+
+- **五角色**：规划官（Planner）/ 正文写手（Writer）/ 去AI味编辑（Editor）/ 标题官（Titler）/ 一致性审校（Verifier）
+- **断点续传**：每章生成后原子落盘，中断可从下一章继续
+- **幂等导入**：`NovelImporter.importTask` 已导入的任务返回既有 id，不重复建书
+
+### 核心抽象：LlmRouter（多链 failover）
+
+```dart
+abstract interface class LlmRouter {
+  Future<LlmRouteResult> call(
+    List<LlmConfig> chain, {
+    required String system,
+    required String user,
+    double? temperature,
+    void Function(String logLine)? onLog,
+  });
+}
+```
+
+- **每个角色可配置主 + 有序备用链**：`AiRoleConfig{ llm, fallbacks: List<LlmConfig> }`，序列化向后兼容（无 fallbacks 的旧配置 chain=只含主）
+- **配额感知路由**（对齐 Python `call_chain` + `_HEALTH`）：冷却跳过 → 沿链尝试 → 空/失败切下一个 → 首个非空返回
+- **健康池**：以 `provider|baseUrl|model` 为粒度记录连续失败，达阈值进入冷却，命中非空正文自动恢复
+- **分层重试**：单端点内重试由 `LlmChatClient`（RetryPolicy 指数退避）承担，跨端点 failover 由 `LlmRouter` 承担
+- **`AiPipelineService.missingRoles`** 感知备用链：主或任一备用已配置即视为就绪
+
+### 统一质检网关（QualityGate）
+
+```dart
+abstract interface class QualityGate {
+  QualityGateReport check(String text, {String prevContent = '', int chapterIndex = 1});
+}
+```
+
+- **模型**：`QualityGateReport`（score/pass/issues/metrics/summaries，可序列化）+ `QualityGateIssue`（source/type/message/severity 四级），位于 `engine/quality/quality_gate.dart`
+- **组合实现**：`CompositeQualityGate`（`ai_pipeline/services/`）——文笔卫生 50% + 过审分 50%，veto 红线上限 60，无钩子/爽点双低各扣 5；商业指标问题与 `PipelineQa.chapterIssues` 同口径
+- **分层**：接口与模型在 engine（纯模型），组合实现在 ai_pipeline（依赖 `PipelineQa`），避免 engine 反向依赖上层
+- **用途**：UI 统一展示三套质检结果；「全书体检」等后续功能以此为入口
+
 ## 5. 敏感词（sensitive_words）
 
 - **内置 5 类 100+ 词**：暴力血腥 / 色情低俗 / 脏话辱骂 / 违法违规 / 广告引流

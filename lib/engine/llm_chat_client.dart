@@ -19,6 +19,18 @@ class LlmChatResult {
   const LlmChatResult(this.content, {this.reasoning});
 }
 
+/// 连接自检（ping）结果。
+class LlmPingResult {
+  /// 构造结果。
+  const LlmPingResult(this.ok, this.message);
+
+  /// 是否连通且模型有响应。
+  final bool ok;
+
+  /// 面向作者的中文说明（含状态码/错误定位）。
+  final String message;
+}
+
 /// 轻量 LLM 对话客户端（非流式）。
 ///
 /// 供 [StoryMemory] 等后台任务使用：发一次请求拿完整回复。
@@ -77,6 +89,46 @@ class LlmChatClient {
       isRetryable: LlmHttpErrors.retryable,
       onRetry: onRetry,
     );
+  }
+
+  /// 连接自检：发一个极小的对话请求验证连通性与模型响应。
+  ///
+  /// 完全复用 [chat] 的既有管线（端路径/Header/payload/重试/状态码翻译），
+  /// 不做第二套 HTTP 实现。返回 [LlmPingResult] 而非抛异常：
+  /// 设置页「测试连接」按钮直接展示 message 即可。
+  ///
+  /// [timeout] 兜底整体耗时（含重试退避），避免限流重试让作者干等。
+  Future<LlmPingResult> ping({Duration timeout = const Duration(seconds: 12)}) async {
+    if (!config.isConfigured) {
+      return const LlmPingResult(false, '未配置：请先在设置页填写模型与地址');
+    }
+    try {
+      final LlmChatResult r = await chat(
+        '',
+        '你好，请只回复两个字：正常',
+        temperature: 0.2,
+        maxTokens: 16,
+      ).timeout(
+        timeout,
+        onTimeout: () => throw LlmTransportException(
+          '连接超时（超过 ${timeout.inSeconds}s）',
+          retryable: true,
+        ),
+      );
+      final String content = r.content.trim();
+      return LlmPingResult(
+        true,
+        content.isEmpty
+            ? '连接成功（服务端已接受请求，但未返回正文）'
+            : '连接成功，模型已响应',
+      );
+    } on LlmTransportException catch (e) {
+      return LlmPingResult(false, e.message);
+    } catch (e) {
+      final String s = e.toString();
+      final String brief = s.length > 120 ? s.substring(0, 120) : s;
+      return LlmPingResult(false, '无法连接：$brief');
+    }
   }
 
   /// 实际执行请求（被 [chat] 的重试与超时包裹）。

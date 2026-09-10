@@ -2,10 +2,10 @@ import 'dart:convert';
 
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 import 'package:novel_writer/ai_pipeline/prompts/pipeline_prompts.dart';
+import 'package:novel_writer/ai_pipeline/services/llm_router.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
-import 'package:novel_writer/core/errors/app_exceptions.dart';
-import 'package:novel_writer/engine/llm_chat_client.dart';
+import 'package:novel_writer/models/llm_config.dart';
 
 /// 多模型协作长篇小说流水线（Dart 原生编排）。
 ///
@@ -15,28 +15,28 @@ import 'package:novel_writer/engine/llm_chat_client.dart';
 ///    标题官提炼章名 → 每 5 章审校官一致性校验 → 本地质检；
 /// 3. 断点续传：每章完成后原子落盘，中断后可从下一章继续。
 ///
-/// 网络层复用 [LlmChatClient]（OpenAI 兼容非流式，支持 enable_thinking）。
+/// 网络层复用 [LlmChatClient]（OpenAI 兼容非流式，支持 enable_thinking），
+/// 多端点 failover 由 [LlmRouter]（配额感知链式路由）承载：
+/// 每个角色可配置主 + 备用链，主失败/空响应/限流自动切下一个。
 class AiPipelineService {
-  /// 构造服务。
-  AiPipelineService(this._storage);
+  /// 构造服务；[router] 可注入测试替身，缺省用 [ChainLlmRouter]。
+  AiPipelineService(this._storage, {LlmRouter? router})
+      : _router = router ?? ChainLlmRouter();
 
   final PipelineStorage _storage;
+
+  /// 角色 → 模型的路由器（链式 failover + 健康池冷却）。
+  final LlmRouter _router;
 
   /// 当前任务（run 期间有效）。
   AiPipelineTask? _task;
 
-  /// 各角色客户端缓存（按角色名）。
-  final Map<String, LlmChatClient> _clients = <String, LlmChatClient>{};
+  /// 链上是否至少一个端点已配置（主或任一备用）。
+  static bool _chainConfigured(AiRoleConfig cfg) =>
+      cfg.chain.any((LlmConfig c) => c.isConfigured);
 
-  /// 获取任务的某角色客户端。
-  LlmChatClient _clientFor(AiRoleConfig cfg) {
-    return _clients.putIfAbsent(
-      cfg.role.name,
-      () => LlmChatClient(config: cfg.llm),
-    );
-  }
-
-  /// 调用某角色模型（带 429/5xx 指数退避重试）。失败返回空串。
+  /// 调用某角色模型（链式 failover：冷却跳过/失败/空响应自动切下一个可用端点）。
+  /// 链上全部失败返回空串。统一在任务日志里记录 `[角色]` 前缀的路由过程。
   Future<String> _call(
     AiRole role,
     String system,
@@ -46,47 +46,47 @@ class AiPipelineService {
     final AiPipelineTask task = _task!;
     final AiRoleConfig cfg = task.config.roleOf(role);
     if (!cfg.enabled) return '';
-    if (!cfg.llm.isConfigured) {
+    if (!_chainConfigured(cfg)) {
       task.addLog('  [配置] ${role.label} 未配置模型，跳过');
       return '';
     }
-    final LlmChatClient client = _clientFor(cfg);
-    for (int attempt = 0; attempt <= 2; attempt++) {
-      try {
-        final LlmChatResult r = await client.chat(
-          system,
-          user,
-          temperature: temperature ?? cfg.llm.temperature,
-        );
-        final String content = r.content.trim();
-        if (content.isNotEmpty) return content;
-        task.addLog('  [空响应] ${role.label}（${cfg.llm.model}）');
-        return '';
-      } on EngineException catch (e) {
-        final String msg = e.toString();
-        final bool retriable = msg.contains('429') ||
-            msg.contains('500') ||
-            msg.contains('502') ||
-            msg.contains('503');
-        if (retriable && attempt < 2) {
-          final int wait = (3 * (attempt + 1)) * 5 + 3;
-          task.addLog('  [重试 ${attempt + 1}/3] ${role.label} $msg（等 ${wait}s）');
-          await Future<void>.delayed(Duration(seconds: wait));
-          continue;
-        }
-        task.addLog('  [HTTP] ${role.label} ${cfg.llm.model}: $msg');
-        return '';
-      } catch (e) {
-        if (attempt < 2) {
-          task.addLog('  [重试 ${attempt + 1}/3] ${role.label}: ${e.toString().substring(0, 80)}');
-          await Future<void>.delayed(Duration(seconds: (3 * (attempt + 1)) * 3));
-          continue;
-        }
-        task.addLog('  [错误] ${role.label}: ${e.toString().substring(0, 120)}');
-        return '';
-      }
+    final LlmRouteResult result = await _router.call(
+      cfg.chain,
+      system: system,
+      user: user,
+      temperature: temperature,
+      onLog: (String line) => task.addLog('  [${role.label}] $line'),
+    );
+    final String content = result.content.trim();
+    if (content.isEmpty) {
+      task.addLog('  [空响应] ${role.label}（${cfg.llm.model}）');
     }
-    return '';
+    return content;
+  }
+
+  /// 检查超时未回收伏笔：埋设超过 staleAfter 章仍未回收的伏笔，返回告警列表。
+  List<String> _checkOpenForeshadows(String ledgerJson, int curIdx, {int staleAfter = 5}) {
+    if (ledgerJson.trim().isEmpty || ledgerJson.trim() == '[]') return <String>[];
+    try {
+      final dynamic decoded = jsonDecode(ledgerJson);
+      final List<dynamic> items = decoded is Map<String, dynamic>
+          ? (decoded['foreshadows'] as List<dynamic>? ?? <dynamic>[])
+          : (decoded is List<dynamic> ? decoded : <dynamic>[]);
+      final List<String> warns = <String>[];
+      for (final dynamic it in items) {
+        if (it is! Map<String, dynamic>) continue;
+        if (it['status'] == 'open' && it['recovered'] == null) {
+          final int planted = (it['planted'] as num?)?.toInt() ?? curIdx;
+          final int age = curIdx - planted;
+          if (age >= staleAfter) {
+            warns.add('⚠ 伏笔超时未收（已$age章）：${it['desc'] ?? '?'}（埋于第$planted章）');
+          }
+        }
+      }
+      return warns;
+    } catch (_) {
+      return <String>[];
+    }
   }
 
   /// 从 LLM 文本提取首个 JSON 对象（失败返回 null）。
@@ -127,18 +127,19 @@ class AiPipelineService {
   }
 
   /// 校验五角色配置是否就绪（用于 UI 启动前提示）。
+  /// 链上任一端点（主或备用）已配置即视为就绪。
   static List<AiRole> missingRoles(AiPipelineConfig config) {
     return AiRole.values
         .where((AiRole r) {
           final AiRoleConfig cfg = config.roleOf(r);
-          if (r == AiRole.writer) return !cfg.llm.isConfigured;
-          if (r == AiRole.planner) return !cfg.llm.isConfigured;
+          if (r == AiRole.writer) return !_chainConfigured(cfg);
+          if (r == AiRole.planner) return !_chainConfigured(cfg);
           if (r == AiRole.editor) {
-            return config.useEditor && !cfg.llm.isConfigured;
+            return config.useEditor && !_chainConfigured(cfg);
           }
-          if (r == AiRole.titler) return !cfg.llm.isConfigured;
+          if (r == AiRole.titler) return !_chainConfigured(cfg);
           if (r == AiRole.verifier) {
-            return config.useVerifier && !cfg.llm.isConfigured;
+            return config.useVerifier && !_chainConfigured(cfg);
           }
           return false;
         })
@@ -224,6 +225,26 @@ class AiPipelineService {
         if (worldHint.isNotEmpty) worldHint,
         if (hookHint.isNotEmpty) '开篇钩子：$hookHint',
       ].join('；');
+      // 未收伏笔摘要注入（提醒写手：已埋伏笔勿改设定，长线伏笔等待回收）
+      String stateInject = task.config.useStateTrack ? task.stateTrack : '';
+      try {
+        final dynamic fsDecoded = task.foreshadowLedger.trim().isEmpty
+            ? null
+            : jsonDecode(task.foreshadowLedger);
+        final List<dynamic> fsItems = fsDecoded is Map<String, dynamic>
+            ? (fsDecoded['foreshadows'] as List<dynamic>? ?? <dynamic>[])
+            : (fsDecoded is List<dynamic> ? fsDecoded : <dynamic>[]);
+        final List<String> fsOpen = fsItems
+            .whereType<Map<String, dynamic>>()
+            .where((dynamic e) => e['status'] == 'open' && (e['desc'] as String? ?? '').isNotEmpty)
+            .take(8)
+            .map((dynamic e) => '- ${e['desc']}')
+            .toList();
+        if (fsOpen.isNotEmpty) {
+          final String fsSummary = '【未收伏笔（写作时勿改相关设定，尽量自然推进/回收）】\n${fsOpen.join('\n')}';
+          stateInject = stateInject.isNotEmpty ? '$stateInject\n\n$fsSummary' : fsSummary;
+        }
+      } catch (_) {}
       for (int attempt = 0; attempt < 2; attempt++) {
         final String raw = await _call(
           AiRole.planner,
@@ -231,7 +252,7 @@ class AiPipelineService {
           scenePlanningPrompt(
             goal,
             lastSummary,
-            state: task.config.useStateTrack ? task.stateTrack : '',
+            state: stateInject,
             worldHint: fullWorldHint,
           ),
         );
@@ -509,6 +530,36 @@ class AiPipelineService {
           task.addLog('  [状态] 已更新跨章状态清单（$stLines 行）');
         } else {
           task.addLog('  [状态] 提取失败，保留旧状态');
+        }
+      }
+
+      // 8.5) 伏笔台账提取：记录新埋伏笔/标记回收（失败保留旧台账，不阻断）
+      final String fs = await _call(
+        AiRole.verifier,
+        verifierSystemPrompt,
+        foreshadowExtractPrompt(fullText, task.foreshadowLedger, idx),
+      );
+      final Map<String, dynamic>? fsData = _parseJsonObject(fs);
+      final List<dynamic>? fsList = fsData?['foreshadows'] as List<dynamic>?;
+      if (fsData != null && fsList != null && fsList.isNotEmpty) {
+        task.foreshadowLedger = jsonEncode(fsData);
+        final int nOpen = fsList.whereType<Map<String, dynamic>>().where((dynamic e) => e['status'] == 'open').length;
+        final int nClosed = fsList.whereType<Map<String, dynamic>>().where((dynamic e) => e['status'] == 'closed').length;
+        task.addLog('  [伏笔] 台账已更新（open $nOpen / closed $nClosed）');
+      } else {
+        task.addLog('  [伏笔] 提取失败，保留旧台账');
+      }
+
+      // 8.6) 每 5 章检查超时未收伏笔（防长篇丢伏笔/改设定）
+      if (idx % 5 == 0) {
+        final List<String> fsWarns = _checkOpenForeshadows(task.foreshadowLedger, idx, staleAfter: 5);
+        if (fsWarns.isNotEmpty) {
+          task.addLog('  [伏笔] 超时未收告警：');
+          for (final String w in fsWarns) {
+            task.addLog('    $w');
+          }
+        } else {
+          task.addLog('  [伏笔] 无超时未收伏笔 ✅');
         }
       }
 

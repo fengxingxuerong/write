@@ -217,8 +217,7 @@ String scenePrompt({
 ///
 /// 只提取硬状态（伤势/修为/物品/承诺/地点），不写心理活动。
 /// 输出纯文本（3~8 行），非 JSON，避免解析失败风险。
-String stateExtractPrompt(String text, String prevState) {
-  return '''
+String stateExtractPrompt(String text, String prevState) {  return '''
 你是长篇小说状态管理员。请根据本章内容，维护一份「跨章状态清单」，供下一章写作时遵守，防止人物状态断片（如上一章断腿、下一章健步如飞），并防止剧情重复线（如上一章已取走遗物、下一章又设计一次取遗物）。
 
 只记录硬状态：
@@ -236,6 +235,36 @@ String stateExtractPrompt(String text, String prevState) {
 
 【旧状态】（首次为空）
 ${prevState.isEmpty ? '（无）' : prevState}
+
+【本章内容】
+$text''';
+}
+
+/// 伏笔台账提取：从本章内容维护「伏笔台账」，防止长篇丢伏笔/改设定。
+///
+/// 只记录设定级伏笔（神秘物件/预言/身份谜团/异常现象/承诺恩怨），
+/// 输出严格 JSON（非纯文本，便于结构化检查回收状态）。
+String foreshadowExtractPrompt(String text, String prevLedger, int idx) {
+  final String prev = prevLedger.trim().isEmpty ? '[]' : prevLedger;
+  return '''
+你是长篇小说伏笔管理员。请根据本章内容（第 $idx 章），维护一份「伏笔台账」，防止长篇写作丢伏笔/改设定。
+
+只记录设定级伏笔（后文必须回收的）：
+- 神秘物件/信物（银鱼/断剑/古玉等）及其来源谜团
+- 预言/警告/神秘声音（"记住这个形状"类）
+- 身份谜团（某人真实身份/来历）
+- 异常现象（异象/异动/神秘组织行动）
+- 角色承诺/恩怨（欠债/血仇/约定）
+
+规则：
+1. 本章新埋的伏笔 → 新增条目（planted=当前章号, status=open）
+2. 本章回收/揭晓的伏笔 → 对应条目标 recovered=当前章号, status=closed
+3. 在旧台账基础上增删改，不要重写无关条目
+4. 只输出 JSON（不要 Markdown），格式：
+{"foreshadows":[{"desc":"伏笔描述（一句话）","planted":1,"recovered":null,"status":"open"}]}
+
+【旧台账】
+$prev
 
 【本章内容】
 $text''';

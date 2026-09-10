@@ -38,6 +38,7 @@ class EditorToolbar extends StatelessWidget {
     required this.onProofread,
     required this.onSaveDraft,
     required this.onShowHistory,
+    this.onCheckup,
     this.serif = true,
     this.onToggleSerif,
     this.paragraphCount = 0,
@@ -108,6 +109,9 @@ class EditorToolbar extends StatelessWidget {
 
   /// 打开历史版本（回滚）。
   final VoidCallback onShowHistory;
+
+  /// 章节质量体检（本地规则，可选；null 时不显示菜单项）。
+  final VoidCallback? onCheckup;
 
   /// 正文是否用衬线字体。
   final bool serif;
@@ -213,6 +217,7 @@ class EditorToolbar extends StatelessWidget {
                 onSplitChapter: onSplitChapter,
                 onSaveDraft: onSaveDraft,
                 onShowHistory: onShowHistory,
+                onCheckup: onCheckup,
               ),
             ],
           ),
@@ -375,17 +380,21 @@ class _Line extends StatelessWidget {
   }
 }
 
-/// 低频动作收纳：章节分割 / 存稿箱 / 历史版本。
+/// 低频动作收纳：章节体检 / 章节分割 / 存稿箱 / 历史版本。
 class _MoreMenu extends StatelessWidget {
   const _MoreMenu({
     required this.onSplitChapter,
     required this.onSaveDraft,
     required this.onShowHistory,
+    this.onCheckup,
   });
 
   final VoidCallback onSplitChapter;
   final VoidCallback onSaveDraft;
   final VoidCallback onShowHistory;
+
+  /// 章节质量体检。
+  final VoidCallback? onCheckup;
 
   @override
   Widget build(BuildContext context) {
@@ -396,6 +405,8 @@ class _MoreMenu extends StatelessWidget {
       icon: Icon(Icons.more_horiz, size: 18, color: ink.inkSoft),
       onSelected: (String v) {
         switch (v) {
+          case 'checkup':
+            onCheckup?.call();
           case 'split':
             onSplitChapter();
           case 'draft':
@@ -405,6 +416,11 @@ class _MoreMenu extends StatelessWidget {
         }
       },
       itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+        if (onCheckup != null)
+          const PopupMenuItem<String>(
+            value: 'checkup',
+            child: _Line(icon: Icons.fact_check_outlined, text: '章节质量体检'),
+          ),
         const PopupMenuItem<String>(
           value: 'split',
           child: _Line(icon: Icons.content_cut, text: '自动章节分割'),

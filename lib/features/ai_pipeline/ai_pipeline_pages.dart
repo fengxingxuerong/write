@@ -547,6 +547,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
                       role: role,
                       enabled: v,
                       llm: cfg.llm,
+                      fallbacks: cfg.fallbacks,
                     );
                   }),
                 ),
@@ -605,6 +606,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
           baseUrl: baseUrl ?? old.llm.baseUrl,
           apiKey: apiKey ?? old.llm.apiKey,
         ),
+        fallbacks: old.fallbacks,
       );
     });
   }

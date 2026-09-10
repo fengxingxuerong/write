@@ -15,6 +15,7 @@ class NovelCard extends StatelessWidget {
     super.key,
     required this.novel,
     required this.onOpen,
+    this.onQa,
     this.onRename,
     this.onArchive,
     this.onDelete,
@@ -27,6 +28,9 @@ class NovelCard extends StatelessWidget {
 
   /// 打开。
   final VoidCallback onOpen;
+
+  /// 全书体检（本地规则质检）。
+  final VoidCallback? onQa;
 
   /// 重命名。
   final VoidCallback? onRename;
@@ -116,6 +120,7 @@ class NovelCard extends StatelessWidget {
                   ),
                   if (onRename != null || onArchive != null || onDelete != null)
                     _CardMenu(
+                      onQa: onQa,
                       onRename: onRename,
                       onArchive: onArchive,
                       onDelete: onDelete,
@@ -256,7 +261,11 @@ class _CardMenu extends StatelessWidget {
     required this.onArchive,
     required this.onDelete,
     required this.archived,
+    this.onQa,
   });
+
+  /// 全书体检。
+  final VoidCallback? onQa;
 
   final VoidCallback? onRename;
   final VoidCallback? onArchive;
@@ -271,6 +280,8 @@ class _CardMenu extends StatelessWidget {
       icon: const Icon(Icons.more_horiz, size: 18),
       onSelected: (String v) {
         switch (v) {
+          case 'qa':
+            onQa?.call();
           case 'rename':
             onRename?.call();
           case 'archive':
@@ -280,6 +291,12 @@ class _CardMenu extends StatelessWidget {
         }
       },
       itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+        if (onQa != null)
+          const PopupMenuItem(
+            value: 'qa',
+            child: _MenuLine(
+                icon: Icons.fact_check_outlined, text: '全书体检'),
+          ),
         if (onRename != null)
           const PopupMenuItem(
             value: 'rename',

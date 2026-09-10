@@ -49,40 +49,79 @@ def _key(name):
         print(f"[WARN] 环境变量 {name} 未设置！")
     return k
 
-# 角色配置（2026-09-05 全量实测后定稿；2026-09-06 规划官改 AMD/NVIDIA flash，
-# 因商汤 K1 配额耗尽、NVIDIA glm-5.2 EOL）：
+# 角色配置（2026-09-05 全量实测后定稿；2026-09-10 规划链接入商汤 K1/K3 分摊 AMD 限流压力）：
+# 规划官：AMD 主 → 商汤 K1 glm-5.2 → 商汤 K3 → NVIDIA 备（商汤矩阵分摊，避免单链路限流卡死）
+# 写手：AMD 主 → 商汤 K2 dsf 备
+# 编辑：商汤 K2 kimi 主 → AMD 兜底
+# 标题官：商汤 K2 dsf
+# 审校：商汤 K1 glm-5.2（大 token）→ AMD 兜底
 PLANNER = dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8, max_tokens=4000)
 PLANNER_CHAIN = [
     dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8, max_tokens=4000),      # AMD 主
+    dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=4000),              # 商汤 K1 glm-5.2 备（配额恢复后生效）
+    dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=4000),    # 商汤 K3 dsf 备
     dict(url=NVIDIA, model="deepseek-ai/deepseek-v4-flash-0731", key="", temp=0.8, max_tokens=4000),  # NVIDIA 备
 ]
 WRITER_CHAIN = [
     dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8),                     # AMD 主
-    dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8),                   # k2 备
+    dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8),                    # 商汤 K2 dsf 备
 ]
 EDITOR_CHAIN = [
-    dict(url=SENSE, model="kimi-k3", key="", temp=1.0, max_tokens=4000),           # k2 主
+    dict(url=SENSE, model="kimi-k3", key="", temp=1.0, max_tokens=4000),           # 商汤 K2 kimi 主
     dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8),                     # AMD 兜底
 ]
-TITLER = dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=300)  # k2
-VERIFIER = dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8, max_tokens=3000)  # AMD
+TITLER = dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=300)  # 商汤 K2 dsf
+VERIFIER = dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=3000)     # 商汤 K1 glm-5.2 大 token
 
 
 def setup_keys():
     PLANNER["key"] = _key("NOVEL_KEY_AMD")
     PLANNER_CHAIN[0]["key"] = _key("NOVEL_KEY_AMD")
-    PLANNER_CHAIN[1]["key"] = _key("NOVEL_KEY_NVIDIA")
+    PLANNER_CHAIN[1]["key"] = _key("NOVEL_KEY_SENSE_K1")
+    PLANNER_CHAIN[2]["key"] = _key("NOVEL_KEY_SENSE_K3")
+    PLANNER_CHAIN[3]["key"] = _key("NOVEL_KEY_NVIDIA")
     WRITER_CHAIN[0]["key"] = _key("NOVEL_KEY_AMD")
     WRITER_CHAIN[1]["key"] = _key("NOVEL_KEY_SENSE_K2")
     EDITOR_CHAIN[0]["key"] = _key("NOVEL_KEY_SENSE_K2")
     EDITOR_CHAIN[1]["key"] = _key("NOVEL_KEY_AMD")
     TITLER["key"] = _key("NOVEL_KEY_SENSE_K2")
-    VERIFIER["key"] = _key("NOVEL_KEY_AMD")
+    VERIFIER["key"] = _key("NOVEL_KEY_SENSE_K1")
 
 
 # ============================================================
 # 非流式调用（Sensenova 系模型流式格式不统一，统一非流式最稳）
 # ============================================================
+# 健康 key 池（2026-09-10 配额感知路由）：记录每个 provider 的连续失败/冷却状态。
+# 冷却中的 provider 会被跳过，避免单 key 配额耗尽后反复撞 429 浪费时间；
+# 冷却期满自动恢复，运行中持续自愈。
+_HEALTH = {}  # key: {fails: 连续失败数, cooldown_until: 时间戳, hits: 成功数}
+COOLDOWN_SECONDS = 300  # 连续失败 N 次后冷却 5 分钟
+
+
+def _mark_fail(provider):
+    k = (provider["url"], provider["model"])
+    h = _HEALTH.setdefault(k, {"fails": 0, "cooldown_until": 0, "hits": 0})
+    h["fails"] += 1
+    if h["fails"] >= 3:
+        h["cooldown_until"] = time.time() + COOLDOWN_SECONDS
+        print(f"    [健康池] {provider['model']} 连续失败 {h['fails']} 次，冷却 {COOLDOWN_SECONDS}s")
+
+
+def _mark_ok(provider):
+    k = (provider["url"], provider["model"])
+    h = _HEALTH.setdefault(k, {"fails": 0, "cooldown_until": 0, "hits": 0})
+    h["fails"] = 0
+    h["hits"] += 1
+
+
+def _in_cooldown(provider):
+    k = (provider["url"], provider["model"])
+    h = _HEALTH.get(k)
+    if not h or h["cooldown_until"] <= time.time():
+        return False
+    return True
+
+
 def llm_call(provider, system, user, max_tokens=None, temperature=None, retries=2):
     """非流式 OpenAI 兼容调用，带指数退避。返回内容字符串，失败返回 ''。"""
     payload = {
@@ -98,6 +137,9 @@ def llm_call(provider, system, user, max_tokens=None, temperature=None, retries=
     }
     body = json.dumps(payload).encode("utf-8")
     url = provider["url"].rstrip("/")
+    # 配额感知路由：冷却中的 key 直接跳过（返回空让 call_chain 切下一个）
+    if _in_cooldown(provider):
+        return ""
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(url, data=body, method="POST")
@@ -105,10 +147,14 @@ def llm_call(provider, system, user, max_tokens=None, temperature=None, retries=
             req.add_header("Authorization", f"Bearer {provider['key']}")
             with urllib.request.urlopen(req, timeout=300) as resp:
                 d = json.loads(resp.read().decode("utf-8"))
-                return d.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+                content = d.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+                if content.strip():
+                    _mark_ok(provider)
+                return content
         except urllib.error.HTTPError as e:
             msg = e.read().decode("utf-8", errors="replace")[:160].replace("\n", " ")
             if e.code in (429, 500, 502, 503):
+                _mark_fail(provider)
                 wait = (3 ** (attempt + 1)) * 5 + random.randint(3, 15)
                 print(f"    [retry {attempt+1}/{retries}] {provider['model']} HTTP {e.code}: {msg} (等 {wait}s)")
                 if attempt < retries:
@@ -118,6 +164,7 @@ def llm_call(provider, system, user, max_tokens=None, temperature=None, retries=
                 print(f"    [HTTP {e.code}] {provider['model']}: {msg}")
             return ""
         except Exception as e:
+            _mark_fail(provider)
             print(f"    [retry {attempt+1}/{retries}] {provider['model']}: {type(e).__name__}: {str(e)[:100]}")
             if attempt < retries:
                 time.sleep((3 ** attempt) * 5)
@@ -126,8 +173,11 @@ def llm_call(provider, system, user, max_tokens=None, temperature=None, retries=
 
 
 def call_chain(chain, system, user, max_tokens):
-    """沿故障转移链依次调用，返回第一个非空结果。"""
+    """沿故障转移链依次调用，返回第一个非空结果。冷却中的 key 自动跳过。"""
     for p in chain:
+        if _in_cooldown(p):
+            print(f"    [chain] {p['model']} 冷却中，跳过")
+            continue
         r = llm_call(p, system, user, max_tokens=max_tokens)
         if r and len(r.strip()) > 20:
             return r
@@ -266,11 +316,102 @@ def state_extract_prompt(text, prev_state):
 
 # ============================================================
 # 跨章状态持久化（写入 jsonl 的 type=state_track 行）
-# ============================================================
 def load_state_track(path):
     """从进度文件恢复跨章状态清单（无则返回空串）。"""
     if not os.path.exists(path):
         return ""
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if rec.get("type") == "state_track":
+                return rec.get("data", "")
+    return ""
+
+
+# ============================================================
+# 伏笔台账（foreshadow ledger）：长篇不丢伏笔的核心机制
+# ============================================================
+def foreshadow_extract_prompt(text, prev_ledger, idx):
+    """从本章内容提取/更新伏笔台账。prev_ledger 为既有台账（JSON 字符串）。
+    输出严格 JSON：{"foreshadows":[{"desc":"伏笔描述","planted":埋设章号,"recovered":回收章号或null,"status":"open/closed"}]}
+    仅记录「明确埋下且预期后文回收」的设定级伏笔（神秘物件/预言/身份谜团/异常现象），
+    不记录普通对话、氛围描写。"""
+    prev = prev_ledger if prev_ledger and prev_ledger.strip() else "[]"
+    return f"""你是长篇小说伏笔管理员。请根据本章内容（第 {idx} 章），维护一份「伏笔台账」，防止长篇写作丢伏笔/改设定。
+
+只记录设定级伏笔（后文必须回收的）：
+- 神秘物件/信物（银鱼/断剑/古玉等）及其来源谜团
+- 预言/警告/神秘声音（"记住这个形状"类）
+- 身份谜团（某人真实身份/来历）
+- 异常现象（异象/异动/神秘组织行动）
+- 角色承诺/恩怨（欠债/血仇/约定）
+
+规则：
+1. 本章新埋的伏笔 → 新增条目（planted=当前章号, status=open）
+2. 本章回收/揭晓的伏笔 → 对应条目标 recovered=当前章号, status=closed
+3. 在旧台账基础上增删改，不要重写无关条目
+4. 只输出 JSON 数组文本（不要 Markdown），格式：
+{{"foreshadows":[{{"desc":"伏笔描述（一句话）","planted":1,"recovered":null,"status":"open"}}]}}
+
+【旧台账】
+{prev}
+
+【本章内容】
+{text}"""
+
+
+def load_foreshadow(path):
+    """从进度文件恢复伏笔台账（JSON 字符串，无则返回 '[]'）。"""
+    if not os.path.exists(path):
+        return "[]"
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if rec.get("type") == "foreshadow":
+                return rec.get("data", "[]")
+    return "[]"
+
+
+def save_foreshadow(path, data):
+    """持久化伏笔台账（type=foreshadow 行）。"""
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "foreshadow", "data": data}, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def check_open_foreshadows(ledger_json, cur_idx, stale_after=5):
+    """检查超时未回收伏笔：埋设超过 stale_after 章仍未回收的伏笔，返回告警列表。"""
+    if not ledger_json or ledger_json.strip() == "[]":
+        return []
+    try:
+        data = json.loads(ledger_json)
+        items = data.get("foreshadows", []) if isinstance(data, dict) else data
+    except Exception:
+        return []
+    warnings = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        if it.get("status") == "open" and it.get("recovered") is None:
+            planted = it.get("planted", cur_idx)
+            age = cur_idx - planted
+            if age >= stale_after:
+                warnings.append(f"⚠ 伏笔超时未收（已{age}章）：{it.get('desc','?')}（埋于第{planted}章）")
+    return warnings
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -421,6 +562,9 @@ def main():
     state_track = load_state_track(args.output)
     if state_track:
         print(f"[RESUME] 已恢复跨章状态清单（{len(state_track.splitlines())} 行）")
+    foreshadow_ledger = load_foreshadow(args.output)
+    if foreshadow_ledger and foreshadow_ledger.strip() != "[]":
+        print(f"[RESUME] 已恢复伏笔台账（{foreshadow_ledger.count('\"desc\"')} 条）")
 
     # ===== Phase 1：总规划官 =====
     if not outline:
@@ -478,10 +622,23 @@ def main():
         hook_hint = outline.get("hook", "") if isinstance(outline, dict) else ""
         if world_hint:
             world_hint += ("；开篇钩子：" + hook_hint) if hook_hint else ""
+        # 未收伏笔摘要注入（提醒写手：已埋伏笔勿改设定，长线伏笔等待回收）
+        fs_open_summary = ""
+        try:
+            fs_data = json.loads(foreshadow_ledger) if foreshadow_ledger else {}
+            fs_items = fs_data.get("foreshadows", []) if isinstance(fs_data, dict) else []
+            fs_open = [it.get("desc", "") for it in fs_items if it.get("status") == "open" and it.get("desc")]
+            if fs_open:
+                fs_open_summary = "【未收伏笔（写作时勿改相关设定，尽量自然推进/回收）】\n" + "\n".join(f"- {d}" for d in fs_open[:8])
+        except Exception:
+            pass
+        state_inject = state_track
+        if fs_open_summary:
+            state_inject = (state_track + "\n\n" + fs_open_summary) if state_track else fs_open_summary
         plan = None
         for attempt in range(2):
             raw = call_chain(PLANNER_CHAIN, PLANNER_SYS,
-                             scene_planning_prompt(goal, last_summary, state_track,
+                             scene_planning_prompt(goal, last_summary, state_inject,
                                                    protagonist=protagonist, genre=args.genre,
                                                    world_hint=world_hint),
                              max_tokens=2000)
@@ -710,6 +867,30 @@ def main():
             print(f"  [状态] 已更新跨章状态清单（{len(state_track.splitlines())} 行）")
         else:
             print(f"  [状态] 提取失败，保留旧状态")
+
+        # 7.5) 伏笔台账提取：记录新埋伏笔/标记回收（失败保留旧台账，不阻断）
+        fs = llm_call(VERIFIER, VERIFIER_SYS,
+                      foreshadow_extract_prompt(final_text, foreshadow_ledger, idx),
+                      max_tokens=600)
+        parsed_fs = parse_json_from_llm(fs)
+        if parsed_fs and parsed_fs.get("foreshadows"):
+            foreshadow_ledger = json.dumps(parsed_fs, ensure_ascii=False)
+            save_foreshadow(args.output, foreshadow_ledger)
+            n_open = sum(1 for it in parsed_fs["foreshadows"] if it.get("status") == "open")
+            n_closed = sum(1 for it in parsed_fs["foreshadows"] if it.get("status") == "closed")
+            print(f"  [伏笔] 台账已更新（open {n_open} / closed {n_closed}）")
+        else:
+            print(f"  [伏笔] 提取失败，保留旧台账")
+
+        # 7.6) 每 5 章检查超时未收伏笔（防长篇丢伏笔/改设定）
+        if idx % 5 == 0:
+            fs_warns = check_open_foreshadows(foreshadow_ledger, idx, stale_after=5)
+            if fs_warns:
+                print("  [伏笔] 超时未收告警：")
+                for w in fs_warns:
+                    print(f"    {w}")
+            else:
+                print(f"  [伏笔] 无超时未收伏笔 ✅")
 
         print(f"  [完成] 第 {idx} 章：{chapter_record['words']} 字 | 累计 {total_words} 字")
 

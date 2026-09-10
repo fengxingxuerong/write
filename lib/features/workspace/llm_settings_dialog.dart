@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:novel_writer/core/di/providers.dart';
+import 'package:novel_writer/engine/llm_chat_client.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
 /// 打开 AI 设置弹窗。
@@ -106,49 +107,12 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
   }
 
   /// 发一个极小的 chat 请求验证连通性。
+  ///
+  /// 委托 [LlmChatClient.ping]（复用其 pipeline：路径/Header/payload/
+  /// 重试/状态码翻译），不在此重复 HTTP 实现。
   Future<String> _testConnection(LlmConfig config) async {
-    final HttpClient client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 10);
-    try {
-      final String base =
-          config.baseUrl.endsWith('/') ? config.baseUrl.substring(0, config.baseUrl.length - 1) : config.baseUrl;
-      final String path = config.provider == LlmProvider.ollama ? '/api/chat' : '/chat/completions';
-      final HttpClientRequest req = await client.postUrl(Uri.parse('$base$path'));
-      req.headers
-        ..set(HttpHeaders.contentTypeHeader, 'application/json')
-        ..set(HttpHeaders.acceptHeader, 'application/json');
-      if (config.provider == LlmProvider.openaiCompatible &&
-          config.apiKey.trim().isNotEmpty) {
-        req.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${config.apiKey}');
-      }
-      final Map<String, dynamic> body = config.provider == LlmProvider.ollama
-          ? <String, dynamic>{
-              'model': config.model,
-              'messages': <Map<String, dynamic>>[
-                <String, dynamic>{'role': 'user', 'content': '你好，请回复"OK"'},
-              ],
-              'stream': false,
-            }
-          : <String, dynamic>{
-              'model': config.model,
-              'messages': <Map<String, dynamic>>[
-                <String, dynamic>{'role': 'user', 'content': '你好，请回复"OK"'},
-              ],
-              'stream': false,
-              'max_tokens': 16,
-            };
-      req.add(utf8.encode(jsonEncode(body)));
-      final HttpClientResponse resp = await req.close();
-      final String text = await resp.transform(utf8.decoder).join();
-      if (resp.statusCode >= 200 && resp.statusCode < 300) {
-        return '✅ 连接成功（${resp.statusCode}）';
-      }
-      return '❌ 失败（${resp.statusCode}）：$text';
-    } catch (e) {
-      return '❌ 无法连接：$e';
-    } finally {
-      client.close(force: true);
-    }
+    final LlmPingResult r = await LlmChatClient(config: config).ping();
+    return r.ok ? '✅ ${r.message}' : '❌ ${r.message}';
   }
 
   /// 探测本地模型服务：优先 llama-server（QClaw 内置，19110），
