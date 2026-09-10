@@ -112,8 +112,14 @@ def print_golden_three(chapters, rows):
         if not r["hook"]:
             print("      ↳ 缺「章末钩子」（结尾 200 字未见悬念信号）")
     rate = total_pass / total_items * 100
-    verdict = "达标 ✅" if rate >= 80 else ("临界 ⚠" if rate >= 60 else "不达标 ❌")
     print("  " + "-" * 58)
+    if len(g3) < 3:
+        # 只有 2 章时「前 3 章」结构上不可能失败，据此下“达标”结论是自欺欺人。
+        print(f"  体检结果：{total_pass}/{total_items} 项——仅 {len(g3)} 章，"
+              f"不足「黄金三章」样本，不计入签约评分")
+        print()
+        return
+    verdict = "达标 ✅" if rate >= 80 else ("临界 ⚠" if rate >= 60 else "不达标 ❌")
     print(f"  体检结果：{total_pass}/{total_items} 项达标（{rate:.0f}%）→ {verdict}")
     if rate < 80:
         print("  💡 建议：缺项对应补强——开篇变故/身份落差/金手指/目标/钩子，")
@@ -121,66 +127,151 @@ def print_golden_three(chapters, rows):
     print()
 
 
-def print_signability_report(rows, chapters):
-    """签约可行性报告：五大维度合成总分 + 对标番茄签约要素清单。"""
-    if not rows:
-        return
-    n = len(rows)
-    # ---- 各维度得分 ----
-    hook_rate = sum(1 for r in rows if r["hook"]) / n
-    score_hook = round(hook_rate * 30, 1)
+# 非爽文题材：THRILL_WORDS 词表是为爽文设计的，这些题材套用它没有意义。
+# 旧版把「不适用」处理成「白送满分」，任何悬疑/历史书都能无条件逼近 100 分；
+# 现在改为「不计入总分」——按已评维度归一化，既不罚也不送。
+NON_POWER_FANTASY_GENRES = ("悬疑", "刑侦", "灵异", "历史")
 
-    g3_pass, g3_total, _ = _golden_three_stats(chapters, rows)
-    g3_rate = g3_pass / g3_total if g3_total else 0
-    score_g3 = round(g3_rate * 30, 1)
 
-    avg_thrill = sum(r["thrill_per_k"] for r in rows) / n
-    avg_surge = sum(r["surge_per_k"] for r in rows) / n
-    score_thrill = round(min(20.0, avg_thrill * 8 + avg_surge * 4), 1)
-
-    avg_echo = sum(r["ai_echo_pct"] for r in rows) / n
-    deep_levels = [deep_ai_metrics(c)["level"] for _, _, c in chapters]
-    avg_deep = sum(deep_levels) / len(deep_levels) if deep_levels else 0
-    score_ai = round(max(0.0, 10.0 - avg_echo * 4 - avg_deep * 1.5), 1)
-
-    # 节奏：无塌陷区满分，每个塌陷区 -3
-    zones = 0
+def _collapse_zones(rows, threshold=0.5, min_len=2):
+    """连续 >=min_len 章爽点密度 <threshold 的区段，返回 [(起章, 止章, 章数)]。"""
+    zones = []
     start = None
     for i, r in enumerate(rows):
-        if r["thrill_per_k"] < 0.5:
+        if r["thrill_per_k"] < threshold:
             if start is None:
                 start = i
         else:
-            if start is not None and i - start >= 2:
-                zones += 1
+            if start is not None and i - start >= min_len:
+                zones.append((rows[start]["idx"], rows[i - 1]["idx"], i - start))
             start = None
-    if start is not None and len(rows) - start >= 2:
-        zones += 1
-    score_rhythm = round(max(0.0, 10.0 - zones * 3), 1)
+    if start is not None and len(rows) - start >= min_len:
+        zones.append((rows[start]["idx"], rows[-1]["idx"], len(rows) - start))
+    return zones
 
-    total = round(score_hook + score_g3 + score_thrill + score_ai + score_rhythm, 1)
 
+def _sign_verdict(total, flags, unjudged):
+    """把总分翻成结论，再按硬伤与未评维度降级——结论永远不高于分数。
+
+    返回 (verdict, notes)。
+    """
+    levels = [
+        "高潜 🔥（可直接投番茄/起点）",
+        "可投 ✅（先打磨低分项再投）",
+        "需打磨 ⚠（重写低分章节后重扫）",
+        "不建议 ❌（需大幅调整开篇与节奏）",
+    ]
     if total >= 85:
-        verdict = "高潜 🔥（可直接投番茄/起点）"
+        idx = 0
     elif total >= 70:
-        verdict = "可投 ✅（先打磨低分项再投）"
+        idx = 1
     elif total >= 55:
-        verdict = "需打磨 ⚠（重写低分章节后重扫）"
+        idx = 2
     else:
-        verdict = "不建议 ❌（需大幅调整开篇与节奏）"
+        idx = 3
+    notes = []
+    if flags:
+        idx = 3
+        notes.append("硬伤一票否决：" + "；".join(flags))
+    elif unjudged:
+        # 有维度没评：总分只是「部分维度上的均值」，不够格说「直接投」。
+        if idx < 1:
+            idx = 1
+        notes.append("未评维度：" + "、".join(unjudged) + "（结论已降级，不给「可直接投稿」）")
+    return levels[idx], notes
+
+
+def print_signability_report(rows, chapters, genre=""):
+    """签约可行性报告：五维评分 + 硬伤一票否决。
+
+    genre 为题材。计分口径：
+    - 题材不适用的维度（爽点密度、由其推导的节奏）不计分也不送分，
+      总分按已评维度归一化到 100；
+    - 不足 3 章时「黄金三章」结构上无从失败，同样不评；
+    - 钩子覆盖率 / AI 腔 / 爽点密度 / 塌陷区等硬伤一票否决「可直接投稿」。
+    """
+    if not rows:
+        return
+    n = len(rows)
+    thrill_exempt = genre in NON_POWER_FANTASY_GENRES
+    g3_rows = [r for r in rows if r["idx"] <= 3]
+    g3_judged = len(g3_rows) >= 3
+    content_by_idx = {idx: c for idx, _, c in chapters}
+
+    hook_rate = sum(1 for r in rows if r["hook"]) / n
+    g3_pass, g3_total, _ = _golden_three_stats(chapters, rows)
+    g3_rate = g3_pass / g3_total if g3_total else 0
+
+    avg_thrill = sum(r["thrill_per_k"] for r in rows) / n
+    avg_surge = sum(r["surge_per_k"] for r in rows) / n
+    avg_echo = sum(r["ai_echo_pct"] for r in rows) / n
+    deep_levels = [deep_ai_metrics(c)["level"] for _, _, c in chapters]
+    avg_deep = sum(deep_levels) / len(deep_levels) if deep_levels else 0
+    zones = len(_collapse_zones(rows))
+
+    dims = [
+        ("章末钩子", round(hook_rate * 30, 1), 30.0,
+         f"覆盖率 {hook_rate * 100:.0f}%"),
+        ("黄金三章",
+         round(g3_rate * 30, 1) if g3_judged else None, 30.0,
+         f"体检达标 {g3_rate * 100:.0f}%" if g3_judged
+         else f"仅 {len(g3_rows)} 章，样本不足，不评"),
+        ("爽点密度",
+         None if thrill_exempt else round(min(20.0, avg_thrill * 8 + avg_surge * 4), 1),
+         20.0,
+         f"💥{avg_thrill:.2f}/✨{avg_surge:.2f} 每千字"
+         + ("（题材不适用，不评）" if thrill_exempt else "")),
+        ("反AI腔",
+         round(max(0.0, 10.0 - avg_echo * 4 - avg_deep * 1.5), 1), 10.0,
+         f"囷痕 {avg_echo:.2f}% / 深度 {avg_deep:.1f}"),
+        ("节奏",
+         None if thrill_exempt else round(max(0.0, 10.0 - zones * 3), 1), 10.0,
+         f"塌陷区 {zones} 个"
+         + ("（由爽点密度推出，题材不适用，不评）" if thrill_exempt else "")),
+    ]
+    scored = [d for d in dims if d[1] is not None]
+    unjudged = [d[0] for d in dims if d[1] is None]
+    gained = sum(d[1] for d in scored)
+    possible = sum(d[2] for d in scored)
+    total = round(gained / possible * 100, 1) if possible else 0.0
+
+    # ---- 硬伤：与总分无关，直接否决「可以投稿」 ----
+    flags = []
+    if n < 3:
+        flags.append(f"成书仅 {n} 章，样本不足以判断签约可行性")
+    if hook_rate < 0.8:
+        flags.append(f"章末钩子覆盖率 {hook_rate * 100:.0f}%（<80%）")
+    if avg_echo >= 1.0:
+        flags.append(f"AI 囷痕密度 {avg_echo:.2f}%（≥1%）")
+    if avg_deep >= 3.0:
+        flags.append(f"AI 味深度 {avg_deep:.1f}（≥3 偏重）")
+    if not thrill_exempt:
+        if avg_thrill + avg_surge < 1.0:
+            flags.append(f"爽点密度不足（💥+✨ {avg_thrill + avg_surge:.2f}/千字 <1.0）")
+        if zones:
+            flags.append(f"存在 {zones} 处节奏塌陷区")
+
+    verdict, notes = _sign_verdict(total, flags, unjudged)
 
     print("\n" + "=" * 60)
     print("  📋 签约可行性报告")
     print("=" * 60)
     print(f"  {'维度':<12}{'得分':>8}{'满分':>6}  说明")
     print("  " + "-" * 56)
-    print(f"  {'章末钩子':<12}{score_hook:>8}{30:>6}  覆盖率 {hook_rate * 100:.0f}%")
-    print(f"  {'黄金三章':<12}{score_g3:>8}{30:>6}  体检达标 {g3_rate * 100:.0f}%")
-    print(f"  {'爽点密度':<12}{score_thrill:>8}{20:>6}  💥{avg_thrill:.2f}/✨{avg_surge:.2f} 每千字")
-    print(f"  {'反AI腔':<12}{score_ai:>8}{10:>6}  囷痕 {avg_echo:.2f}% / 深度 {avg_deep:.1f}")
-    print(f"  {'节奏':<12}{score_rhythm:>8}{10:>6}  塌陷区 {zones} 个")
+    for label, score, full, note in dims:
+        cell = f"{score:>8.1f}" if score is not None else f"{'未评':>8}"
+        print(f"  {label:<12}{cell}{full:>6}  {note}")
     print("  " + "-" * 56)
-    print(f"  {'总分':<12}{total:>8}{100:>6}  → {verdict}")
+    if possible >= 70:
+        # 覆盖足够，折算百分制
+        print(f"  {'总分':<12}{total:>8}{100:>6}  → {verdict}")
+    else:
+        # 只测了不到 70 分的东西，折算成百分制就是把噪声放大成高分。
+        print(f"  {'得分':<12}{gained:>8.1f}{possible:>6.0f}  → {verdict}")
+        print("  （覆盖不足 70 分，不折算百分制）")
+    print(f"  计分覆盖：{len(scored)}/5 维度（实测 {possible:.0f} 分满分）")
+    for note in notes:
+        print(f"  ⚠ {note}")
     print()
 
     # ---- 对标番茄签约要素 ----
@@ -189,21 +280,23 @@ def print_signability_report(rows, chapters):
     items = [
         ("开篇 300 字内出事件", bool(first.get("opening")),
          "第 1 章开场变故缺失会直接劝退"),
-        ("前三章金手指/机缘", g3_pass >= 2 and len([r for r in rows if r['idx'] <= 3]) >= 2
-         and bool(_golden_check(
-             dict((idx, c) for idx, _, c in chapters).get(first["idx"], ""), GOLDEN_POWER)),
+        ("前三章金手指/机缘", None if not g3_judged else (
+             g3_pass >= 2 and bool(_golden_check(content_by_idx.get(first["idx"], ""), GOLDEN_POWER))),
          "金手指是追读的第一动力"),
-        ("前三章身份落差", g3_pass >= 2 and bool(_golden_check(
-             dict((idx, c) for idx, _, c in chapters).get(first["idx"], ""), GOLDEN_IDENTITY)),
+        ("前三章身份落差", None if not g3_judged else (
+             g3_pass >= 2 and bool(_golden_check(content_by_idx.get(first["idx"], ""), GOLDEN_IDENTITY))),
          "废柴/受辱开局是经典签约模板"),
         ("章末钩子覆盖率", hook_rate >= 0.8, "低于 80% 追读率会掉"),
-        ("每章有爽点", avg_thrill + avg_surge >= 1.0, "爽点密度决定留读"),
+        # None = 该维度对本题材不适用，既不报 ✅ 也不报 ⚠（旧版在这里拿不适用的词表误伤题材）
+        ("每章有爽点",
+         None if thrill_exempt else avg_thrill + avg_surge >= 1.0,
+         "爽点密度决定留读"),
         ("无明显 AI 腔", avg_echo < 1.0 and avg_deep < 3.0, "编辑一眼 AI 味会直接退稿"),
     ]
     for label, ok, tip in items:
-        mark = "✅" if ok else "⚠ 缺"
+        mark = "— 样本/题材不适用" if ok is None else ("✅" if ok else "⚠ 缺")
         print(f"    {mark} {label}")
-        if not ok:
+        if ok is False:
             print(f"        ↳ {tip}")
     print("=" * 60 + "\n")
 
@@ -236,6 +329,7 @@ def main():
     p = argparse.ArgumentParser(description="墨匠成书质检扫描器（零成本基线验证）")
     p.add_argument("novel_txt", help="成书 txt 路径")
     p.add_argument("--json", action="store_true", help="以 JSON 输出结果")
+    p.add_argument("--genre", default="", help="题材（悬疑/刑侦/灵异/历史 豁免爽点指标）")
     args = p.parse_args()
 
     chapters = split_chapters(args.novel_txt)
@@ -312,7 +406,7 @@ def main():
     print_golden_three(chapters, rows)
 
     # ===== 签约可行性报告 =====
-    print_signability_report(rows, chapters)
+    print_signability_report(rows, chapters, genre=args.genre)
 
     hook_rate = total_hook / len(rows) * 100
     print("-" * 78)
@@ -373,19 +467,8 @@ def _print_thrill_curve(rows):
 
 
 def _print_collapse_zones(rows):
-    """检测连续 >=2 章爽点密度 <0.5 的节奏塌陷区。"""
-    zones = []
-    start = None
-    for i, r in enumerate(rows):
-        if r["thrill_per_k"] < 0.5:
-            if start is None:
-                start = i
-        else:
-            if start is not None and i - start >= 2:
-                zones.append((rows[start]["idx"], rows[i - 1]["idx"], i - start))
-            start = None
-    if start is not None and len(rows) - start >= 2:
-        zones.append((rows[start]["idx"], rows[-1]["idx"], len(rows) - start))
+    """检测连续 >=2 章爽点密度 <0.5 的节奏塌陷区（与签约报告共用同一算法）。"""
+    zones = _collapse_zones(rows)
 
     if zones:
         print("【⚠ 节奏塌陷区】连续 2 章以上爽点 <0.5/千字：")

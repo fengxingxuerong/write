@@ -8,6 +8,8 @@
 |---|---|
 | `generate_novel.py` | 单模型长篇小说批量生成（多 pass + 断点续传 + 质检 + 导出） |
 | `novel_pipeline.py` | **多模型协作流水线**：规划/正文/润色/标题/审校五角色分工生成 |
+| `fanqie_review.py` | **番茄过审评审器**（本地零成本）：合规红线 / 首屏 / 对白占比 / 水段率 / 套句 / 主角漂移，输出分数与「定点修」提示 |
+| `fanqie_prompts.py` | 番茄向写作准则与 prompt 库（与 `fanqie_review.py` 指标一一对应） |
 | `demo_novel_gen.py` | 离线模板引擎演示（纯语料拼接，无 API，用于对比） |
 | `watchdog_pipeline.ps1` | 守护脚本：检测 pipeline 进程退出自动续传重启（长任务防中断） |
 
@@ -45,7 +47,51 @@ python -u novel_pipeline.py --total-words 3000 --max-chapters 1 --output test.js
 powershell -ExecutionPolicy Bypass -File watchdog_pipeline.ps1
 ```
 
-输出：`--output` 指定 jsonl 进度文件（大纲 + 章节 + 日志），完成自动导出同名 `.txt`。
+输出：`--output` 指定 jsonl 进度文件（大纲 + 章节 + 评审卡 + 日志），完成自动导出同名 `.txt`、`.评估卡.txt`、`.上架包.txt`。
+
+---
+
+## 番茄过审闭环（2026-09-09）
+
+目标：不靠换模型，把「写完就算」改成「写完必须过一把可量化的尺」。
+
+```
+写手（fanqie_prompts 准则）
+   ↓ 每章
+fanqie_review.review_chapter()  ← 对白占比/首屏/四件套/水段/套句/漂移/红线
+   ↓ 不达标（默认 <78 分）
+fix_prompt() → 编辑器只改问题处 → 重评，分数不升则丢弃
+   ↓ 前 3 章额外一轮首屏 300 字强化（降分则丢弃）
+全书末尾：.评估卡.txt + .上架包.txt（书名 3 选 1 / 简介 / 标签 / 卖点）
+```
+
+新增参数：
+
+| 参数 | 默认 | 作用 |
+|---|---|---|
+| `--review-pass` | 78 | 单章评审低于此分触发一轮定点修 |
+| `--golden-chapters` | 3 | 前 N 章额外做首屏强化 |
+| `--no-fanqie-pack` | — | 不生成评估卡与上架包（评审闸门仍生效） |
+
+单独评审已有成书（不调 API）：
+
+```bash
+python fanqie_review.py ../data/generated/genre_lishi_v2.txt --genre 历史 --protagonist 顾沉舟
+python fanqie_review.py novel.txt --json          # 嗂给脚本或 CI 用
+
+# 加 --outline-json 后额外做「大纲↔正文」一致性检查：
+# 大纲 world 专名在正文一个都不命中 = 写手跑题，直接计为硬伤（旧版 14 本里 6 本属此种）
+python fanqie_review.py novel.txt --genre 科幻 \
+  --protagonist 奚照 --outline-json novel.jsonl
+```
+
+口径提醒：词表与阈值是「编辑初审」的代理，不是番茄官方规则；命中不等于被拒。
+它的作用是给生成端一把能量化的尺，取代旧的「爽点词命中次数」——那个指标会奖励套路。
+
+> **双端同步**：`fanqie_prompts.py` ↔ `lib/engine/writing_guidelines.dart`（`fanqieGate` 块）、
+> `lib/ai_pipeline/prompts/pipeline_prompts.dart`（`writerSystemPrompt`）。
+> 改任一处必须同步另一处，并跑 `test/engine/writing_guidelines_test.dart`（里面钉住了
+> 「通用技法不得含修仙意象」「非修仙题材拿不到丹田/周天」两条防渗漏断言）。
 
 ---
 
@@ -53,8 +99,8 @@ powershell -ExecutionPolicy Bypass -File watchdog_pipeline.ps1
 
 | 角色 | 主用 | 备选 | 参数要点 |
 |---|---|---|---|
-| 规划官（大纲/场景） | Sensenova `glm-5.2` (K1) | dsf (K2) | **temp=1.0，max_tokens≥4000**，否则输出为空/被思维链截断 |
-| 正文写手 | AMD `DeepSeek-V4-Flash` | dsf (K2) | temp=0.8，约 17 字/s |
+| 规划官（大纲/场景） | AMD `DeepSeek-V4-Flash` | NVIDIA `deepseek-v4-flash-0731` | temp=0.8，max_tokens=4000；正常延迟可达 240s，与 300s 硬超时很贴 |
+| 正文写手 | AMD `DeepSeek-V4-Flash` | dsf (K2) | temp=0.8，约 17~20 字/s |
 | 去AI味编辑 | Sensenova `kimi-k3` (K2) | AMD 兜底 → 保原文 | temp=1.0；kimi 配额波动大，失败自动降级 |
 | 标题官 | dsf (K2) | — | temp=0.8，max_tokens≈300 |
 | 一致性审校 | Sensenova `glm-5.2` (K1) | dsf (K2) | temp=1.0，max_tokens≥3000，每 5 章一次 |

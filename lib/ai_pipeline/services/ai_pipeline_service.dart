@@ -103,6 +103,29 @@ class AiPipelineService {
     }
   }
 
+  /// 场景/章节衔接去重：若 newText 开头与 prevText 结尾有 >=minOverlap 字的
+  /// 连续重叠（LLM 续写常把上一段结尾复述一遍），裁掉重叠部分再拼接。
+  /// 返回 (去重后文本, 是否发生裁剪)。
+  (String, bool) _dedupSceneJoin(String prevText, String newText, [int minOverlap = 12]) {
+    if (prevText.isEmpty || newText.isEmpty) return (newText, false);
+    final String trimmed = prevText.trimRight();
+    final String prevTail = trimmed.length > 200
+        ? trimmed.substring(trimmed.length - 200)
+        : trimmed;
+    int best = 0;
+    final int maxCheck = newText.length < prevTail.length ? newText.length : prevTail.length;
+    for (int i = maxCheck; i >= minOverlap; i--) {
+      if (prevTail.substring(prevTail.length - i) == newText.substring(0, i)) {
+        best = i;
+        break;
+      }
+    }
+    if (best >= minOverlap) {
+      return (newText.substring(best), true);
+    }
+    return (newText, false);
+  }
+
   /// 校验五角色配置是否就绪（用于 UI 启动前提示）。
   static List<AiRole> missingRoles(AiPipelineConfig config) {
     return AiRole.values
@@ -193,6 +216,14 @@ class AiPipelineService {
 
       // 1) 场景规划（重试 2 次 → 默认骨架兜底），注入跨章状态
       List<Map<String, dynamic>> scenes = <Map<String, dynamic>>[];
+      // 全书世界观（规划官设定）注入场景规划，防止正文脱离大纲（裴照系统流→赵铁柱超自然流 事故）
+      final Map<String, dynamic> outlineMap = task.outline as Map<String, dynamic>? ?? <String, dynamic>{};
+      final String worldHint = (outlineMap['world'] as String?) ?? '';
+      final String hookHint = (outlineMap['hook'] as String?) ?? '';
+      final String fullWorldHint = [
+        if (worldHint.isNotEmpty) worldHint,
+        if (hookHint.isNotEmpty) '开篇钩子：$hookHint',
+      ].join('；');
       for (int attempt = 0; attempt < 2; attempt++) {
         final String raw = await _call(
           AiRole.planner,
@@ -201,6 +232,7 @@ class AiPipelineService {
             goal,
             lastSummary,
             state: task.config.useStateTrack ? task.stateTrack : '',
+            worldHint: fullWorldHint,
           ),
         );
         final Map<String, dynamic>? plan = _parseJsonObject(raw);
@@ -241,9 +273,21 @@ class AiPipelineService {
             beats: beats,
             prevText: prevText,
             state: task.config.useStateTrack ? task.stateTrack : '',
+            genre: task.config.genre,
+            protagonist: task.config.protagonist,
+            world: worldHint,
+            isOpening: idx == 1 && si == 0,
           ),
         );
         text = text.trim();
+        // 场景衔接去重：裁掉与上一场景结尾重复的开头
+        if (sceneTexts.isNotEmpty) {
+          final (String deduped, bool cut) = _dedupSceneJoin(sceneTexts.last, text);
+          if (cut) {
+            task.addLog('    [去重] 场景衔接重叠，已裁剪');
+          }
+          text = deduped;
+        }
         final int w = text.isEmpty ? 0 : _countWords(text);
         task.addLog('    -> $w 字');
         if (text.isNotEmpty) {
@@ -264,6 +308,14 @@ class AiPipelineService {
       }
 
       String fullText = sceneTexts.join('\n\n');
+      // 章节级衔接去重：本章开头若与上一章结尾重叠（LLM 跨章续写常见），裁剪
+      if (idx > 1 && lastSummary.isNotEmpty) {
+        final (String deduped, bool cut) = _dedupSceneJoin(lastSummary, fullText);
+        if (cut) {
+          task.addLog('  [去重] 章节衔接重叠，已裁剪');
+        }
+        fullText = deduped;
+      }
       int w = _countWords(fullText);
       if (w < target * 0.5) {
         task.addLog('  [WARN] 仅 $w 字，整章续写...');
@@ -292,6 +344,24 @@ class AiPipelineService {
           fullText = edited;
         } else {
           task.addLog('  [编辑] 润色失败，保留原文');
+        }
+      }
+
+      // 3.5) 章末钩子兜底：结尾 200 字无钩子信号词时，补写钩子句（保追读）
+      if (fullText.trim().isNotEmpty && !PipelineQa.hasEndingHook(fullText)) {
+        task.addLog('  [钩子] 章末缺钩，自动补写钩子...');
+        final String add = await _call(
+          AiRole.writer,
+          writerSystemPrompt,
+          '下面是本章结尾，最后 1~2 句太平淡，没有留下让读者必须看下一章的悬念。'
+          '请接着补写 30~80 字的钩子句（悬念/变故/威胁逼近/秘密将揭，按${task.config.genre}题材），'
+          '不新增情节、不改变已发生的事，只把结尾收在悬念上。只输出补写内容：\n\n${_tail(fullText, 300)}',
+        );
+        if (add.trim().length > 8) {
+          fullText = '${fullText.trimRight()}\n\n${add.trim()}';
+          task.addLog('  [钩子] 已补写钩子');
+        } else {
+          task.addLog('  [钩子] 补写失败，保留原文');
         }
       }
 

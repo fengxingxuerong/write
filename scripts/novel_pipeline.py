@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import random
+import re
 import sys
 import time
 import urllib.error
@@ -29,14 +30,18 @@ except Exception:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generate_novel import (count_words, parse_json_from_llm, quality_check,
                             append_state, load_state, export_txt,
-                            planning_prompt_idea, scene_planning_prompt, scene_prompt,
-                            SYSTEM_PROMPT)
+                            planning_prompt_idea, scene_planning_prompt, scene_prompt, hook_for,
+                            has_ending_hook, SYSTEM_PROMPT)
+from fanqie_review import (review_chapter, fix_prompt, redline_scan,
+                           extract_world_terms)  # noqa: E402
+from fanqie_prompts import first_screen_rewrite_prompt, pack_prompt  # noqa: E402
 
 # ============================================================
 # 模型配置（密钥经环境变量注入，不硬编码）
 # ============================================================
 SENSE = "https://token.sensenova.cn/v1/chat/completions"
 AMD = "https://developer.amd.com.cn/radeon/api/v1/chat/completions"
+NVIDIA = "https://integrate.api.nvidia.com/v1/chat/completions"
 
 def _key(name):
     k = os.environ.get(name, "")
@@ -44,13 +49,12 @@ def _key(name):
         print(f"[WARN] 环境变量 {name} 未设置！")
     return k
 
-# 角色配置（2026-09-05 全量实测后定稿）：
-#   glm-5.2 需 temp=1.0 + max_tokens>=4000 才能稳定出完整 JSON（k1/k3 可用）
-#   dsf(k2) 最稳；kimi(k2) 波动大；flash-lite 当日全灭弃用
-PLANNER = dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=4000)
+# 角色配置（2026-09-05 全量实测后定稿；2026-09-06 规划官改 AMD/NVIDIA flash，
+# 因商汤 K1 配额耗尽、NVIDIA glm-5.2 EOL）：
+PLANNER = dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8, max_tokens=4000)
 PLANNER_CHAIN = [
-    dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=4000),          # k1
-    dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=2000),  # k2
+    dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8, max_tokens=4000),      # AMD 主
+    dict(url=NVIDIA, model="deepseek-ai/deepseek-v4-flash-0731", key="", temp=0.8, max_tokens=4000),  # NVIDIA 备
 ]
 WRITER_CHAIN = [
     dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8),                     # AMD 主
@@ -61,19 +65,19 @@ EDITOR_CHAIN = [
     dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8),                     # AMD 兜底
 ]
 TITLER = dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=300)  # k2
-VERIFIER = dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=3000)         # k1
+VERIFIER = dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8, max_tokens=3000)  # AMD
 
 
 def setup_keys():
-    PLANNER["key"] = _key("NOVEL_KEY_SENSE_K1")
-    PLANNER_CHAIN[0]["key"] = _key("NOVEL_KEY_SENSE_K1")
-    PLANNER_CHAIN[1]["key"] = _key("NOVEL_KEY_SENSE_K2")
+    PLANNER["key"] = _key("NOVEL_KEY_AMD")
+    PLANNER_CHAIN[0]["key"] = _key("NOVEL_KEY_AMD")
+    PLANNER_CHAIN[1]["key"] = _key("NOVEL_KEY_NVIDIA")
     WRITER_CHAIN[0]["key"] = _key("NOVEL_KEY_AMD")
     WRITER_CHAIN[1]["key"] = _key("NOVEL_KEY_SENSE_K2")
     EDITOR_CHAIN[0]["key"] = _key("NOVEL_KEY_SENSE_K2")
     EDITOR_CHAIN[1]["key"] = _key("NOVEL_KEY_AMD")
     TITLER["key"] = _key("NOVEL_KEY_SENSE_K2")
-    VERIFIER["key"] = _key("NOVEL_KEY_SENSE_K1")
+    VERIFIER["key"] = _key("NOVEL_KEY_AMD")
 
 
 # ============================================================
@@ -131,10 +135,30 @@ def call_chain(chain, system, user, max_tokens):
     return ""
 
 
+def dedup_scene_join(prev_text, new_text, min_overlap=12):
+    """场景拼接去重：若 new_text 开头与 prev_text 结尾有 >=min_overlap 字的
+    连续重叠（LLM 续写时常把上一场景结尾复述一遍），裁掉重叠部分再拼接。
+    返回去重后的 new_text（不包含重叠头）。"""
+    if not prev_text or not new_text:
+        return new_text
+    prev_tail = prev_text.rstrip()[-200:]
+    best = 0
+    # 找 new_text 前缀与 prev_tail 后缀的最长公共重叠
+    max_check = min(len(new_text), len(prev_tail))
+    for i in range(max_check, min_overlap - 1, -1):
+        if prev_tail[-i:] == new_text[:i]:
+            best = i
+            break
+    if best >= min_overlap:
+        print(f"    [去重] 场景衔接重叠 {best} 字，已裁剪")
+        return new_text[best:]
+    return new_text
+
+
 # ============================================================
 # 各角色 Prompt
 # ============================================================
-PLANNER_SYS = "你是一位资深网文总编，擅长长篇玄幻小说的框架规划。输出严格遵循要求的 JSON 格式。"
+PLANNER_SYS = "你是一位资深网文总编，擅长长篇小说的框架规划。输出严格遵循要求的 JSON 格式。"
 EDITOR_SYS = "你是一位资深网文编辑，专精「去AI味」改写。"
 TITLER_SYS = "你是一位网文标题专家，擅长提炼有悬念感、点击欲的章名。"
 VERIFIER_SYS = "你是一位严谨的长篇小说一致性审校编辑。"
@@ -155,7 +179,11 @@ def editor_prompt(text):
 
 
 def titler_prompt(text):
-    return f"""为下面的章节内容提炼一个 8~15 字的章名，要有悬念感和网文味。只输出章名本身。
+    return f"""为下面的章节内容提炼一个章名。要求：
+1. 字数严格控制在 4~10 字，越短越好；
+2. 要有悬念感、点击欲，符合网文章名习惯（如「废柴之辱」「残魂入体」「血玉现世」）；
+3. 禁止整句照抄正文，禁止带引号、冒号、逗号等标点的长句（如「送餐遇前任，桌上压着百元钞」不合格）；
+4. 只输出章名本身，不要任何解释、引号或序号。
 
 【章节内容】
 {text[:500]}"""
@@ -212,20 +240,21 @@ def rewrite_prompt(text, comment, scores):
 
 
 def state_extract_prompt(text, prev_state):
-    """跨章状态提取：维护状态清单供下一章写作遵守（防人物状态断片）。"""
+    """跨章状态提取：维护状态清单供下一章写作遵守（防人物状态断片 + 防剧情重复线）。"""
     prev = prev_state if prev_state and prev_state.strip() else "（无）"
-    return f"""你是长篇小说状态管理员。请根据本章内容，维护一份「跨章状态清单」，供下一章写作时遵守，防止人物状态断片（如上一章断腿、下一章健步如飞）。
+    return f"""你是长篇小说状态管理员。请根据本章内容，维护一份「跨章状态清单」，供下一章写作时遵守，防止人物状态断片（如上一章断腿、下一章健步如飞），并防止剧情重复线（如上一章已取走遗物、下一章又设计一次取遗物）。
 
 只记录硬状态：
 - 人物伤势（含恢复情况）、修为/境界变化
-- 随身物品的获得/丢失
+- 随身物品的获得/丢失（含具体物名：玉简/银戒/灰布/断剑/钥匙等）
 - 承诺、恩怨、伪装身份
 - 关键地点变化
+- 已发生的关键事件（探秘/寻宝/获传承/对峙等，注明已完成，下章不得重复设计同一事件）
 
 要求：
 1. 在旧状态基础上增删改，不要整段重写
-2. 每条一行，格式：人物：状态；物品：xxx
-3. 输出 3~8 行，简洁具体
+2. 每条一行，格式：人物：状态；物品：xxx；事件：xxx（已完成）
+3. 输出 3~10 行，简洁具体
 4. 只输出状态清单文本，不要任何解释或 Markdown
 
 【旧状态】（首次为空）
@@ -256,6 +285,52 @@ def load_state_track(path):
     return ""
 
 
+def scan_used_protagonist_names(glob_dir="D:/novel-writer/data/generated"):
+    """扫描既有 jsonl 大纲，收集已用主角名（跨书查重，防规划官惯性起名）。
+    返回已用名单列表；扫描失败返回空列表（不影响生成）。"""
+    used = []
+    try:
+        if not os.path.isdir(glob_dir):
+            return used
+        for fn in os.listdir(glob_dir):
+            if not fn.endswith(".jsonl"):
+                continue
+            p = os.path.join(glob_dir, fn)
+            try:
+                with open(p, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            rec = json.loads(line)
+                        except Exception:
+                            continue
+                        if rec.get("type") != "outline":
+                            continue
+                        outline = rec.get("data") or {}
+                        if isinstance(outline, str):
+                            try:
+                                outline = json.loads(outline)
+                            except Exception:
+                                continue
+                        pobj = outline.get("protagonist")
+                        if isinstance(pobj, dict) and pobj.get("name"):
+                            used.append(pobj["name"])
+            except Exception:
+                continue
+    except Exception:
+        return []
+    # 去重保序
+    seen = set()
+    uniq = []
+    for n in used:
+        if n and n not in seen:
+            seen.add(n)
+            uniq.append(n)
+    return uniq
+
+
 def save_state_track(path, data):
     """追加跨章状态清单到进度文件。"""
     with open(path, "a", encoding="utf-8") as f:
@@ -265,13 +340,78 @@ def save_state_track(path, data):
 # ============================================================
 # 主线
 # ============================================================
+def _splice_head(text, new_head, min_cut=300, hard_cap=700):
+    """把开头替换成 new_head，切点落在段落边界（避免把句子拦腰剪断）。"""
+    if not new_head or not new_head.strip():
+        return text
+    cut = text.find("\n\n")
+    while cut != -1 and cut < min_cut:
+        cut = text.find("\n\n", cut + 2)
+    if cut == -1 or cut > hard_cap:
+        cut = min(hard_cap, len(text))
+    return new_head.strip() + "\n\n" + text[cut:].lstrip()
+
+
+VAGUE_WORLD_PAT = ("大陆名|朝代名|星域名|主舞台城市|案发城市|城市名|联赛舞台|战场背景"
+                   "|游戏世界名|并存区名|幸存区名|江湖地名|九州名|主要势力|势力名")
+
+
+def concretize_world(outline, genre):
+    """world 仍是「大陆名/朝代名」这类占位词时，追一次只补设定的调用。
+
+    写手与评审器都靠 world 里的专名锁定题材；填类别名等于两边都拿不到信息
+    （旧版 14 本里就有好几本世界观看不出题材，历史样本因此被一致性检查误扣）。"""
+    w = outline.get("world")
+    if not isinstance(w, dict) or not w:
+        return outline
+    vague = [k for k, v in w.items()
+             if not isinstance(v, str) or re.search(VAGUE_WORLD_PAT, v)]
+    if not vague:
+        return outline
+    print(f"  [设定] world 字段过于笼统（{'、'.join(vague)}）→ 让规划官具体化…")
+    ask = ("下面这本小说的世界观字段写的是占位词，写手无法据此建立世界。"
+           f"请只把这些字段改成**自拟的具体专名与数值**（题材：{genre}），"
+           "不要改动书名、主角名与章节结构。只输出 JSON 对象，键与下面完全一致：\n"
+           + json.dumps({k: w[k] for k in vague}, ensure_ascii=False))
+    raw = call_chain(PLANNER_CHAIN, PLANNER_SYS, ask, max_tokens=800)
+    fixed = parse_json_from_llm(raw)
+    if isinstance(fixed, dict):
+        merged = dict(w)
+        changed = False
+        for k in vague:
+            v = fixed.get(k)
+            if isinstance(v, str) and v.strip() and not re.search(VAGUE_WORLD_PAT, v):
+                merged[k] = v.strip()
+                changed = True
+        if changed:
+            outline = dict(outline)
+            outline["world"] = merged
+            print("  [设定] 已具体化")
+    return outline
+
+
 def main():
     p = argparse.ArgumentParser(description="墨匠多模型协作流水线")
     p.add_argument("--total-words", type=int, default=100000, help="目标总字数")
     p.add_argument("--max-chapters", type=int, default=40)
     p.add_argument("--output", default="novel_pipeline.jsonl")
+    p.add_argument("--genre", default="玄幻",
+                   help="题材（玄幻/仙侠/都市/都市异能/科幻/末世/游戏/悬疑/武侠/历史/军事/体育）")
     p.add_argument("--chapter-wait", type=float, default=2.0)
+    p.add_argument("--review-pass", type=float, default=78.0,
+                   help="番茄过审评审卡及格线：低于此分触发一轮定点修")
+    p.add_argument("--golden-chapters", type=int, default=3,
+                   help="前 N 章额外做首屏 300 字强化（番茄完读率命门）")
+    p.add_argument("--no-fanqie-pack", action="store_true",
+                   help="不生成上架包（书名/简介/标签）与评估卡文件")
+    p.add_argument("--prev-summary-file", default="",
+                   help="前情提要文件（续写模式：规划官须承接该剧情）")
     args = p.parse_args()
+
+    prev_summary = ""
+    if args.prev_summary_file and os.path.exists(args.prev_summary_file):
+        with open(args.prev_summary_file, encoding="utf-8") as pf:
+            prev_summary = pf.read().strip()
 
     setup_keys()
     print(f"[INFO] 协作流水线启动 | 目标 {args.total_words} 字 | 输出 {args.output}")
@@ -287,11 +427,13 @@ def main():
         print("=" * 60)
         print("[Planner] 规划全书大纲...")
         print("=" * 60)
-        text = llm_call(PLANNER, PLANNER_SYS, planning_prompt_idea(args.total_words))
+        text = llm_call(PLANNER, PLANNER_SYS, planning_prompt_idea(args.total_words, prev_summary, genre=args.genre,
+                                                                  used_names=scan_used_protagonist_names()))
         outline = parse_json_from_llm(text)
         if not outline or not outline.get("chapter_outlines"):
             print(f"[ERROR] 大纲规划失败：{(text or '')[:300]}")
             sys.exit(1)
+        outline = concretize_world(outline, args.genre)
         append_state(args.output, "outline", outline)
         title = outline.get("title", "未命名")
         print(f"[OK]《{title}》共 {len(outline['chapter_outlines'])} 章")
@@ -300,6 +442,12 @@ def main():
         print(f"[RESUME]《{title}》已有 {len(state['chapters'])} 章，继续")
 
     chars = outline.get("chapter_outlines", [])
+    pobj = outline.get("protagonist")
+    protagonist = pobj.get("name", "") if isinstance(pobj, dict) else ""
+    # 世界观必须随场景下发：写手拿不到设定时会自己另起一个故事（实测会跑题成古代）。
+    wobj = outline.get("world") or {}
+    world_str = wobj if isinstance(wobj, str) else json.dumps(wobj, ensure_ascii=False)
+    review_world_terms = extract_world_terms(outline)
     total_words = sum(count_words(c.get("content", "")) for c in state["chapters"])
     existing_idx = {c["idx"] for c in state["chapters"]}
     last_summary = ""
@@ -308,6 +456,7 @@ def main():
         last_summary = last_content[-200:] if len(last_content) > 200 else last_content
 
     # ===== Phase 2：逐章多角色协作 =====
+    reviews = []
     for ch in chars:
         idx = ch["idx"]
         if idx in existing_idx:
@@ -323,11 +472,18 @@ def main():
         target = ch.get("target", 3000)
         print(f"\n{'=' * 60}\n[CH {idx}] {chapter_title}（目标 {target} 字）\n  章纲：{goal}\n{'=' * 60}")
 
-        # 1) 场景规划（planner 链 + 默认骨架兜底），注入跨章状态
+        # 1) 场景规划（planner 链 + 默认骨架兜底），注入跨章状态与全书世界观
+        # 全书世界观取自大纲 world 字段，防止正文脱离规划官设定（裴照系统流→赵铁柱超自然流 事故）
+        world_hint = json.dumps(outline.get("world", {}), ensure_ascii=False) if isinstance(outline, dict) else ""
+        hook_hint = outline.get("hook", "") if isinstance(outline, dict) else ""
+        if world_hint:
+            world_hint += ("；开篇钩子：" + hook_hint) if hook_hint else ""
         plan = None
         for attempt in range(2):
             raw = call_chain(PLANNER_CHAIN, PLANNER_SYS,
-                             scene_planning_prompt(goal, last_summary, state_track),
+                             scene_planning_prompt(goal, last_summary, state_track,
+                                                   protagonist=protagonist, genre=args.genre,
+                                                   world_hint=world_hint),
                              max_tokens=2000)
             plan = parse_json_from_llm(raw)
             if plan and plan.get("scenes"):
@@ -353,9 +509,15 @@ def main():
             tw = sc.get("targetWords", 600)
             print(f"  [场景 {si+1}/{len(scenes)}] {stage}：{goal_s}（目标 {tw} 字）")
             text = call_chain(WRITER_CHAIN, SYSTEM_PROMPT,
-                              scene_prompt(si + 1, len(scenes), stage, goal_s, beats, prev_text, "玄幻", state_track),
-                              max_tokens=int(tw * 2.2))
+                              scene_prompt(si + 1, len(scenes), stage, goal_s, beats, prev_text, args.genre,
+                                           state_track, protagonist=protagonist, world=world_str,
+                                           hook=hook_for(idx) if si + 1 == len(scenes) else "",
+                                           is_opening=(idx == 1 and si == 0)),
+                              max_tokens=int(tw * 3.0))
             text = text.strip()
+            # 场景衔接去重：裁掉与上一场景结尾重复的开头
+            if scene_texts:
+                text = dedup_scene_join(scene_texts[-1], text)
             w = count_words(text)
             print(f"    -> {w} 字")
             if text:
@@ -370,6 +532,9 @@ def main():
             time.sleep(args.chapter_wait)
 
         full_text = "\n\n".join(scene_texts)
+        # 章节级衔接去重：本章开头若与上一章结尾重叠（LLM 跨章续写常见），裁剪
+        if idx > 1 and last_summary:
+            full_text = dedup_scene_join(last_summary, full_text)
         w = count_words(full_text)
         if w < target * 0.5:
             print(f"  [WARN] 仅 {w} 字，整章续写...")
@@ -381,7 +546,7 @@ def main():
                 w = count_words(full_text)
 
         # 3) 去AI味润色（editor）
-        edited = call_chain(EDITOR_CHAIN, EDITOR_SYS, editor_prompt(full_text), max_tokens=int(w * 1.6) + 500)
+        edited = call_chain(EDITOR_CHAIN, EDITOR_SYS, editor_prompt(full_text), max_tokens=int(w * 2.0) + 800)
         if edited:
             w_edited = count_words(edited)
             print(f"  [编辑] 润色完成 {w} -> {w_edited} 字（AI味密度对比见质检）")
@@ -390,9 +555,45 @@ def main():
             print("  [编辑] 润色失败，保留原文")
             final_text = full_text
 
+        # 3.5) 末尾完整性检查 + 自动补全（防止结尾被 max_tokens 截断成残句）
+        if final_text.strip():
+            tail = final_text.rstrip()[-12:]
+            # 完整结尾：以句号/感叹号/问号/省略号/闭合引号/破折号 收尾
+            if not any(tail.endswith(p) for p in ("。", "！", "？", "…", "”", "」", "』", "）", "——", "……")):
+                print("  [补全] 章末疑似截断，自动补全结尾...")
+                add = call_chain(WRITER_CHAIN, SYSTEM_PROMPT,
+                                 f"下面是本章结尾，句子似乎没写完（可能被截断）。请接着补全 50~120 字，"
+                                 f"把话说完、收束本章并保持原有语气与伏笔，不要另起新情节。只输出补全内容：\n\n{final_text[-200:]}",
+                                 max_tokens=400)
+                if add and len(add.strip()) > 10:
+                    final_text = final_text.rstrip() + add.strip()
+                    print(f"  [补全] 已补全 {count_words(add)} 字，最终 {count_words(final_text)} 字")
+                else:
+                    print("  [补全] 补全失败，保留原文")
+
+        # 3.6) 章末钩子兜底：结尾 200 字无钩子信号词时，补写钩子句（保追读）
+        if final_text.strip() and not has_ending_hook(final_text):
+            print("  [钩子] 章末缺钩，自动补写钩子...")
+            add = call_chain(WRITER_CHAIN, SYSTEM_PROMPT,
+                             f"下面是本章结尾，最后 1~2 句太平淡，没有留下让读者必须看下一章的悬念。"
+                             f"请接着补写 30~80 字的钩子句（悬念/变故/威胁逼近/秘密将揭，按{args.genre}题材），"
+                             f"不新增情节、不改变已发生的事，只把结尾收在悬念上。只输出补写内容：\n\n{final_text[-300:]}",
+                             max_tokens=300)
+            if add and len(add.strip()) > 8:
+                final_text = final_text.rstrip() + "\n\n" + add.strip()
+                print(f"  [钩子] 已补写钩子：{add.strip()[:40]}...")
+            else:
+                print("  [钩子] 补写失败，保留原文")
+
         # 4) 章节标题（titler）
         t = llm_call(TITLER, TITLER_SYS, titler_prompt(final_text))
-        title_ok = t.strip()[:30] if t.strip() else chapter_title
+        raw_title = (t.strip() or chapter_title).strip(" \"「」『』《》")
+        # 后置防护：标题过长或带标点则回退章纲标题
+        if len(raw_title) > 10 or any(c in raw_title for c in "，。！？、；：,，\"'"):
+            print(f"  [标题] 不合格（{raw_title}），回退章纲标题")
+            title_ok = chapter_title
+        else:
+            title_ok = raw_title
         print(f"  [标题] {title_ok}")
 
         # 5) 每 5 章一致性审校（verifier，只记录）
@@ -434,6 +635,57 @@ def main():
                         print(f"  [重写] 失败，保留原文")
             else:
                 print(f"  [评分] 第 {idx} 章 评分解析失败，跳过（不影响生成）")
+
+        # 3.6) 番茄过审评审：不达标就一轮定点修（只改问题处，不动剧情）
+        rv = review_chapter(final_text, last_summary, idx, args.genre, protagonist,
+                            review_world_terms)
+        if rv["score"] < args.review_pass and rv["problems"]:
+            fp = fix_prompt(rv, final_text)
+            if not fp.strip():
+                # 只剩「建议」级问题：不值得为它花一次 LLM 调用
+                print(f"  [评审] {rv['score']} 分（仅剩建议项，不触发定点修）")
+            else:
+                print(f"  [评审] {rv['score']} 分，{len(rv['problems'])} 项不达标 → 定点修…")
+                for pr in rv["problems"][:6]:
+                    print(f"      ↳ [{pr['action']}] {pr['type']}：{pr['msg']}")
+                fixed = call_chain(
+                    EDITOR_CHAIN, SYSTEM_PROMPT,
+                    fp,
+                    max_tokens=int(count_words(final_text) * 2.2) + 800)
+                if fixed and count_words(fixed) > count_words(final_text) * 0.5:
+                    fixed = fixed.strip()
+                    rv2 = review_chapter(fixed, last_summary, idx, args.genre, protagonist,
+                                         review_world_terms)
+                    print(f"  [评审] 修后 {rv2['score']} 分（原 {rv['score']} 分）")
+                    if rv2["score"] >= rv["score"]:
+                        final_text, rv = fixed, rv2
+                else:
+                    print("  [评审] 定点修无有效产出，保留原文")
+        else:
+            print(f"  [评审] {rv['score']} 分 达线")
+        if rv["redline"]["veto"]:
+            print(f"  [评审] ☠ 合规红线 {len(rv['redline']['veto'])} 处，需人工复核")
+        reviews.append(rv)
+        append_state(args.output, "review", {"idx": idx, "score": rv["score"],
+                                             "verdict": rv["verdict"],
+                                             "problems": rv["problems"]})
+
+        # 3.7) 黄金三章：首屏 300 字单独强化一轮
+        if idx <= args.golden_chapters:
+            head = call_chain(WRITER_CHAIN, SYSTEM_PROMPT,
+                              first_screen_rewrite_prompt(final_text, args.genre, protagonist),
+                              max_tokens=1400)
+            if head and 80 <= count_words(head) <= 700:
+                cand = _splice_head(final_text, head)
+                rv_head = review_chapter(cand, last_summary, idx, args.genre, protagonist,
+                                         review_world_terms)
+                if rv_head["score"] >= (reviews[-1]["score"] if reviews else 0):
+                    print(f"  [首屏] 已强化（评审 {rv_head['score']} 分）")
+                    final_text = cand
+                    if reviews:
+                        reviews[-1] = rv_head
+                else:
+                    print(f"  [首屏] 强化后反而降分（{rv_head['score']}），丢弃")
 
         chapter_record = {
             "idx": idx,
@@ -478,6 +730,35 @@ def main():
     txt_path = export_txt(args.output, outline.get("title", "未命名"), state["chapters"])
     print(f"\n[OK] 文本输出：{txt_path}")
     print(f"[OK] 总字数：{sum(c.get('words', 0) for c in state['chapters'])}")
+
+    # ===== Phase 5：番茄评估卡 + 上架包 =====
+    if not args.no_fanqie_pack:
+        base = args.output.rsplit(".", 1)[0]
+        card = os.path.join(os.path.dirname(os.path.abspath(args.output)),
+                            os.path.basename(base) + ".评估卡.txt")
+        with open(card, "w", encoding="utf-8") as f:
+            f.write(f"《{outline.get('title', '')}》 番茄过审评估卡\n")
+            f.write(f"题材：{args.genre}｜章节：{len(reviews)}｜评审均分："
+                    f"{round(sum(r['score'] for r in reviews) / max(len(reviews), 1), 1)}\n\n")
+            for r in reviews:
+                f.write(f"第 {r['idx']} 章  {r['score']} 分  {r['verdict']}｜{r['words']} 字\n")
+                for pr in r["problems"]:
+                    f.write(f"    [{pr['action']}] {pr['type']}：{pr['msg']}\n")
+                for h in r["redline"]["veto"]:
+                    f.write(f"    ☠ 红线（{h['category']}）「{h['word']}」 上下文：{h['context']}\n")
+        print(f"[OK] 评估卡：{card}")
+
+        first3 = "\n\n".join(c.get("content", "")[:900] for c in state["chapters"][:3])
+        pack_raw = llm_call(PLANNER, PLANNER_SYS, pack_prompt(outline, first3), max_tokens=1500)
+        pack = parse_json_from_llm(pack_raw) or {}
+        if pack:
+            pack_path = os.path.join(os.path.dirname(os.path.abspath(args.output)),
+                                     os.path.basename(base) + ".上架包.txt")
+            with open(pack_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(pack, ensure_ascii=False, indent=2))
+            print(f"[OK] 上架包（书名/简介/标签）：{pack_path}")
+        else:
+            print("[WARN] 上架包生成失败（不影响正文）")
 
 
 if __name__ == "__main__":
