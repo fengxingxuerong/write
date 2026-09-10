@@ -113,11 +113,15 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
     final NovelRepository repo = ref.read(novelRepositoryProvider);
     unawaited(() async {
       try {
-        final Novel latest = await repo.getNovel(widget.novel.id);
-        await repo.saveNovel(latest.copyWith(
-          preferredStyle: style,
-          preferredProseStyle: prose,
-        ));
+        // 必须用 mutateNovel：生成期间 AI 正在写同一本书，
+        // getNovel → saveNovel 会把中途落库的章节用旧快照覆盖掉。
+        await repo.mutateNovel(
+          widget.novel.id,
+          (Novel latest) => latest.copyWith(
+            preferredStyle: style,
+            preferredProseStyle: prose,
+          ),
+        );
       } catch (_) {
         // 偏好保存失败静默，不影响主流程。
       }

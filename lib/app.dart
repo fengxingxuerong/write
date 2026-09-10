@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'core/di/providers.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
+import 'core/theme/app_tokens.dart';
 
 /// 应用根组件。
 ///
@@ -25,6 +26,17 @@ class App extends ConsumerWidget {
       themeMode: themeMode,
       routerConfig: router,
       debugShowCheckedModeBanner: false,
+      // 把语义色板（[AppInk]）按当前明暗注入组件树：页面写
+      // `AppInk.of(context).accent` 而不是 `Colors.red[400]`。
+      // 注意：MaterialApp.builder 里拿不到本应用主题，亮度自己算。
+      builder: (BuildContext context, Widget? child) => AppInkTheme(
+        brightness: switch (themeMode) {
+          ThemeMode.dark => Brightness.dark,
+          ThemeMode.light => Brightness.light,
+          _ => MediaQuery.platformBrightnessOf(context),
+        },
+        child: child ?? const SizedBox.shrink(),
+      ),
     );
   }
 }

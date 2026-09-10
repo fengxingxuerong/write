@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
+import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/storage/app_database.dart';
 import 'package:novel_writer/storage/chapter_repository.dart';
@@ -426,6 +427,69 @@ void main() {
     });
   });
 
+  group('并发写不丢数据（per-novelId 锁）', () {
+    test('自动保存 + AI 落库 + 加角色 并发：三份写入全部生效', () async {
+      final novel = await novelRepo.createNovel(
+        title: '并发',
+        genre: 'xuanhuan',
+        tone: '热血',
+      );
+      final ch1 = await chapterRepo.addChapter(novel.id, title: '第一章');
+      final ch2 = await chapterRepo.addChapter(novel.id, title: '第二章');
+
+      await Future.wait([
+        chapterRepo.updateChapterContent(novel.id, ch1.id, '编辑器的正文：张三拔剑。'),
+        chapterRepo.saveGeneratedChapter(novel.id, 1, 'AI 第二章', 'AI 生成的正文：李四收刀。'),
+        settingRepo.addCharacter(novel.id, name: '王五'),
+      ]);
+
+      final saved = await novelRepo.getNovel(novel.id);
+      expect(
+        saved.chapters.firstWhere((c) => c.id == ch1.id).content,
+        contains('张三拔剑'),
+      );
+      expect(
+        saved.chapters.firstWhere((c) => c.id == ch2.id).content,
+        contains('李四收刀'),
+        reason: 'AI 落库不得被并发的自动保存用旧快照覆盖',
+      );
+      expect(saved.characters.map((c) => c.name), contains('王五'));
+    });
+
+    test('mutateNovel 只改元信息，不清掉并发写入的正文', () async {
+      final novel = await novelRepo.createNovel(
+        title: '偏好',
+        genre: 'dushi',
+        tone: '冷静',
+      );
+      final ch = await chapterRepo.addChapter(novel.id, title: '第一章');
+
+      await Future.wait([
+        novelRepo.mutateNovel(
+          novel.id,
+          (n) => n.copyWith(preferredStyle: 'jinliu'),
+        ),
+        chapterRepo.updateChapterContent(novel.id, ch.id, '生成中的正文内容。'),
+      ]);
+
+      final saved = await novelRepo.getNovel(novel.id);
+      expect(saved.preferredStyle, equals('jinliu'));
+      expect(saved.chapters.single.content, equals('生成中的正文内容。'));
+    });
+
+    test('并发新建项目不丢 index 条目', () async {
+      final novels = await Future.wait([
+        for (int i = 0; i < 4; i++)
+          novelRepo.createNovel(title: '书$i', genre: 'xuanhuan', tone: '热血'),
+      ]);
+      final index = await novelRepo.listNovels();
+      expect(index, hasLength(4));
+      for (final n in novels) {
+        expect(index.map((e) => e.id), contains(n.id));
+      }
+    });
+  });
+
   group('零网络验证', () {
     test('存储层仅做本地文件读写（数据确实落在本地文件系统）', () {
       // 结构性保证见代码静态审查：lib/storage 与 lib/models 不 import 任何网络库。
@@ -434,4 +498,90 @@ void main() {
       expect(db.directory.path, contains(_testDir.path));
     });
   });
+
+  group('章节写盘与首页索引同步', () {
+    test('生成章节后 index.json 的章数/字数立即跟上', () async {
+      final Novel novel = await novelRepo.createNovel(
+        title: '索引同步',
+        genre: 'xuanhuan',
+        tone: '热血',
+      );
+      List<NovelSummary> index = await db.readIndex();
+      expect(index.first.wordCount, 0, reason: '新建时首页应为 0 字');
+
+      await chapterRepo.saveGeneratedChapter(
+          novel.id, 1, '第一章', '甲' * 500);
+      index = await db.readIndex();
+      expect(index.first.chapterCount, 1);
+      expect(index.first.wordCount, 500);
+
+      await chapterRepo.saveGeneratedChapter(
+          novel.id, 2, '第二章', '乙' * 300);
+      index = await db.readIndex();
+      expect(index.first.chapterCount, 2);
+      expect(index.first.wordCount, 800, reason: '第二章写完后首页要看到 800 字');
+    });
+
+    test('编辑器自动保存改字数，首页不需要重开项目就更新', () async {
+      final Novel novel = await novelRepo.createNovel(
+        title: '自动保存',
+        genre: 'dushi',
+        tone: '轻松',
+      );
+      final Chapter ch = await chapterRepo.addChapter(novel.id);
+      await chapterRepo.updateChapterContent(novel.id, ch.id, '写' * 120);
+      List<NovelSummary> index = await db.readIndex();
+      expect(index.first.wordCount, 120);
+
+      await chapterRepo.updateChapterContent(novel.id, ch.id, '写' * 40);
+      index = await db.readIndex();
+      expect(index.first.wordCount, 40, reason: '删字也要如实反映，不能只增不减');
+    });
+
+    test('删章后索引章数归零，条目本身不丢', () async {
+      final Novel novel = await novelRepo.createNovel(
+        title: '删章',
+        genre: 'lishi',
+        tone: '恢弘',
+      );
+      final Chapter ch = await chapterRepo.addChapter(novel.id);
+      await chapterRepo.deleteChapter(novel.id, ch.id);
+      final List<NovelSummary> index = await db.readIndex();
+      expect(index.length, 1);
+      expect(index.first.chapterCount, 0);
+      expect(index.first.wordCount, 0);
+    });
+
+    test('并发写两章不会互相抹掉索引条目', () async {
+      final Novel novel = await novelRepo.createNovel(
+        title: '并发',
+        genre: 'xuanyi',
+        tone: '暗黑',
+      );
+      await Future.wait(<Future<Object?>>[
+        chapterRepo.saveGeneratedChapter(novel.id, 1, '甲', '一' * 200),
+        chapterRepo.saveGeneratedChapter(novel.id, 2, '乙', '二' * 200),
+        chapterRepo.saveGeneratedChapter(novel.id, 3, '丙', '三' * 200),
+      ]);
+      final List<NovelSummary> index = await db.readIndex();
+      expect(index.length, 1, reason: '索引条目不能被并发写抹掉');
+      expect(index.first.chapterCount, 3);
+      expect(index.first.wordCount, 600);
+      // 正文本身也要齐。
+      final Novel reloaded = await novelRepo.getNovel(novel.id);
+      expect(reloaded.chapters.length, 3);
+    });
+
+    test('重命名项目后索引标题同步（防止双实现漂移）', () async {
+      final Novel novel = await novelRepo.createNovel(
+        title: '旧名',
+        genre: 'yanqing',
+        tone: '甜宠',
+      );
+      await novelRepo.renameNovel(novel.id, '新名');
+      final List<NovelSummary> index = await db.readIndex();
+      expect(index.first.title, '新名');
+    });
+  });
+
 }

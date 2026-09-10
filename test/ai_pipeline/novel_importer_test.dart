@@ -23,16 +23,16 @@ void main() {
 
   group('PipelineStorage 配置持久化', () {
     test('saveRecentConfig / loadRecentConfig 往返一致', () async {
-      final AiPipelineConfig config = AiPipelineConfig(
+      const AiPipelineConfig config = AiPipelineConfig(
         totalWords: 50000,
         maxChapters: 20,
         genre: '仙侠',
         protagonist: '陆沉',
         useEditor: false,
         roles: <AiRole, AiRoleConfig>{
-          AiRole.writer: AiRoleConfig(
+          AiRole.writer: const AiRoleConfig(
             role: AiRole.writer,
-            llm: const LlmConfig(
+            llm: LlmConfig(
               provider: LlmProvider.openaiCompatible,
               model: 'deepseek-v4-flash',
               apiKey: 'k',

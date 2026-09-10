@@ -34,3 +34,31 @@ final class ExportException extends AppException {
 final class GenerationCancelledException extends EngineException {
   const GenerationCancelledException([super.message = '生成已被取消']);
 }
+
+/// LLM 传输层错误（HTTP 状态码 / 连接失败）。
+///
+/// 单独开一个类是为了把「能不能重试」这个判断带在异常上：
+/// 429/5xx 该退避重来，401/400/413 重试只是浪费时间。规则由抛出方
+/// （engine 层）用 `RetryPolicy.isRetryableStatus` 填好，core 不反向依赖 engine。
+final class LlmTransportException extends EngineException {
+  /// 构造传输错误。
+  const LlmTransportException(
+    String message, {
+    this.statusCode,
+    this.retryAfter,
+    this.retryable = false,
+    Object? cause,
+  }) : super(message, cause);
+
+  /// HTTP 状态码（网络层失败时为 null）。
+  final int? statusCode;
+
+  /// 服务端 `Retry-After` 解析出的等待时长（没给就为 null）。
+  final Duration? retryAfter;
+
+  /// 是否值得退避后重试。
+  final bool retryable;
+
+  @override
+  String toString() => 'LlmTransportException($statusCode): $message';
+}

@@ -59,12 +59,15 @@ class _ExportDialogState extends ConsumerState<_ExportDialog> {
     try {
       final novelRepository =
           ref.read(novelRepositoryProvider);
-      final Novel updated = widget.novel.copyWith(
-        exportPrefs: widget.novel.exportPrefs.copyWith(
-          includeSettings: _includeSettings,
+      final bool includeSettings = _includeSettings;
+      await novelRepository.mutateNovel(
+        widget.novel.id,
+        (Novel latest) => latest.copyWith(
+          exportPrefs: latest.exportPrefs.copyWith(
+            includeSettings: includeSettings,
+          ),
         ),
       );
-      await novelRepository.saveNovel(updated);
     } catch (_) {
       // 偏好保存失败不影响导出主流程。
     }

@@ -3,6 +3,7 @@ import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/generation_engine.dart';
 import 'package:novel_writer/engine/llm_engine.dart';
+import 'package:novel_writer/engine/llm_retry.dart';
 import 'package:novel_writer/engine/multipass/scene_builder.dart';
 import 'package:novel_writer/engine/multipass/scene_plan.dart';
 import 'package:novel_writer/engine/writing_guidelines.dart';
@@ -17,10 +18,16 @@ import 'package:novel_writer/models/llm_config.dart';
 /// 3. 高潮段分配更多 token → 战斗/反转更丰满
 class MultiPassChapterEngine {
   /// 构造。
+  ///
+  /// [retrySleep] 仅供测试注入（把退避等待换成空操作）。
   const MultiPassChapterEngine({
     required this.config,
     required this.sceneBuilder,
+    this.retrySleep,
   });
+
+  /// 退避等待实现（null = 真等）。
+  final Sleeper? retrySleep;
 
   /// LLM 配置。
   final LlmConfig config;
@@ -49,6 +56,8 @@ class MultiPassChapterEngine {
     final StringBuffer fullText = StringBuffer();
     String prevSummary = '';
     int totalWords = 0;
+    int failedScenes = 0;
+    Object? lastSceneError;
 
     for (int i = 0; i < scenes.length; i++) {
       if (cancelToken?.isCancelled == true) break;
@@ -61,25 +70,45 @@ class MultiPassChapterEngine {
         previewText: fullText.toString(),
       ));
 
-      final String sceneText = await _generateScene(
+      final ({String text, Object? error}) sceneResult = await _generateScene(
         scene: scene,
         chapterConfig: chapterConfig,
         ctx: ctx,
         prevSummary: prevSummary,
         sceneIndex: i,
       );
+      final String sceneText = sceneResult.text;
 
       if (sceneText.trim().isNotEmpty) {
         if (fullText.isNotEmpty) fullText.write('\n\n');
         fullText.write(sceneText.trim());
         totalWords = AppConstants.countWords(fullText.toString());
+      } else if (sceneResult.error != null) {
+        failedScenes++;
+        lastSceneError ??= sceneResult.error;
       }
 
       prevSummary = _summarizeScene(sceneText, 120);
       if (totalWords >= chapterConfig.targetWords) break;
     }
 
+    // 一个场景都没写出来：这不是「短」，是挂了。别吐一个空章节给 UI 当好结果。
     final String content = fullText.toString().trim();
+    if (content.isEmpty && failedScenes > 0) {
+      throw EngineException(
+        'AI 场景生成全部失败（$failedScenes 个场景）：$lastSceneError',
+        lastSceneError,
+      );
+    }
+    if (failedScenes > 0) {
+      onProgress?.call(GenerationProgress(
+        charsWritten: totalWords,
+        targetWords: chapterConfig.targetWords,
+        stage: '已生成（$failedScenes 个场景因「$lastSceneError」缺席，可重跑本章）',
+        previewText: content,
+      ));
+    }
+
     return GenerationResult(
       content: content,
       actualWords: AppConstants.countWords(content),
@@ -87,7 +116,8 @@ class MultiPassChapterEngine {
     );
   }
 
-  Future<String> _generateScene({
+  /// 生成单个场景。失败不抛异常（由调用方统计），但会把错误带回去。
+  Future<({String text, Object? error})> _generateScene({
     required ScenePlan scene,
     required GenerationConfig chapterConfig,
     required ContextBundle ctx,
@@ -104,29 +134,39 @@ class MultiPassChapterEngine {
     // 复用引擎实例（连接池化 + 重试时保持连接）
     final LlmEngine engine = LlmEngine(config: config);
 
-    Object? lastError;
-    for (int attempt = 0; attempt <= _maxSceneRetries; attempt++) {
-      try {
-        final String text = await engine.generateSingle(
-          systemPrompt: WritingGuidelines.systemPrompt,
-          userMessage: prompt,
-          targetWords: scene.targetWords,
-        );
-        if (text.trim().isNotEmpty) return text;
-        // 空响应视为失败
-        lastError = EngineException('AI 返回空内容');
-      } catch (e) {
-        lastError = e;
-        // 判断是否为可重试错误
-        if (!_isRetryableError(e) || attempt == _maxSceneRetries) break;
-        // 指数退避 + 抖动（2s, 4s, 8s...）
-        final backoff = _baseBackoffMs * (1 << attempt) + _randomJitterMs();
-        await Future<void>.delayed(Duration(milliseconds: backoff));
-      }
+    // 退避交给统一的 RetryPolicy：以前这里自己写了一套 2s/4s/8s，
+    // 既不看 Retry-After，也不能注入 sleep 做测试。
+    final RetryPolicy policy = RetryPolicy(
+      maxAttempts: _maxSceneRetries + 1,
+      baseBackoff: Duration(milliseconds: _baseBackoffMs),
+      sleep: retrySleep ?? _delayed,
+    );
+    try {
+      final String text = await policy.run(
+        (int attempt) async {
+          final String out = await engine.generateSingle(
+            systemPrompt: WritingGuidelines.systemPrompt,
+            userMessage: prompt,
+            targetWords: scene.targetWords,
+          );
+          // 空响应也算失败，要重试。
+          if (out.trim().isEmpty) {
+            throw const EngineException('AI 返回空内容');
+          }
+          return out;
+        },
+        isRetryable: _isRetryableError,
+      );
+      return (text: text, error: null);
+    } catch (e) {
+      return (text: '', error: e);
+    } finally {
+      engine.dispose();
     }
-    // 全部重试失败：返回空（不阻塞整章生成）
-    return '';
   }
+
+  /// 默认等待（真退避）。
+  static Future<void> _delayed(Duration d) => Future<void>.delayed(d);
 
   /// 判断错误是否可重试（网络超时 / 限流 / 服务端错误）。
   bool _isRetryableError(Object e) {
@@ -140,7 +180,6 @@ class MultiPassChapterEngine {
         msg.contains('connection');
   }
 
-  int _randomJitterMs() => (DateTime.now().microsecondsSinceEpoch % 1000);
 
   /// 每场景最大重试次数。
   static const int _maxSceneRetries = 2;

@@ -6,6 +6,8 @@ import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/generation_engine.dart';
 import 'package:novel_writer/engine/llm_chat_client.dart';
+import 'package:novel_writer/engine/llm_http_errors.dart';
+import 'package:novel_writer/engine/llm_retry.dart';
 import 'package:novel_writer/engine/quality/token_tier.dart';
 import 'package:novel_writer/engine/writing_guidelines.dart';
 import 'package:novel_writer/models/generation_config.dart';
@@ -34,7 +36,17 @@ import 'package:novel_writer/models/llm_config.dart';
 /// - 资源保证释放：finally 块确保 client 关闭与 subscription 取消。
 class LlmEngine implements GenerationEngine {
   /// 构造引擎。
-  LlmEngine({required this.config, this.timeout = const Duration(minutes: 5)});
+  ///
+  /// [maxRetries] / [baseBackoffMs] 控制限流退避；[sleep] 仅测试用。
+  LlmEngine({
+    required this.config,
+    this.timeout = const Duration(minutes: 5),
+    this.maxRetries = 2,
+    this.baseBackoffMs = 2000,
+    Sleeper? sleep,
+    this.clientFactory,
+  })  : sleep = sleep ?? _delayed,
+        assert(maxRetries >= 0, 'maxRetries 不能为负');
 
   /// LLM 连接配置。
   final LlmConfig config;
@@ -43,10 +55,18 @@ class LlmEngine implements GenerationEngine {
   final Duration timeout;
 
   /// 最大重试次数（限流/服务端错误）。
-  static const int _maxRetries = 2;
+  final int maxRetries;
 
   /// 基础退避毫秒（指数退避基数）。
-  static const int _baseBackoffMs = 2000;
+  final int baseBackoffMs;
+
+  /// 等待实现（测试可注入，避免真等几秒）。
+  final Sleeper sleep;
+
+  /// HttpClient 工厂（测试可注入）。
+  final HttpClient Function()? clientFactory;
+
+  static Future<void> _delayed(Duration d) => Future<void>.delayed(d);
 
   /// OpenAI 兼容 chat/completions 端点。
   static const String _chatPath = '/chat/completions';
@@ -84,16 +104,6 @@ class LlmEngine implements GenerationEngine {
       }
     }
 
-    final HttpClientRequest request;
-    try {
-      request = await _createRequest(client, config, ctx);
-    } catch (e) {
-      // 请求创建失败时连接可能已损坏，清空让下次重建。
-      _sharedClient?.close(force: true);
-      _sharedClient = null;
-      throw EngineException('无法连接 LLM 服务：$e', e);
-    }
-
     // 取消时：强制断开底层连接（取消后连接不可复用，清空让下次重建）。
     cancelToken?.onCancel = () {
       try {
@@ -111,15 +121,10 @@ class LlmEngine implements GenerationEngine {
     // 便于 UI 调试展示思考过程；不参与正文拼接。
     final List<String> reasoningTokens = <String>[];
 
-    final HttpClientResponse response = await request.close();
-    // 非 2xx：读取错误体后抛出。
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      final String body = await response.transform(utf8.decoder).join();
-      // 非 2xx 时关闭共享 client：连接可能已损坏，下次会重新创建。
-      _sharedClient?.close(force: true);
-      _sharedClient = null;
-      throw _classifyHttpError(response.statusCode, body);
-    }
+    // 建连与状态校验（429/5xx 在这里退避重来）。
+    // 注意：一旦开始收流就不再重试——半章内容重发会变成两段重复正文。
+    final HttpClientResponse response =
+        await _openWithRetry(client, config, ctx, cancelToken, onProgress);
 
     // 流式读取响应，逐 token 拼接并回报进度。
     // 注意顺序：先按行切分（String），再逐行解析。
@@ -173,11 +178,64 @@ class LlmEngine implements GenerationEngine {
   /// 获取或初始化共享 HttpClient；连接池化减少 TCP/TLS 握手。
   HttpClient _obtainClient() {
     if (_sharedClient == null) {
-      _sharedClient = HttpClient()
+      _sharedClient = (clientFactory ?? HttpClient.new)()
         ..connectionTimeout = const Duration(seconds: 8)
         ..idleTimeout = const Duration(seconds: 30);
     }
     return _sharedClient!;
+  }
+
+  /// 建连 + 发送 + 状态校验，带限流退避重试。
+  ///
+  /// 返回尚未消费的响应流；调用方一旦开始读正文，就不能再重试了。
+  Future<HttpClientResponse> _openWithRetry(
+    HttpClient client,
+    GenerationConfig genConfig,
+    ContextBundle ctx,
+    CancelToken? cancelToken,
+    void Function(GenerationProgress)? onProgress,
+  ) {
+    final RetryPolicy policy = RetryPolicy(
+      maxAttempts: maxRetries + 1,
+      baseBackoff: Duration(milliseconds: baseBackoffMs),
+      sleep: sleep,
+    );
+    return policy.run(
+      (int attempt) async {
+        final HttpClientRequest request;
+        try {
+          request = await _createRequest(client, genConfig, ctx);
+        } catch (e) {
+          // 请求创建失败时连接可能已损坏，清空让下次重建。
+          _sharedClient?.close(force: true);
+          _sharedClient = null;
+          throw LlmHttpErrors.transport(e);
+        }
+        final HttpClientResponse response = await request.close();
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          final String body = await response.transform(utf8.decoder).join();
+          // 非 2xx 时关闭共享 client：连接可能已损坏，下次会重新创建。
+          _sharedClient?.close(force: true);
+          _sharedClient = null;
+          throw LlmHttpErrors.fromStatus(
+            response.statusCode,
+            body,
+            retryAfterHeader:
+                response.headers.value(HttpHeaders.retryAfterHeader),
+          );
+        }
+        return response;
+      },
+      isRetryable: (Object e) =>
+          !(cancelToken?.isCancelled ?? false) && LlmHttpErrors.retryable(e),
+      onRetry: (int attempt, Duration delay, Object error) {
+        onProgress?.call(GenerationProgress(
+          charsWritten: 0,
+          targetWords: genConfig.targetWords,
+          stage: 'AI 服务繁忙，${delay.inSeconds}s 后重试（第 ${attempt + 1} 次）…',
+        ));
+      },
+    );
   }
 
   /// 分类错误，返回对作者友好的错误描述。
@@ -208,32 +266,6 @@ class LlmEngine implements GenerationEngine {
   void dispose() {
     _sharedClient?.close(force: true);
     _sharedClient = null;
-  }
-
-  /// 分类 HTTP 错误，给出友好描述。
-  EngineException _classifyHttpError(int statusCode, String body) {
-    switch (statusCode) {
-      case 400:
-        return EngineException('请求格式错误（400）：${body.length > 100 ? body.substring(0, 100) : body}', null);
-      case 401:
-        return const EngineException('API 密钥无效（401），请在设置页检查 API Key');
-      case 403:
-        return const EngineException('访问被拒绝（403），请检查 API Key 权限或配额');
-      case 404:
-        return const EngineException('API 地址不存在（404），请检查设置页的 API 地址');
-      case 413:
-        return const EngineException('请求内容过长（413），请减少输入内容或降低目标字数');
-      case 429:
-        return const EngineException('请求频率过高（429），请稍后再试或切换模型');
-      case 500:
-      case 502:
-      case 503:
-        return EngineException('AI 服务暂时不可用（$statusCode），请稍后重试', null);
-      case 504:
-        return const EngineException('网关超时（504），AI 服务负载过高，请稍后重试');
-      default:
-        return EngineException('HTTP $statusCode：${body.length > 100 ? body.substring(0, 100) : body}', null);
-    }
   }
 
   /// 扩写结果最长字符数：超出会挤压正文 token 预算，回退原大纲。
@@ -330,23 +362,29 @@ class LlmEngine implements GenerationEngine {
   ///
   /// 入参直接是 system 与 user 字符串（不再依赖 [GenerationConfig] /
   /// [ContextBundle] 的章节简报拼装），返回生成好的纯文本。
-  /// 失败返回空串（调用方负责回退）。
+  /// 失败**抛出异常**：原来这里把错误吞成空串，上层只能「静默少写一段」，
+  /// 作者看到的是一章莫名其妙的短稿，而不是「哪一步挂了」。
   Future<String> generateSingle({
     required String systemPrompt,
     required String userMessage,
     required int targetWords,
   }) async {
-    if (!config.isConfigured) return '';
-    try {
-      final LlmChatResult res = await _llmClient
-          .chat(systemPrompt, userMessage)
-          .timeout(timeout);
-      return _llmClient
-          .stripThinkingFromContent(res.content)
-          .trim();
-    } catch (_) {
-      return '';
+    if (!config.isConfigured) {
+      throw const EngineException('LLM 未配置：请先在设置页填写模型与地址');
     }
+    // 按目标字数推 token 预算：以前不传，场景长度全靠模型自觉。
+    final TokenTier tier = TokenTier.fromModel(config.model);
+    final int budget = TokenBudget.calculate(
+      targetWords: targetWords,
+      tier: tier,
+      maxTokens: config.maxTokens,
+    );
+    final LlmChatResult res = await _llmClient.chat(
+      systemPrompt,
+      userMessage,
+      maxTokens: budget,
+    );
+    return _llmClient.stripThinkingFromContent(res.content).trim();
   }
 
   /// 复用 [LlmChatClient] 单例（避免每场景重建 HTTP 连接）。

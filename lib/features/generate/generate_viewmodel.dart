@@ -11,6 +11,7 @@ import 'package:novel_writer/engine/llm_chat_client.dart';
 import 'package:novel_writer/engine/llm_engine.dart';
 import 'package:novel_writer/engine/multipass/multi_pass_chapter_engine.dart';
 import 'package:novel_writer/engine/multipass/scene_builder.dart';
+import 'package:novel_writer/engine/quality/fanqie_gate_checker.dart';
 import 'package:novel_writer/engine/quality/novel_quality_checker.dart';
 import 'package:novel_writer/engine/quality/novel_consistency_checker.dart';
 import 'package:novel_writer/engine/story_memory.dart';
@@ -326,6 +327,50 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
                   ? '第 ${i + 1}/$count 章：${note.summary}'
                   : note.summary,
             );
+          }
+        }
+
+        // 番茄过审闸门：首屏/对白/水段/一致性/合规红线。不达标则按评审意见
+        // 定点修一轮，重评后分数没升就回滚（宁可不动，不让它越改越差）。
+        if (llm0.useLlm && llm0.config.isConfigured) {
+          final FanqieGateChecker gate = FanqieGateChecker(
+            genre: config.genre,
+            protagonist: config.protagonistName ?? '',
+            worldTerms: FanqieGateChecker.worldTermsFrom(
+              ctx.worldSettings.map((w) => '${w.title} ${w.content}'),
+            ),
+          );
+          final FanqieGateReport before =
+              gate.check(finalContent, chapterIndex: i + 1);
+          if (!before.pass && before.fixPrompt.isNotEmpty) {
+            state = state.copyWith(
+              stage: count > 1
+                  ? '第 ${i + 1}/$count 章：番茄闸门 ${before.score} 分，定点修…'
+                  : '番茄闸门 ${before.score} 分，定点修…',
+            );
+            try {
+              final String fixed = await EditorAi(config: llm0.config)
+                  .rewrite(
+                    text: finalContent,
+                    instruction: before.fixPrompt,
+                    genre: config.genre,
+                    tone: config.tone,
+                    protagonistName: config.protagonistName,
+                  )
+                  .timeout(kPolishWait, onTimeout: () => finalContent);
+              if (fixed.trim().isNotEmpty && fixed != finalContent) {
+                final FanqieGateReport after =
+                    gate.check(fixed, chapterIndex: i + 1);
+                if (after.score >= before.score) {
+                  finalContent = fixed.trim();
+                  state = state.copyWith(
+                    stage: '番茄闸门 ${before.score} → ${after.score} 分',
+                  );
+                }
+              }
+            } catch (_) {
+              // 定点修失败不阻塞生成：保留原文与闸门结论。
+            }
           }
         }
 

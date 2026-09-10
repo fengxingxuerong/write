@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:novel_writer/core/errors/app_exceptions.dart';
+import 'package:novel_writer/engine/llm_http_errors.dart';
+import 'package:novel_writer/engine/llm_retry.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
 /// 单次 LLM 对话（非流式）的响应片段。
@@ -23,13 +25,30 @@ class LlmChatResult {
 /// 与 [LlmEngine] 共用 [LlmConfig]，但走非流式端点，便于结构化输出。
 class LlmChatClient {
   /// 构造客户端。
-  LlmChatClient({required this.config, this.timeout = const Duration(minutes: 3)});
+  ///
+  /// [retry] 控制限流/5xx 的退避重试；[clientFactory] 仅测试用（注入假连接）。
+  LlmChatClient({
+    required this.config,
+    this.timeout = const Duration(minutes: 3),
+    RetryPolicy? retry,
+    this.clientFactory,
+  }) : retry = retry ??
+            const RetryPolicy(
+              maxAttempts: 3,
+              baseBackoff: Duration(milliseconds: 900),
+            );
 
   /// 连接配置。
   final LlmConfig config;
 
-  /// 请求超时。
+  /// 单次请求超时（重试时按「每次尝试」计算，不是总预算）。
   final Duration timeout;
+
+  /// 重试策略。
+  final RetryPolicy retry;
+
+  /// HttpClient 工厂（测试可注入）。
+  final HttpClient Function()? clientFactory;
 
   /// 发送一轮对话，返回完整回复。
   ///
@@ -37,24 +56,33 @@ class LlmChatClient {
   /// 流水线等高级调用方可显式传入角色所需温度（如 glm/kimi 需 1.0）。
   ///
   /// 带整体超时保护：服务端接受请求后长时间不响应时，
-  /// 在 [timeout] 后抛超时异常，避免调用方无限挂起。
+  /// 在 [timeout] 后抛超时异常；限流/5xx 会按 [retry] 退避重来。
   Future<LlmChatResult> chat(String system, String user,
-      {String? role, double? temperature}) async {
+      {String? role,
+      double? temperature,
+      int? maxTokens,
+      void Function(int attempt, Duration delay, Object error)? onRetry}) async {
     if (!config.isConfigured) {
       throw const EngineException('LLM 未配置：请先在设置页填写模型与地址');
     }
-    return _doChat(system, user, role, temperature).timeout(
-      timeout,
-      onTimeout: () => throw EngineException(
-        'LLM 请求超时（超过 ${timeout.inSeconds}s，请检查网络或服务状态）',
+    return retry.run(
+      (int attempt) =>
+          _doChat(system, user, role, temperature, maxTokens).timeout(
+        timeout,
+        onTimeout: () => throw LlmTransportException(
+          'LLM 请求超时（超过 ${timeout.inSeconds}s）',
+          retryable: true,
+        ),
       ),
+      isRetryable: LlmHttpErrors.retryable,
+      onRetry: onRetry,
     );
   }
 
-  /// 实际执行请求（被 [chat] 的 timeout 保护）。
-  Future<LlmChatResult> _doChat(
-      String system, String user, String? role, double? temperature) async {
-    final HttpClient client = HttpClient()
+  /// 实际执行请求（被 [chat] 的重试与超时包裹）。
+  Future<LlmChatResult> _doChat(String system, String user, String? role,
+      double? temperature, int? maxTokensOverride) async {
+    final HttpClient client = (clientFactory ?? HttpClient.new)()
       ..connectionTimeout = const Duration(seconds: 15);
     try {
       final String base = config.baseUrl.endsWith('/')
@@ -79,7 +107,7 @@ class LlmChatClient {
           'stream': false,
           'options': <String, dynamic>{
             'temperature': 0.2,
-            'num_predict': _calcTokenBudget(),
+            'num_predict': _calcTokenBudget(maxTokensOverride),
           },
           'messages': _buildMessages(system, user, role),
         };
@@ -89,7 +117,7 @@ class LlmChatClient {
         payload = <String, dynamic>{
           'model': config.model,
           'stream': false,
-          'max_tokens': _calcTokenBudget(),
+          'max_tokens': _calcTokenBudget(maxTokensOverride),
           'temperature': temperature ?? 0.2,
           'messages': _buildMessages(system, user, role),
         };
@@ -104,7 +132,12 @@ class LlmChatClient {
       final HttpClientResponse resp = await req.close();
       final String text = await resp.transform(utf8.decoder).join();
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        throw EngineException('LLM 服务返回 ${resp.statusCode}：$text');
+        throw LlmHttpErrors.fromStatus(
+          resp.statusCode,
+          text,
+          retryAfterHeader: resp.headers
+              .value(HttpHeaders.retryAfterHeader),
+        );
       }
       return _extractResult(text);
     } finally {
@@ -123,7 +156,12 @@ class LlmChatClient {
   }
 
   /// 计算 token 预算（推理模型预留 thinking 空间）。
-  int _calcTokenBudget() {
+  ///
+  /// [override] 由调用方按目标字数推算（如单场景生成），仍尊重配置上限。
+  int _calcTokenBudget(int? override) {
+    if (override != null && override > 0) {
+      return override.clamp(256, config.maxTokens * 4).toInt();
+    }
     final bool isReasoning = _isReasoningModel(config.model);
     if (isReasoning) {
       // 推理模型需要 ~2 token 输出才能生成 1 token 正文

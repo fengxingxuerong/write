@@ -266,4 +266,55 @@ void main() {
       expect(loaded.model, 'v2');
     });
   });
+
+  group('LlmEngineFlags 持久化', () {
+    late Directory tempDir;
+    late LlmSettingsRepository repo;
+
+    setUp(() {
+      tempDir = Directory.systemTemp.createTempSync('llm_flags_test_');
+      repo = LlmSettingsRepository(tempDir.path);
+    });
+
+    tearDown(() {
+      if (tempDir.existsSync()) {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('文件缺失时回落默认（模板引擎 + 自动记忆开）', () async {
+      final flags = await repo.loadFlags();
+      expect(flags.useLlm, isFalse);
+      expect(flags.autoMemory, isTrue);
+    });
+
+    test('saveFlags/loadFlags 往返一致', () async {
+      await repo.saveFlags(const LlmEngineFlags(useLlm: true, autoMemory: false));
+      final flags = await repo.loadFlags();
+      expect(flags.useLlm, isTrue);
+      expect(flags.autoMemory, isFalse);
+    });
+
+    test('save(config) 不清掉已落盘的引擎开关', () async {
+      await repo.saveFlags(const LlmEngineFlags(useLlm: true));
+      await repo.save(const LlmConfig(model: 'deepseek-chat'));
+      final flags = await repo.loadFlags();
+      expect(flags.useLlm, isTrue, reason: '引擎开关必须活过连接配置的写入');
+      expect((await repo.load()).model, 'deepseek-chat');
+    });
+
+    test('saveFlags 不清掉已落盘的连接配置', () async {
+      await repo.save(const LlmConfig(model: 'deepseek-chat', apiKey: 'sk-test'));
+      await repo.saveFlags(const LlmEngineFlags(useLlm: true));
+      final config = await repo.load();
+      expect(config.model, 'deepseek-chat');
+      expect(config.apiKey, 'sk-test');
+    });
+
+    test('JSON 损坏时 loadFlags 不抛异常', () async {
+      File(repo.filePath).writeAsStringSync('{不是 json');
+      final flags = await repo.loadFlags();
+      expect(flags.useLlm, isFalse);
+    });
+  });
 }

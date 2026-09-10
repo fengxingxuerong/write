@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/di/providers.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
+import 'package:novel_writer/core/utils/text_fmt.dart';
 import 'package:novel_writer/features/editor/autosave_mixin.dart';
 import 'package:novel_writer/features/editor/chapter_history_dialog.dart';
 import 'package:novel_writer/features/editor/editor_ai_mixin.dart';
@@ -19,6 +22,8 @@ import 'package:novel_writer/models/chapter_snapshot.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/services/sensitive_words.dart';
 import 'package:novel_writer/storage/chapter_repository.dart';
+import 'package:novel_writer/widgets/app_card.dart';
+import 'package:novel_writer/widgets/app_feedback.dart';
 import 'package:novel_writer/widgets/common.dart';
 
 /// 中间栏：章节正文编辑器。
@@ -70,8 +75,11 @@ class _EditorPageState extends ConsumerState<EditorPage>
   static const int _splitMinChars = 150;
 
   // ---- 写作体验设置 ----
-  double _fontSize = 16;
-  double _lineHeight = 1.6;
+  double _fontSize = 17;
+  double _lineHeight = 1.9;
+
+  /// 正文用衬线（宋体）——长篇校对更舒服；关掉即回到黑体，更像纯码字。
+  bool _serifBody = true;
 
   // ---- 敏感词防抖 ----
   Timer? _recheckDebouncer;
@@ -114,8 +122,9 @@ class _EditorPageState extends ConsumerState<EditorPage>
     super.initState();
     initAutosave((String content) => _persist(content));
     _focusNode.addListener(() {
-      // 失焦立即保存。
+      // 失焦立即保存；同时刷一下纸面描边（聚焦态）。
       if (!_focusNode.hasFocus) unawaited(flushNow());
+      if (mounted) setState(() {});
     });
     _load();
   }
@@ -181,9 +190,7 @@ class _EditorPageState extends ConsumerState<EditorPage>
         .where((String p) => p.isNotEmpty)
         .toList();
     if (parts.length <= 1) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('当前章节没有可分割的空白段落（需要 ≥ 2 个段落块）')),
-      );
+      AppToast.warn(context, '当前章节没有可分割的空白段落（需要 ≥ 2 个段落块）');
       return;
     }
     final List<String>? finalParts = await showSplitChapterDialog(
@@ -199,17 +206,13 @@ class _EditorPageState extends ConsumerState<EditorPage>
     try {
       await repo.splitChapter(widget.novelId, chapterId, finalParts);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✓ 已拆分为 ${finalParts.length} 章')),
-        );
+        AppToast.success(context, '✓ 已拆分为 ${finalParts.length} 章');
         // 重新加载当前章节（保留第一块）。
         await _load();
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('分割失败：$e')),
-        );
+        AppToast.error(context, '分割失败：$e');
       }
     }
   }
@@ -242,11 +245,10 @@ class _EditorPageState extends ConsumerState<EditorPage>
     _controller.text = restored.content;
     _recheck(restored.content);
     await _persist(restored.content);
-    if (mounted) setState(() => _saved = true);
-    // ignore: use_build_context_synchronously
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('✓ 已恢复到「${restored.title}」(${restored.content.length} 字)')),
-    );
+    if (!mounted) return;
+    setState(() => _saved = true);
+    AppToast.success(
+        context, '已恢复到「${restored.title}」(${restored.content.length} 字)');
   }
 
   @override
@@ -271,17 +273,38 @@ class _EditorPageState extends ConsumerState<EditorPage>
     return _cachedWordsResult;
   }
 
+  /// 自然段数（工具栏提示用，空行分隔）。
+  int get _paragraphCount {
+    final String t = _controller.text;
+    if (t.trim().isEmpty) return 0;
+    return t
+        .split(RegExp(r'\n\s*\n'))
+        .where((String p) => p.trim().isNotEmpty)
+        .length;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.chapterId == null) {
-      return const EmptyState(message: '请选择左侧章节开始创作');
+      return const EmptyState(
+        icon: Icons.edit_note_rounded,
+        message: '从左边挑一章开始写',
+        hint: '也可以直接点右上角「一键生成」，让 AI 按章纲先把正文铺出来。',
+      );
     }
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(
+        child: SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(strokeWidth: 2.2),
+        ),
+      );
     }
     final Novel? novel = _novel;
     final int target = novel?.targetWordsPerChapter ?? 0;
     final int words = _currentWordCount;
+    final AppInk ink = AppInk.of(context);
     return Column(
       children: <Widget>[
         // 工具栏：RepaintBoundary 隔离，避免编辑器输入触发 Toolbar 重绘
@@ -319,96 +342,143 @@ class _EditorPageState extends ConsumerState<EditorPage>
           onProofread: proofread,
           onSaveDraft: saveDraft,
           onShowHistory: _showHistory,
+          serif: _serifBody,
+          onToggleSerif: () => setState(() => _serifBody = !_serifBody),
+          paragraphCount: _paragraphCount,
         ),
         ),
         // 字数目标进度条（目标来自项目设置， 0 表示未设）。
         if (target > 0) _buildTargetBar(context, words, target),
         if (searchOpen) buildSearchBar(context),
-        // 正文编辑区：RepaintBoundary 隔离，toolbar/search 变化不触发 TextField 重绘
+        // 正文编辑区：RepaintBoundary 隔离，toolbar/search 变化不触发 TextField 重绘。
+        // 桌面「纸面」布局：正文限宽居中，不随窗口拉成一丈长一行。
         Expanded(
           child: RepaintBoundary(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Shortcuts(
-              shortcuts: const <ShortcutActivator, Intent>{
-                SingleActivator(LogicalKeyboardKey.keyF, control: true):
-                    ActivateIntent(),
-              },
-              child: Actions(
-                actions: <Type, Action<Intent>>{
-                  ActivateIntent: CallbackAction<ActivateIntent>(
-                    onInvoke: (_) {
-                      toggleSearch();
-                      return null;
-                    },
-                  ),
-                },
-                child: TextField(
-                  controller: _controller,
-                  focusNode: _focusNode,
-                  maxLines: null,
-                  expands: true,
-                  textAlignVertical: TextAlignVertical.top,
-                  decoration: const InputDecoration(
-                    hintText: '在此书写你的故事……',
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.all(8),
-                  ),
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        fontSize: _fontSize,
-                        height: _lineHeight,
+            child: LayoutBuilder(
+              builder: (BuildContext context, BoxConstraints c) {
+                final double sheetW = c.maxWidth < AppTokens.maxWidthReading + 48
+                    ? c.maxWidth
+                    : AppTokens.maxWidthReading + 48;
+                return ColoredBox(
+                  color: ink.paper,
+                  child: Center(
+                    child: SizedBox(
+                      width: sheetW,
+                      height: math.max(120.0, c.maxHeight - 40),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: ink.surface,
+                          borderRadius: AppTokens.radiusCard,
+                          border: Border.all(
+                            color: _focusNode.hasFocus
+                                ? ink.primary.withValues(alpha: 0.42)
+                                : ink.border,
+                            width: _focusNode.hasFocus
+                                ? 1.4
+                                : AppTokens.cardBorder,
+                          ),
+                          boxShadow: ink.shadow(),
+                        ),
+                        child: _buildField(context, ink),
                       ),
-                  onChanged: (String value) {
-                    if (_saved) setState(() => _saved = false);
-                    _recheck(value);
-                    // 查找栏打开时实时刷新匹配。
-                    if (searchOpen && searchCtrl.text.isNotEmpty) {
-                      doSearch(searchCtrl.text, select: false);
-                    }
-                    scheduleSave(value);
-                  },
-                ),
-              ),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
-        ),
         ),
       ],
     );
   }
 
+  /// 纸面上的输入框（从 build 里拆出来，方便限定高度与样式）。
+  Widget _buildField(BuildContext context, AppInk ink) {
+    return Shortcuts(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.keyF, control: true):
+            ActivateIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (_) {
+              toggleSearch();
+              return null;
+            },
+          ),
+        },
+        child: TextField(
+          controller: _controller,
+          focusNode: _focusNode,
+          maxLines: null,
+          expands: true,
+          textAlignVertical: TextAlignVertical.top,
+          cursorColor: ink.accent,
+          cursorWidth: 2,
+          cursorRadius: const Radius.circular(1),
+          decoration: const InputDecoration(
+            hintText: '在此书写你的故事……',
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            contentPadding: EdgeInsets.fromLTRB(28, 24, 20, 24),
+          ),
+          style: AppFonts.text(
+            ink.ink,
+            size: _fontSize,
+            height: _lineHeight,
+            serifFace: _serifBody,
+          ),
+          onChanged: (String value) {
+            if (_saved) setState(() => _saved = false);
+            _recheck(value);
+            // 查找栏打开时实时刷新匹配。
+            if (searchOpen && searchCtrl.text.isNotEmpty) {
+              doSearch(searchCtrl.text, select: false);
+            }
+            scheduleSave(value);
+          },
+        ),
+      ),
+    );
+  }
+
   /// 字数目标进度条（工具栏下方）。
   Widget _buildTargetBar(BuildContext context, int words, int target) {
+    final AppInk ink = AppInk.of(context);
     final double ratio = words / target;
     final bool reached = words >= target;
+    final int delta = words - _initialWords;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      color: Theme.of(context)
-          .colorScheme
-          .surfaceContainerHighest
-          .withValues(alpha: 0.2),
+      padding: const EdgeInsets.fromLTRB(
+          AppTokens.s4, AppTokens.s2, AppTokens.s4, AppTokens.s2 - 2),
+      color: ink.codeTint,
       child: Row(
         children: <Widget>[
           Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(3),
-              child: LinearProgressIndicator(
-                value: ratio.clamp(0.0, 1.0),
-                minHeight: 5,
-                color: reached ? Colors.green : null,
-              ),
+            child: ThinProgress(
+              value: ratio,
+              color: reached ? ink.success : ink.primary,
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: AppTokens.s3),
           Text(
-            reached ? '✓ 达标 $words/$target' : '$words/$target 字',
-            style: TextStyle(
-              fontSize: 11,
-              color: reached
-                  ? Colors.green
-                  : Theme.of(context).colorScheme.outline,
+            reached
+                ? '达标 ${TextFmt.group(words)}/${TextFmt.group(target)}'
+                : '${TextFmt.group(words)}/${TextFmt.group(target)} 字',
+            style: AppFonts.text(
+              reached ? ink.success : ink.inkFaint,
+              size: 12,
+              height: 1.3,
+              monoFace: true,
             ),
           ),
+          if (delta > 0) ...<Widget>[
+            const SizedBox(width: AppTokens.s2),
+            TintBadge('本次 +${TextFmt.group(delta)}',
+                dense: true, tone: BadgeTone.success),
+          ],
         ],
       ),
     );

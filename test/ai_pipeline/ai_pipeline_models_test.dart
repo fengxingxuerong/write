@@ -22,16 +22,16 @@ void main() {
     });
 
     test('序列化往返一致', () {
-      final AiPipelineConfig config = AiPipelineConfig(
+      const AiPipelineConfig config = AiPipelineConfig(
         totalWords: 50000,
         maxChapters: 20,
         genre: '悬疑',
         protagonist: '沈度',
         useEditor: false,
         roles: <AiRole, AiRoleConfig>{
-          AiRole.writer: AiRoleConfig(
+          AiRole.writer: const AiRoleConfig(
             role: AiRole.writer,
-            llm: const LlmConfig(
+            llm: LlmConfig(
               provider: LlmProvider.openaiCompatible,
               model: 'deepseek-v4-flash',
               apiKey: 'sk-test',
@@ -59,13 +59,13 @@ void main() {
         createdAt: DateTime(2026, 9, 5),
       )
         ..addLog('测试日志')
-        ..chapters.add(PipelineChapter(
+        ..chapters.add(const PipelineChapter(
           idx: 1,
           title: '第一章',
           content: '正文内容',
           rawWords: 3,
           words: 4,
-          issues: const <String>['冲突1'],
+          issues: <String>['冲突1'],
         ))
         ..totalWords = 4;
       final AiPipelineTask restored = AiPipelineTask.fromJson(task.toJson());
@@ -98,31 +98,31 @@ void main() {
     });
 
     test('关闭编辑/审校后不再要求其配置', () {
-      final AiPipelineConfig config = AiPipelineConfig(
+      const AiPipelineConfig config = AiPipelineConfig(
         useEditor: false,
         useVerifier: false,
         roles: <AiRole, AiRoleConfig>{
-          AiRole.planner: AiRoleConfig(
+          AiRole.planner: const AiRoleConfig(
             role: AiRole.planner,
-            llm: const LlmConfig(
+            llm: LlmConfig(
               provider: LlmProvider.openaiCompatible,
               model: 'glm-5.2',
               apiKey: 'k',
               baseUrl: 'https://example.com/v1/chat/completions',
             ),
           ),
-          AiRole.writer: AiRoleConfig(
+          AiRole.writer: const AiRoleConfig(
             role: AiRole.writer,
-            llm: const LlmConfig(
+            llm: LlmConfig(
               provider: LlmProvider.openaiCompatible,
               model: 'dsf',
               apiKey: 'k',
               baseUrl: 'https://example.com/v1/chat/completions',
             ),
           ),
-          AiRole.titler: AiRoleConfig(
+          AiRole.titler: const AiRoleConfig(
             role: AiRole.titler,
-            llm: const LlmConfig(
+            llm: LlmConfig(
               provider: LlmProvider.openaiCompatible,
               model: 'lite',
               apiKey: 'k',

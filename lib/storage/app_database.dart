@@ -46,6 +46,32 @@ class AppDatabase {
     }
   }
 
+  /// 索引写入队尾（全局单锁）。index.json 是跨项目共享的单个文件，
+  /// per-novelId 锁罩不住它：两个不同项目同时落库会各自 readIndex →
+  /// writeIndex，后写者把前者的条目抹掉。
+  static Future<void>? _indexTail;
+
+  /// 获取索引排他锁并执行 [action]（所有 index.json 的 read-modify-write 都该走这里）。
+  ///
+  /// 加锁顺序约定：**先 [withNovelLock] 再本方法**；不得反向嵌套，否则死锁。
+  Future<T> withIndexLock<T>(Future<T> Function() action) async {
+    while (_indexTail != null) {
+      try {
+        await _indexTail;
+      } catch (_) {
+        // 前一个持锁者失败不应卡住排队者。
+      }
+    }
+    final Completer<void> done = Completer<void>();
+    _indexTail = done.future;
+    try {
+      return await action();
+    } finally {
+      _indexTail = null;
+      done.complete();
+    }
+  }
+
   /// 初始化并缓存单例。确保目录存在。必须在 [runApp] 前调用。
   static Future<AppDatabase> init() async {
     if (_instance != null) return _instance!;
@@ -302,6 +328,29 @@ class AppDatabase {
       }
       throw StorageException('索引文件写入失败', e);
     }
+  }
+
+  /// 刷新索引里该项目的摘要（章数/字数/标题/归档态）。
+  ///
+  /// index.json 是首页列表的唯一数据源：章节写完不刷它，首页会一直显示旧字数。
+  /// 调用方若已持有该项目的 [withNovelLock]，锁顺序天然满足「先 novel 后 index」。
+  Future<void> refreshIndexEntry(Novel novel) {
+    return withIndexLock(() async {
+      final List<NovelSummary> index = await readIndex();
+      index.removeWhere((NovelSummary e) => e.id == novel.id);
+      index.add(NovelSummary(
+        id: novel.id,
+        title: novel.title,
+        genre: novel.genre,
+        updatedAt: novel.updatedAt,
+        archived: novel.archived,
+        wordCount: novel.wordCount(),
+        chapterCount: novel.chapters.length,
+      ));
+      index.sort((NovelSummary a, NovelSummary b) =>
+          b.updatedAt.compareTo(a.updatedAt));
+      await writeIndex(index);
+    });
   }
 
   /// 判断项目文件是否存在。

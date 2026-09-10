@@ -45,6 +45,7 @@ __pycache__/
 .env.*
 *.key
 
-# 含内置 API Key 的生成/守护脚本（密钥一律走环境变量注入，不入库）
-scripts/generate_novel.py
+# 含内置 API Key 的脚本（密钥一律走环境变量注入，不入库）
+# 注：scripts/generate_novel.py 曾在此列，已核实全文无硬编码密钥（只读 --api-key / NOVEL_LLM_API_KEY），
+#     且 novel_pipeline.py / qa_scan_existing.py / ab_compare.py 均 import 它，必须入库。
 scripts/watchdog_pipeline.ps1

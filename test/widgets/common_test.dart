@@ -48,8 +48,17 @@ void main() {
         ),
       );
 
-      expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
       expect(find.text('已保存'), findsOneWidget);
+      // 设计改成不抢注意力的静默小圆点（以前是一个带图的 Chip）。
+      expect(find.byIcon(Icons.check_circle_outline), findsNothing);
+      expect(find.byType(Chip), findsNothing);
+      expect(
+        find.byWidgetPredicate((Widget w) =>
+            w is Container &&
+            w.decoration is BoxDecoration &&
+            (w.decoration as BoxDecoration).shape == BoxShape.circle),
+        findsOneWidget,
+      );
     });
   });
 

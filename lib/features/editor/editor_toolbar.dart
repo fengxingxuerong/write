@@ -1,12 +1,17 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/features/editor/sensitive_check_dialog.dart';
 import 'package:novel_writer/services/sensitive_words.dart';
+import 'package:novel_writer/widgets/app_card.dart';
 import 'package:novel_writer/widgets/common.dart';
+import 'package:novel_writer/widgets/page_shell.dart';
 
 /// 编辑器顶部工具栏。
 ///
 /// 纯展示组件：所有交互通过回调上抛，状态由 [EditorPage] 持有。
+/// 排版类动作（字号/行距/字体）收进一个菜单——它们是低频但一开就要连调几次的；
+/// AI 动作保持直给，因为「写不下去时点哪」不该需要思考。
 class EditorToolbar extends StatelessWidget {
   /// 构造工具栏。
   const EditorToolbar({
@@ -33,6 +38,9 @@ class EditorToolbar extends StatelessWidget {
     required this.onProofread,
     required this.onSaveDraft,
     required this.onShowHistory,
+    this.serif = true,
+    this.onToggleSerif,
+    this.paragraphCount = 0,
   });
 
   /// 章节标题（无章节时显示占位）。
@@ -101,142 +109,315 @@ class EditorToolbar extends StatelessWidget {
   /// 打开历史版本（回滚）。
   final VoidCallback onShowHistory;
 
+  /// 正文是否用衬线字体。
+  final bool serif;
+
+  /// 切换衬线/黑体。
+  final VoidCallback? onToggleSerif;
+
+  /// 段落数（工具栏顺带报一下，省得开统计弹窗）。
+  final int paragraphCount;
+
   @override
   Widget build(BuildContext context) {
+    final AppInk ink = AppInk.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      color: Theme.of(context)
-          .colorScheme
-          .surfaceContainerHighest
-          .withValues(alpha: 0.3),
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            child: Text(
-              title,
-              style: Theme.of(context).textTheme.titleSmall,
-              overflow: TextOverflow.ellipsis,
+      padding: const EdgeInsets.fromLTRB(
+          AppTokens.s4, AppTokens.s2, AppTokens.s3, AppTokens.s2),
+      decoration: BoxDecoration(
+        color: ink.surface,
+        border: Border(bottom: BorderSide(color: ink.divider)),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: <Widget>[
+            ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 220),
+              child: Row(
+                children: <Widget>[
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 320),
+                    child: Text(
+                      title,
+                      style: AppFonts.text(ink.ink,
+                          size: 14,
+                          weight: FontWeight.w600,
+                          height: 1.35,
+                          serifFace: true),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: AppTokens.s3),
+                  Tooltip(
+                    message:
+                        paragraphCount > 0 ? '$paragraphCount 个自然段' : '本章字数',
+                    child: Text(
+                      '$wordCount 字',
+                      style: AppFonts.text(ink.inkFaint,
+                          size: 12, height: 1.3, monoFace: true),
+                    ),
+                  ),
+                ],
+              ),
             ),
+          // AI 动作：直给。
+          ActionGroup(
+            children: <Widget>[
+              ToolButton(
+                icon: Icons.auto_awesome,
+                label: 'AI 续写',
+                tone: ink.accent,
+                showLabel: true,
+                onPressed: onContinueWrite,
+              ),
+              ToolButton(
+                icon: Icons.edit_note,
+                label: 'AI 修改选中',
+                tone: ink.accent,
+                onPressed: onRewriteSelected,
+              ),
+              ToolButton(
+                icon: Icons.fact_check_outlined,
+                label: '全文 AI 校对',
+                tone: ink.accent,
+                onPressed: onProofread,
+              ),
+            ],
           ),
-          // 实时字数（中文统计）。Flexible 保证按钮区不被挤压，窄窗口下省略。
-          Flexible(
-            child: Text(
-              '$wordCount 字',
-              style: Theme.of(context).textTheme.bodySmall,
-              overflow: TextOverflow.ellipsis,
-            ),
+          const SizedBox(width: AppTokens.s2),
+          ActionGroup(
+            children: <Widget>[
+              ToolButton(
+                icon: searchOpen ? Icons.close : Icons.search,
+                label: searchOpen ? '关闭查找' : '查找替换 (Ctrl+F)',
+                active: searchOpen,
+                onPressed: onToggleSearch,
+              ),
+              ToolButton(
+                icon: Icons.query_stats,
+                label: '写作统计',
+                onPressed: onShowStats,
+              ),
+              _FormatMenu(
+                fontSize: fontSize,
+                lineHeight: lineHeight,
+                serif: serif,
+                onDecreaseFont: onDecreaseFont,
+                onIncreaseFont: onIncreaseFont,
+                onCycleLineHeight: onCycleLineHeight,
+                onToggleSerif: onToggleSerif,
+              ),
+              _MoreMenu(
+                onSplitChapter: onSplitChapter,
+                onSaveDraft: onSaveDraft,
+                onShowHistory: onShowHistory,
+              ),
+            ],
           ),
-          const SizedBox(width: 12),
-          // 查找替换（Ctrl+F）。
-          IconButton(
-            icon: Icon(
-              searchOpen ? Icons.close : Icons.search,
-              size: 18,
-            ),
-            tooltip: searchOpen ? '关闭查找' : '查找替换 (Ctrl+F)',
-            visualDensity: VisualDensity.compact,
-            onPressed: onToggleSearch,
-          ),
-          // 字体大小调节。
-          IconButton(
-            icon: const Icon(Icons.text_decrease, size: 18),
-            tooltip: '减小字号',
-            visualDensity: VisualDensity.compact,
-            onPressed: onDecreaseFont,
-          ),
-          IconButton(
-            icon: const Icon(Icons.text_increase, size: 18),
-            tooltip: '增大字号',
-            visualDensity: VisualDensity.compact,
-            onPressed: onIncreaseFont,
-          ),
-          IconButton(
-            icon: const Icon(Icons.format_line_spacing, size: 18),
-            tooltip: '切换行距',
-            visualDensity: VisualDensity.compact,
-            onPressed: onCycleLineHeight,
-          ),
-          // 写作统计。
-          IconButton(
-            icon: const Icon(Icons.query_stats, size: 18),
-            tooltip: '写作统计',
-            visualDensity: VisualDensity.compact,
-            onPressed: onShowStats,
-          ),
-          // 自动章节分割。
-          IconButton(
-            icon: const Icon(Icons.content_cut, size: 18),
-            tooltip: '自动章节分割',
-            visualDensity: VisualDensity.compact,
-            onPressed: onSplitChapter,
-          ),
-          // AI 续写。
-          IconButton(
-            icon: const Icon(Icons.auto_awesome, size: 18),
-            tooltip: 'AI 续写',
-            visualDensity: VisualDensity.compact,
-            onPressed: onContinueWrite,
-          ),
-          // AI 修改选中内容。
-          IconButton(
-            icon: const Icon(Icons.edit_note, size: 18),
-            tooltip: 'AI 修改选中内容',
-            visualDensity: VisualDensity.compact,
-            onPressed: onRewriteSelected,
-          ),
-          // 全文 AI 校对。
-          IconButton(
-            icon: const Icon(Icons.fact_check_outlined, size: 18),
-            tooltip: '全文 AI 校对',
-            visualDensity: VisualDensity.compact,
-            onPressed: onProofread,
-          ),
-          // 存入存稿箱。
-          IconButton(
-            icon: const Icon(Icons.inventory_2_outlined, size: 18),
-            tooltip: '存入存稿箱',
-            visualDensity: VisualDensity.compact,
-            onPressed: onSaveDraft,
-          ),
-          // 历史版本（回滚）。
-          IconButton(
-            icon: const Icon(Icons.history, size: 18),
-            tooltip: '历史版本',
-            visualDensity: VisualDensity.compact,
-            onPressed: onShowHistory,
-          ),
+          const SizedBox(width: AppTokens.s2),
           // 番茄钟（ValueListenableBuilder 隔离重建范围，避免每秒重建整个工具栏）。
           ValueListenableBuilder<bool>(
             valueListenable: pomodoroRunningNotifier,
-            builder: (context, running, _) {
+            builder: (BuildContext context, bool running, Widget? _) {
               return ValueListenableBuilder<int>(
                 valueListenable: pomodoroRemainNotifier,
-                builder: (context, remain, _) {
-                  final label = running
-                      ? '${(remain ~/ 60).toString().padLeft(2, '0')}:${(remain % 60).toString().padLeft(2, '0')}'
+                builder: (BuildContext context, int remain, Widget? _) {
+                  final String label = running
+                      ? '${(remain ~/ 60).toString().padLeft(2, '0')}:'
+                          '${(remain % 60).toString().padLeft(2, '0')}'
                       : '番茄钟';
-                  return TextButton.icon(
-                    onPressed: onTogglePomodoro,
-                    icon: Icon(
-                      running ? Icons.timer_off : Icons.timer_outlined,
-                      size: 16,
-                    ),
-                    label: Text(label),
-                    style: TextButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                  return Hoverable(
+                    onTap: onTogglePomodoro,
+                    selected: running,
+                    borderRadius: BorderRadius.circular(AppTokens.r2),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: AppTokens.s3, vertical: 8),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Icon(
+                            running ? Icons.timer_off : Icons.timer_outlined,
+                            size: 15,
+                            color: running ? ink.accent : ink.inkSoft,
+                          ),
+                          const SizedBox(width: AppTokens.s2 - 2),
+                          Text(
+                            label,
+                            style: AppFonts.text(
+                              running ? ink.accent : ink.inkSoft,
+                              size: 12.5,
+                              height: 1.3,
+                              monoFace: running,
+                              weight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   );
                 },
               );
             },
           ),
-          if (check != null)
+          if (check != null) ...<Widget>[
+            const SizedBox(width: AppTokens.s2),
             SensitiveBadge(check: check!, onTap: onShowCheck),
-          const SizedBox(width: 8),
-          if (saved) const SavedBadge() else const Chip(label: Text('编辑中')),
-        ],
+          ],
+          const SizedBox(width: AppTokens.s2),
+          saved
+              ? const SavedBadge()
+              : const TintBadge('编辑中', dense: true, tone: BadgeTone.warn),
+          ],
+        ),
       ),
+    );
+  }
+}
+
+/// 排版菜单：字号 / 行距 / 字体（衬线↔黑体）。
+class _FormatMenu extends StatelessWidget {
+  const _FormatMenu({
+    required this.fontSize,
+    required this.lineHeight,
+    required this.serif,
+    required this.onDecreaseFont,
+    required this.onIncreaseFont,
+    required this.onCycleLineHeight,
+    this.onToggleSerif,
+  });
+
+  final double fontSize;
+  final double lineHeight;
+  final bool serif;
+  final VoidCallback onDecreaseFont;
+  final VoidCallback onIncreaseFont;
+  final VoidCallback onCycleLineHeight;
+  final VoidCallback? onToggleSerif;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppInk ink = AppInk.of(context);
+    return PopupMenuButton<String>(
+      tooltip: '排版（字号 / 行距 / 字体）',
+      padding: const EdgeInsets.symmetric(horizontal: AppTokens.s2),
+      icon: Icon(Icons.text_format_outlined, size: 18, color: ink.inkSoft),
+      onSelected: (String v) {
+        switch (v) {
+          case 'minus':
+            onDecreaseFont();
+          case 'plus':
+            onIncreaseFont();
+          case 'line':
+            onCycleLineHeight();
+          case 'serif':
+            onToggleSerif?.call();
+        }
+      },
+      itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+        PopupMenuItem<String>(
+          enabled: false,
+          child: Row(
+            children: <Widget>[
+              const Icon(Icons.text_decrease, size: 15),
+              const SizedBox(width: AppTokens.s2),
+              Text('字号 ${fontSize.toStringAsFixed(0)}',
+                  style: AppFonts.text(ink.inkFaint, size: 12.5)),
+              const Spacer(),
+              Text('${lineHeight.toStringAsFixed(1)} 倍行距',
+                  style: AppFonts.text(ink.inkFaint, size: 12.5)),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'minus',
+          child: _Line(icon: Icons.remove, text: '减小字号'),
+        ),
+        const PopupMenuItem<String>(
+          value: 'plus',
+          child: _Line(icon: Icons.add, text: '增大字号'),
+        ),
+        const PopupMenuItem<String>(
+          value: 'line',
+          child: _Line(icon: Icons.format_line_spacing, text: '切换行距'),
+        ),
+        if (onToggleSerif != null)
+          PopupMenuItem<String>(
+            value: 'serif',
+            child: _Line(
+              icon: serif ? Icons.format_italic : Icons.title,
+              text: serif ? '正文改用黑体' : '正文改用宋体（衬线）',
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _Line extends StatelessWidget {
+  const _Line({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: <Widget>[
+        Icon(icon, size: 15),
+        const SizedBox(width: AppTokens.s2 + 2),
+        Text(text, style: AppFonts.text(AppInk.of(context).ink, size: 13)),
+      ],
+    );
+  }
+}
+
+/// 低频动作收纳：章节分割 / 存稿箱 / 历史版本。
+class _MoreMenu extends StatelessWidget {
+  const _MoreMenu({
+    required this.onSplitChapter,
+    required this.onSaveDraft,
+    required this.onShowHistory,
+  });
+
+  final VoidCallback onSplitChapter;
+  final VoidCallback onSaveDraft;
+  final VoidCallback onShowHistory;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppInk ink = AppInk.of(context);
+    return PopupMenuButton<String>(
+      tooltip: '更多',
+      padding: const EdgeInsets.symmetric(horizontal: AppTokens.s2),
+      icon: Icon(Icons.more_horiz, size: 18, color: ink.inkSoft),
+      onSelected: (String v) {
+        switch (v) {
+          case 'split':
+            onSplitChapter();
+          case 'draft':
+            onSaveDraft();
+          case 'history':
+            onShowHistory();
+        }
+      },
+      itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+        const PopupMenuItem<String>(
+          value: 'split',
+          child: _Line(icon: Icons.content_cut, text: '自动章节分割'),
+        ),
+        const PopupMenuItem<String>(
+          value: 'draft',
+          child: _Line(icon: Icons.inventory_2_outlined, text: '存入存稿箱'),
+        ),
+        const PopupMenuItem<String>(
+          value: 'history',
+          child: _Line(icon: Icons.history, text: '历史版本 / 回滚'),
+        ),
+      ],
     );
   }
 }

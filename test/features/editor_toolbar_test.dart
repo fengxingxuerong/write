@@ -97,12 +97,18 @@ void main() {
     expect(stats, 1);
   });
 
-  testWidgets('点击存稿箱按钮触发回调', (tester) async {
+  testWidgets('存稿箱收在「更多」菜单里，点开可触发', (tester) async {
     var savedDraft = 0;
     await tester.pumpWidget(
       wrap(buildToolbar(onSaveDraft: () => savedDraft++)),
     );
-    await tester.tap(find.byIcon(Icons.inventory_2_outlined));
+    // 低频动作不再常驻一行图标，点一下菜单才能看到——这是设计决定，
+    // 测试跟着改路径，但断言仍然是「点了真的会回调」。
+    await tester.tap(find.byTooltip('更多'));
+    await tester.pumpAndSettle();
+    expect(find.text('存入存稿箱'), findsOneWidget);
+    await tester.tap(find.text('存入存稿箱'));
+    await tester.pumpAndSettle();
     expect(savedDraft, 1);
   });
 

@@ -137,17 +137,22 @@ class LlmSettingsController extends StateNotifier<LlmSettingsState> {
   Future<void> _load() async {
     try {
       final LlmConfig config = await _repo.load();
+      final LlmEngineFlags flags = await _repo.loadFlags();
       if (!mounted) return;
-      state = state.copyWith(config: config);
+      state = state.copyWith(
+        config: config,
+        useLlm: flags.useLlm,
+        autoMemory: flags.autoMemory,
+      );
     } catch (_) {
       // 读取失败用默认配置，不阻塞 UI。
     }
   }
 
-  /// 启用/禁用 AI 引擎。
+  /// 启用/禁用 AI 引擎（持久化：重启后仍沿用上次选择）。
   Future<void> setUseLlm(bool use) async {
     state = state.copyWith(useLlm: use);
-    await _repo.save(state.config);
+    await _saveFlags();
   }
 
   /// 更新配置并保存。
@@ -156,10 +161,18 @@ class LlmSettingsController extends StateNotifier<LlmSettingsState> {
     await _repo.save(config);
   }
 
-  /// 切换自动维护设定开关。
+  /// 切换自动维护设定开关（持久化）。
   Future<void> setAutoMemory(bool v) async {
     state = state.copyWith(autoMemory: v);
-    await _repo.save(state.config);
+    await _saveFlags();
+  }
+
+  /// 把当前状态里的两个开关写入仓库。
+  Future<void> _saveFlags() async {
+    await _repo.saveFlags(LlmEngineFlags(
+      useLlm: state.useLlm,
+      autoMemory: state.autoMemory,
+    ));
   }
 }
 

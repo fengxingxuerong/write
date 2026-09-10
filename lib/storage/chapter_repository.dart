@@ -12,6 +12,12 @@ import 'package:novel_writer/storage/chapter_snapshot_service.dart';
 ///
 /// 所有写操作均读取整本 [Novel] → 局部修改 → 原子落盘，保证数据一致。
 /// 若注入 [ChapterSnapshotService]，内容写入时自动留底版本快照。
+///
+/// **并发约定**：每个写操作整体跑在 [AppDatabase.withNovelLock] 里。
+/// 编辑器 3s 防抖自动保存与 AI 生成落库会并发命中同一个 JSON，
+/// 只锁「写」不锁「读」时，后发起的 read-modify-write 会拿旧快照
+/// 覆盖前一个写者刚落盘的内容（丢正文）。锁粒度 per-novelId，
+/// 不同项目仍可并发。
 class ChapterRepository {
   /// 构造仓库。[snapshots] 可选：注入后启用版本快照。
   const ChapterRepository(this.db, {this.snapshots});
@@ -45,6 +51,15 @@ class ChapterRepository {
     );
   }
 
+  /// 落盘并同步首页索引（章数 / 字数）。
+  ///
+  /// 所有调用点都在 [AppDatabase.withNovelLock] 内，因此锁顺序恒为
+  /// 「先 novel 后 index」，不会与 [AppDatabase.withIndexLock] 互锁死锁。
+  Future<void> _write(Novel novel) async {
+    await db.writeNovel(novel);
+    await db.refreshIndexEntry(novel);
+  }
+
   /// 列出章节（按 order 升序）。
   Future<List<Chapter>> listChapters(String novelId) async {
     final Novel novel = await db.readNovel(novelId);
@@ -60,25 +75,27 @@ class ChapterRepository {
   }
 
   /// 新增空章节（排在末尾）。
-  Future<Chapter> addChapter(String novelId, {String? title}) async {
-    final Novel novel = await db.readNovel(novelId);
-    final int order = novel.chapters.length;
-    final DateTime now = DateTime.now();
-    final Chapter chapter = Chapter(
-      id: const Uuid().v4(),
-      novelId: novelId,
-      title: (title?.trim().isNotEmpty ?? false) ? title!.trim() : '第${order + 1}章',
-      order: order,
-      content: '',
-      createdAt: now,
-      updatedAt: now,
-    );
-    final Novel updated = novel.copyWith(chapters: <Chapter>[
-      ...novel.chapters,
-      chapter,
-    ]);
-    await db.writeNovel(updated);
-    return chapter;
+  Future<Chapter> addChapter(String novelId, {String? title}) {
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      final int order = novel.chapters.length;
+      final DateTime now = DateTime.now();
+      final Chapter chapter = Chapter(
+        id: const Uuid().v4(),
+        novelId: novelId,
+        title: (title?.trim().isNotEmpty ?? false) ? title!.trim() : '第${order + 1}章',
+        order: order,
+        content: '',
+        createdAt: now,
+        updatedAt: now,
+      );
+      final Novel updated = novel.copyWith(chapters: <Chapter>[
+        ...novel.chapters,
+        chapter,
+      ]);
+      await _write(updated);
+      return chapter;
+    });
   }
 
   /// 自动保存：仅更新正文与 updatedAt（主编防抖后调用）。
@@ -86,31 +103,35 @@ class ChapterRepository {
     String novelId,
     String chapterId,
     String content,
-  ) async {
-    final Novel novel = await db.readNovel(novelId);
-    final Chapter? target =
-        novel.chapters.where((c) => c.id == chapterId).firstOrNull;
-    final List<Chapter> chapters = novel.chapters.map((c) {
-      return c.id == chapterId
-          ? c.copyWith(content: content, updatedAt: DateTime.now())
-          : c;
-    }).toList();
-    await db.writeNovel(novel.copyWith(chapters: chapters));
-    if (target != null) {
-      _snap(novelId, chapterId, title: target.title, content: content);
-    }
+  ) {
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      final Chapter? target =
+          novel.chapters.where((c) => c.id == chapterId).firstOrNull;
+      final List<Chapter> chapters = novel.chapters.map((c) {
+        return c.id == chapterId
+            ? c.copyWith(content: content, updatedAt: DateTime.now())
+            : c;
+      }).toList();
+      await _write(novel.copyWith(chapters: chapters));
+      if (target != null) {
+        _snap(novelId, chapterId, title: target.title, content: content);
+      }
+    });
   }
 
   /// 更新整个章节对象（标题等）。返回更新后的章节。
-  Future<Chapter> updateChapter(String novelId, Chapter chapter) async {
-    final Novel novel = await db.readNovel(novelId);
-    final List<Chapter> chapters = novel.chapters.map((c) {
-      return c.id == chapter.id
-          ? chapter.copyWith(updatedAt: DateTime.now())
-          : c;
-    }).toList();
-    await db.writeNovel(novel.copyWith(chapters: chapters));
-    return chapter;
+  Future<Chapter> updateChapter(String novelId, Chapter chapter) {
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      final List<Chapter> chapters = novel.chapters.map((c) {
+        return c.id == chapter.id
+            ? chapter.copyWith(updatedAt: DateTime.now())
+            : c;
+      }).toList();
+      await _write(novel.copyWith(chapters: chapters));
+      return chapter;
+    });
   }
 
   /// 生成结果落库：按 order 覆盖或新增章节。返回落库后的章节。
@@ -122,53 +143,57 @@ class ChapterRepository {
     int order,
     String title,
     String content,
-  ) async {
-    final Novel novel = await db.readNovel(novelId);
-    final DateTime now = DateTime.now();
-    final Chapter? overwritten =
-        novel.chapters.where((c) => c.order == order).firstOrNull;
-    if (overwritten != null) {
-      _snap(
-        novelId,
-        overwritten.id,
-        title: overwritten.title,
-        content: overwritten.content,
-        force: true,
-      );
-    }
-    final List<Chapter> chapters = novel.chapters.map((c) {
-      return c.order == order
-          ? c.copyWith(content: content, title: title, updatedAt: now)
-          : c;
-    }).toList();
+  ) {
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      final DateTime now = DateTime.now();
+      final Chapter? overwritten =
+          novel.chapters.where((c) => c.order == order).firstOrNull;
+      if (overwritten != null) {
+        _snap(
+          novelId,
+          overwritten.id,
+          title: overwritten.title,
+          content: overwritten.content,
+          force: true,
+        );
+      }
+      final List<Chapter> chapters = novel.chapters.map((c) {
+        return c.order == order
+            ? c.copyWith(content: content, title: title, updatedAt: now)
+            : c;
+      }).toList();
 
-    final bool exists = novel.chapters.any((c) => c.order == order);
-    if (!exists) {
-      chapters.add(Chapter(
-        id: const Uuid().v4(),
-        novelId: novelId,
-        title: title,
-        order: order,
-        content: content,
-        createdAt: now,
-        updatedAt: now,
-      ));
-    }
-    chapters.sort((a, b) => a.order.compareTo(b.order));
-    await db.writeNovel(novel.copyWith(chapters: chapters));
-    return chapters.firstWhere((c) => c.order == order);
+      final bool exists = novel.chapters.any((c) => c.order == order);
+      if (!exists) {
+        chapters.add(Chapter(
+          id: const Uuid().v4(),
+          novelId: novelId,
+          title: title,
+          order: order,
+          content: content,
+          createdAt: now,
+          updatedAt: now,
+        ));
+      }
+      chapters.sort((a, b) => a.order.compareTo(b.order));
+      await _write(novel.copyWith(chapters: chapters));
+      return chapters.firstWhere((c) => c.order == order);
+    });
   }
 
   /// 删除章节，并重新索引 order 保持连续。
-  Future<void> deleteChapter(String novelId, String chapterId) async {
-    final Novel novel = await db.readNovel(novelId);
-    final List<Chapter> remaining = novel.chapters
-        .where((c) => c.id != chapterId)
-        .toList()
-      ..sort((a, b) => a.order.compareTo(b.order));
-    final List<Chapter> reindexed =
-        remaining.asMap().entries.map((e) => e.value.copyWith(order: e.key)).toList();
-    await db.writeNovel(novel.copyWith(chapters: reindexed));
+  Future<void> deleteChapter(String novelId, String chapterId) {
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      final List<Chapter> remaining = novel.chapters
+          .where((c) => c.id != chapterId)
+          .toList()
+        ..sort((a, b) => a.order.compareTo(b.order));
+      final List<Chapter> reindexed =
+          remaining.asMap().entries.map((e) => e.value.copyWith(order: e.key)).toList();
+      await _write(novel.copyWith(chapters: reindexed));
+    });
   }
 
   /// 将一个章节按分隔块拆分为多个章节（自动章节分割）。
@@ -180,47 +205,49 @@ class ChapterRepository {
     String novelId,
     String chapterId,
     List<String> parts,
-  ) async {
+  ) {
     if (parts.isEmpty) return listChapters(novelId);
-    final Novel novel = await db.readNovel(novelId);
-    final List<Chapter> chapters = List<Chapter>.from(novel.chapters)
-      ..sort((a, b) => a.order.compareTo(b.order));
-    final int idx = chapters.indexWhere((c) => c.id == chapterId);
-    if (idx < 0) return chapters;
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      final List<Chapter> chapters = List<Chapter>.from(novel.chapters)
+        ..sort((a, b) => a.order.compareTo(b.order));
+      final int idx = chapters.indexWhere((c) => c.id == chapterId);
+      if (idx < 0) return chapters;
 
-    final Chapter origin = chapters[idx];
-    final DateTime now = DateTime.now();
-    // 原章节保留第一块。
-    final Chapter first = origin.copyWith(
-      content: parts.first.trim(),
-      title: origin.title.trim().isNotEmpty ? origin.title : '第${idx + 1}章',
-      updatedAt: now,
-    );
-    final List<Chapter> newOnes = <Chapter>[
-      for (int i = 1; i < parts.length; i++)
-        Chapter(
-          id: const Uuid().v4(),
-          novelId: novelId,
-          title: '第${idx + i + 1}章',
-          order: 0, // 稍后重排。
-          content: parts[i].trim(),
-          createdAt: now,
-          updatedAt: now,
-        ),
-    ];
-    final List<Chapter> rebuilt = <Chapter>[
-      ...chapters.take(idx),
-      first,
-      ...newOnes,
-      ...chapters.skip(idx + 1),
-    ];
-    final List<Chapter> reindexed = rebuilt
-        .asMap()
-        .entries
-        .map((e) => e.value.copyWith(order: e.key))
-        .toList();
-    await db.writeNovel(novel.copyWith(chapters: reindexed));
-    return reindexed;
+      final Chapter origin = chapters[idx];
+      final DateTime now = DateTime.now();
+      // 原章节保留第一块。
+      final Chapter first = origin.copyWith(
+        content: parts.first.trim(),
+        title: origin.title.trim().isNotEmpty ? origin.title : '第${idx + 1}章',
+        updatedAt: now,
+      );
+      final List<Chapter> newOnes = <Chapter>[
+        for (int i = 1; i < parts.length; i++)
+          Chapter(
+            id: const Uuid().v4(),
+            novelId: novelId,
+            title: '第${idx + i + 1}章',
+            order: 0, // 稍后重排。
+            content: parts[i].trim(),
+            createdAt: now,
+            updatedAt: now,
+          ),
+      ];
+      final List<Chapter> rebuilt = <Chapter>[
+        ...chapters.take(idx),
+        first,
+        ...newOnes,
+        ...chapters.skip(idx + 1),
+      ];
+      final List<Chapter> reindexed = rebuilt
+          .asMap()
+          .entries
+          .map((e) => e.value.copyWith(order: e.key))
+          .toList();
+      await _write(novel.copyWith(chapters: reindexed));
+      return reindexed;
+    });
   }
 
   /// 列出存稿箱条目（按创建时间倒序）。
@@ -236,30 +263,34 @@ class ChapterRepository {
     String novelId, {
     String title = '未命名草稿',
     required String content,
-  }) async {
-    final Novel novel = await db.readNovel(novelId);
-    final ChapterDraft draft = ChapterDraft(
-      id: const Uuid().v4(),
-      novelId: novelId,
-      title: title.trim().isEmpty ? '未命名草稿' : title.trim(),
-      content: content,
-      createdAt: DateTime.now(),
-    );
-    final Novel updated = novel.copyWith(drafts: <ChapterDraft>[
-      ...novel.drafts,
-      draft,
-    ]);
-    await db.writeNovel(updated);
-    return draft;
+  }) {
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      final ChapterDraft draft = ChapterDraft(
+        id: const Uuid().v4(),
+        novelId: novelId,
+        title: title.trim().isEmpty ? '未命名草稿' : title.trim(),
+        content: content,
+        createdAt: DateTime.now(),
+      );
+      final Novel updated = novel.copyWith(drafts: <ChapterDraft>[
+        ...novel.drafts,
+        draft,
+      ]);
+      await _write(updated);
+      return draft;
+    });
   }
 
   /// 删除存稿条目。
-  Future<void> deleteDraft(String novelId, String draftId) async {
-    final Novel novel = await db.readNovel(novelId);
-    final Novel updated = novel.copyWith(
-      drafts: novel.drafts.where((d) => d.id != draftId).toList(),
-    );
-    await db.writeNovel(updated);
+  Future<void> deleteDraft(String novelId, String draftId) {
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      final Novel updated = novel.copyWith(
+        drafts: novel.drafts.where((d) => d.id != draftId).toList(),
+      );
+      await _write(updated);
+    });
   }
 
   /// 存稿转正：把存稿内容作为新章节追加到末尾，并删除该存稿。
@@ -268,52 +299,56 @@ class ChapterRepository {
     String novelId,
     String draftId, {
     String? title,
-  }) async {
-    final Novel novel = await db.readNovel(novelId);
-    final ChapterDraft? draft =
-        novel.drafts.where((d) => d.id == draftId).firstOrNull;
-    if (draft == null) {
-      throw StateError('存稿不存在：$draftId');
-    }
-    final int order = novel.chapters.length;
-    final DateTime now = DateTime.now();
-    final Chapter chapter = Chapter(
-      id: const Uuid().v4(),
-      novelId: novelId,
-      title: (title?.trim().isNotEmpty ?? false)
-          ? title!.trim()
-          : (draft.title.trim().isNotEmpty ? draft.title : '第${order + 1}章'),
-      order: order,
-      content: draft.content,
-      createdAt: now,
-      updatedAt: now,
-    );
-    final Novel updated = novel.copyWith(
-      chapters: <Chapter>[...novel.chapters, chapter],
-      drafts: novel.drafts.where((d) => d.id != draftId).toList(),
-    );
-    await db.writeNovel(updated);
-    return chapter;
+  }) {
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      final ChapterDraft? draft =
+          novel.drafts.where((d) => d.id == draftId).firstOrNull;
+      if (draft == null) {
+        throw StateError('存稿不存在：$draftId');
+      }
+      final int order = novel.chapters.length;
+      final DateTime now = DateTime.now();
+      final Chapter chapter = Chapter(
+        id: const Uuid().v4(),
+        novelId: novelId,
+        title: (title?.trim().isNotEmpty ?? false)
+            ? title!.trim()
+            : (draft.title.trim().isNotEmpty ? draft.title : '第${order + 1}章'),
+        order: order,
+        content: draft.content,
+        createdAt: now,
+        updatedAt: now,
+      );
+      final Novel updated = novel.copyWith(
+        chapters: <Chapter>[...novel.chapters, chapter],
+        drafts: novel.drafts.where((d) => d.id != draftId).toList(),
+      );
+      await _write(updated);
+      return chapter;
+    });
   }
 
   /// 按给定 id 顺序重排章节（拖拽 / 上移下移后调用）。
-  Future<void> reorderChapters(String novelId, List<String> orderedIds) async {
-    final Novel novel = await db.readNovel(novelId);
-    final Map<String, Chapter> byId = <String, Chapter>{
-      for (final c in novel.chapters) c.id: c,
-    };
-    final List<Chapter> chapters = <Chapter>[];
-    for (int i = 0; i < orderedIds.length; i++) {
-      final Chapter? c = byId[orderedIds[i]];
-      if (c != null) chapters.add(c.copyWith(order: i));
-    }
-    // 兜底：把未在 orderedIds 中的章节追加在末尾。
-    for (final c in novel.chapters) {
-      if (!orderedIds.contains(c.id)) {
-        chapters.add(c.copyWith(order: chapters.length));
+  Future<void> reorderChapters(String novelId, List<String> orderedIds) {
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      final Map<String, Chapter> byId = <String, Chapter>{
+        for (final c in novel.chapters) c.id: c,
+      };
+      final List<Chapter> chapters = <Chapter>[];
+      for (int i = 0; i < orderedIds.length; i++) {
+        final Chapter? c = byId[orderedIds[i]];
+        if (c != null) chapters.add(c.copyWith(order: i));
       }
-    }
-    chapters.sort((a, b) => a.order.compareTo(b.order));
-    await db.writeNovel(novel.copyWith(chapters: chapters));
+      // 兜底：把未在 orderedIds 中的章节追加在末尾。
+      for (final c in novel.chapters) {
+        if (!orderedIds.contains(c.id)) {
+          chapters.add(c.copyWith(order: chapters.length));
+        }
+      }
+      chapters.sort((a, b) => a.order.compareTo(b.order));
+      await _write(novel.copyWith(chapters: chapters));
+    });
   }
 }

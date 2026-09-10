@@ -63,6 +63,37 @@ void main() {
     });
   });
 
+  group('WritingGuidelines.fanqieGate', () {
+    test('包含番茄四件套与移动端硬门槛', () {
+      final text = WritingGuidelines.fanqieGate;
+      expect(text, contains('番茄过审硬门槛'));
+      expect(text, contains('25%~45%'));
+      expect(text, contains('每章四件套'));
+      expect(text, contains('首屏 300 字'));
+      expect(text, contains('可替换性'));
+    });
+
+    test('systemPrompt 已组装进 fanqieGate', () {
+      expect(WritingGuidelines.systemPrompt, contains('番茄过审硬门槛'));
+    });
+
+    test('通用技法不再含修仙专属意象（防题材渗漏）', () {
+      expect(WritingGuidelines.coreTechniques.contains('丹田'), isFalse);
+      expect(WritingGuidelines.coreTechniques.contains('周天'), isFalse);
+      expect(WritingGuidelines.antiAiTone.contains('三件套'), isTrue);
+      // 下放而非删掉：玄幻专属仍保留这套意象
+      expect(WritingGuidelines.genreGuidance('玄幻').contains('丹田'), isTrue);
+    });
+
+    test('非修仙题材拿不到修仙意象', () {
+      for (final g in ['体育', '科幻', '都市', 'jingsai', 'kehuan']) {
+        final t = WritingGuidelines.genreGuidance(g);
+        expect(t.contains('丹田'), isFalse, reason: '$g 不应含修仙意象');
+        expect(t.contains('周天'), isFalse, reason: '$g 不应含修仙意象');
+      }
+    });
+  });
+
   group('WritingGuidelines.structureRequirements', () {
     test('非空且包含结构要求', () {
       final text = WritingGuidelines.structureRequirements;

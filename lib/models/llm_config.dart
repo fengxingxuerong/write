@@ -117,10 +117,40 @@ class LlmConfig {
   }
 }
 
+/// 引擎行为开关：与 [LlmConfig] 存在同一个 `llm_settings.json`，
+/// 但独立成键空间，避免把「用不用 AI」混进连接配置语义。
+class LlmEngineFlags {
+  /// 是否启用 AI 引擎（false = 离线模板引擎）。
+  final bool useLlm;
+
+  /// 是否在生成后自动提取角色/世界观并落库。
+  final bool autoMemory;
+
+  /// 构造开关。
+  const LlmEngineFlags({this.useLlm = false, this.autoMemory = true});
+
+  /// 序列化。
+  Map<String, dynamic> toMap() => <String, dynamic>{
+        'useLlm': useLlm,
+        'autoMemory': autoMemory,
+      };
+
+  /// 反序列化（缺失字段回落默认值，兼容旧配置文件）。
+  factory LlmEngineFlags.fromMap(Map<String, dynamic> json) {
+    final Object? auto = json['autoMemory'];
+    return LlmEngineFlags(
+      useLlm: json['useLlm'] == true,
+      autoMemory: auto is bool ? auto : true,
+    );
+  }
+}
+
 /// LLM 设置仓库：JSON 文件持久化。
 ///
-/// 存于 applicationSupportDirectory 下的 `llm_settings.json`。
-/// 引擎选择（模板/AI）由调用方持有，这里只管理 AI 连接配置。
+/// 存于 applicationSupportDirectory 下的 `llm_settings.json`，
+/// 同时承载 [LlmConfig]（连接配置）与 [LlmEngineFlags]（引擎开关）；
+/// 两者各自 [save]/[saveFlags] 时都会先读回整份文件再合并写回，
+/// 互不覆盖。读配置失败抛 [StorageException]；读开关失败回落默认值（见 [loadFlags]）。
 class LlmSettingsRepository {
   /// 构造仓库。
   LlmSettingsRepository(this.directory);
@@ -144,12 +174,45 @@ class LlmSettingsRepository {
     }
   }
 
-  /// 保存配置（原子写）。
+  /// 保存配置（原子写；保留同文件内的引擎开关键）。
   Future<void> save(LlmConfig config) async {
+    await _writeJson(<String, dynamic>{
+      ...await _readJson(),
+      ...config.toJson(),
+    });
+  }
+
+  /// 读取引擎开关。文件缺失或内容损坏时返回默认值而不抛错——
+  /// 开关读失败不该让设置页崩掉。
+  Future<LlmEngineFlags> loadFlags() async {
+    return LlmEngineFlags.fromMap(await _readJson());
+  }
+
+  /// 保存引擎开关（原子写；保留同文件内的 [LlmConfig] 字段）。
+  Future<void> saveFlags(LlmEngineFlags flags) async {
+    await _writeJson(<String, dynamic>{
+      ...await _readJson(),
+      ...flags.toMap(),
+    });
+  }
+
+  /// 读取原始 JSON；文件不存在或解析失败返回空映射。
+  Future<Map<String, dynamic>> _readJson() async {
+    final File file = File(filePath);
+    if (!await file.exists()) return <String, dynamic>{};
+    try {
+      return jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    } catch (_) {
+      return <String, dynamic>{};
+    }
+  }
+
+  /// 原子写：临时文件 + 重命名，失败清理残留。
+  Future<void> _writeJson(Map<String, dynamic> json) async {
     final File file = File(filePath);
     final File tmp = File('$filePath.tmp');
     try {
-      await tmp.writeAsString(jsonEncode(config.toJson()), flush: true);
+      await tmp.writeAsString(jsonEncode(json), flush: true);
       await tmp.rename(file.path);
     } catch (e) {
       if (await tmp.exists()) {

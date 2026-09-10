@@ -134,9 +134,9 @@ class _BeatBoardDialogState extends ConsumerState<BeatBoardDialog> {
           ),
         ),
         // 节拍卡片列表（可拖拽重排序）
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-          child: const Text('长按卡片可拖动排序',
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 4, 16, 0),
+          child: Text('长按卡片可拖动排序',
               style: TextStyle(fontSize: 11, color: Colors.grey)),
         ),
         Expanded(
