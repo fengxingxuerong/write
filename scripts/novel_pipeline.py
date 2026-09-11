@@ -545,6 +545,8 @@ def main():
                    help="前 N 章额外做首屏 300 字强化（番茄完读率命门）")
     p.add_argument("--no-fanqie-pack", action="store_true",
                    help="不生成上架包（书名/简介/标签）与评估卡文件")
+    p.add_argument("--skip-amd", action="store_true",
+                   help="跳过 AMD/NVIDIA 链路，直接走商汤（AMD 持续限流时用）")
     p.add_argument("--prev-summary-file", default="",
                    help="前情提要文件（续写模式：规划官须承接该剧情）")
     args = p.parse_args()
@@ -555,6 +557,12 @@ def main():
             prev_summary = pf.read().strip()
 
     setup_keys()
+    if args.skip_amd:
+        # 跳过 AMD/NVIDIA：把这两条链路预标记为冷却（call_chain 自动跳过，直接走商汤）
+        for p in [PLANNER, PLANNER_CHAIN[0], PLANNER_CHAIN[3], WRITER_CHAIN[0],
+                  EDITOR_CHAIN[1], VERIFIER]:
+            _HEALTH[(p["url"], p["model"])] = {"fails": 3, "cooldown_until": time.time() + 24 * 3600, "hits": 0}
+        print("[INFO] --skip-amd：跳过 AMD/NVIDIA 链路，纯商汤路由")
     print(f"[INFO] 协作流水线启动 | 目标 {args.total_words} 字 | 输出 {args.output}")
 
     state = load_state(args.output, min_words=0)

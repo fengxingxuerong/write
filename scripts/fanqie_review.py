@@ -330,7 +330,7 @@ def filler_ratio(text):
     明要求的节奏手段，拿段落长短去砍它会把好文风压成流水账。"""
     paras = paragraphs(text)
     if not paras:
-        return 0.0
+        return 0.0, 0
     bad = counted = 0
     for p in paras:
         if count_words(p) < 40:
