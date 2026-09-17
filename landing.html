@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>墨匠 InkSmith · 从灵感到成书</title>
+<meta name="description" content="墨匠 InkSmith 功能全览：书架管理、沉浸编辑、角色世界书、AI 生成、五角色流水线、质量检查、阅读与多格式导出。附离线网页演示。">
+<style>
+  :root {
+    --bg: #0a0a12;
+    --card: rgba(255, 255, 255, 0.04);
+    --border: rgba(255, 255, 255, 0.08);
+    --text: #e8e8f0;
+    --text-dim: #9a9ab0;
+    --accent: #8b5cf6;
+    --accent2: #ec4899;
+    --accent3: #22d3ee;
+    --grad: linear-gradient(135deg, #8b5cf6 0%, #ec4899 50%, #22d3ee 100%);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif;
+    overflow-x: hidden;
+    line-height: 1.6;
+  }
+  .glow { position: fixed; border-radius: 50%; filter: blur(120px); opacity: .25; pointer-events: none; z-index: 0; }
+  .glow-1 { width: 500px; height: 500px; background: var(--accent); top: -150px; left: -100px; animation: float 12s ease-in-out infinite; }
+  .glow-2 { width: 400px; height: 400px; background: var(--accent2); bottom: -100px; right: -80px; animation: float 15s ease-in-out infinite reverse; }
+  .glow-3 { width: 300px; height: 300px; background: var(--accent3); top: 45%; left: 60%; opacity: .12; animation: float 18s ease-in-out infinite; }
+  @keyframes float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50% { transform: translate(40px, -30px) scale(1.1); }
+  }
+  .grid-overlay {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image: linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+    background-size: 60px 60px;
+    -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+    mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+  }
+  .container { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+  nav {
+    position: sticky; top: 0; z-index: 100;
+    backdrop-filter: blur(16px);
+    background: rgba(10, 10, 18, 0.7);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.1rem; text-decoration: none; color: var(--text); }
+  .logo-icon {
+    width: 32px; height: 32px; border-radius: 9px; background: var(--grad);
+    display: grid; place-items: center; font-size: 1rem;
+    box-shadow: 0 0 20px rgba(139, 92, 246, .5);
+  }
+  .nav-links { display: flex; gap: 28px; }
+  .nav-links a { color: var(--text-dim); text-decoration: none; font-size: .9rem; transition: color .2s; }
+  .nav-links a:hover { color: var(--text); }
+  .btn-nav {
+    padding: 8px 20px; border-radius: 99px; background: var(--grad);
+    color: white; text-decoration: none; font-size: .85rem; font-weight: 600;
+    transition: transform .2s, box-shadow .2s;
+  }
+  .btn-nav:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(139, 92, 246, .4); }
+  .hero { padding: 110px 0 80px; text-align: center; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 16px; border-radius: 99px;
+    background: var(--card); border: 1px solid var(--border);
+    font-size: .8rem; color: var(--text-dim); margin-bottom: 28px;
+  }
+  .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 10px #4ade80; animation: pulse 2s infinite; }
+  @keyframes pulse { 50% { opacity: .4; } }
+  .hero h1 {
+    font-size: clamp(2.4rem, 6vw, 4.2rem);
+    font-weight: 800; line-height: 1.15; letter-spacing: -1px;
+    background: linear-gradient(135deg, #fff 30%, #b9a6ff 70%, #7ee8fa 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    margin-bottom: 22px;
+  }
+  .hero p { font-size: 1.1rem; color: var(--text-dim); max-width: 560px; margin: 0 auto 40px; }
+  .hero-actions { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    padding: 14px 32px; border-radius: 12px; font-size: .95rem; font-weight: 600;
+    text-decoration: none; transition: all .25s; display: inline-flex; align-items: center; gap: 8px;
+  }
+  .btn-primary { background: var(--grad); color: #fff; box-shadow: 0 6px 30px rgba(139, 92, 246, .35); }
+  .btn-primary:hover { transform: translateY(-3px); box-shadow: 0 12px 40px rgba(139, 92, 246, .5); }
+  .btn-ghost { background: var(--card); border: 1px solid var(--border); color: var(--text); }
+  .btn-ghost:hover { background: rgba(255,255,255,.08); transform: translateY(-3px); }
+  .section-title { text-align: center; margin: 90px 0 50px; }
+  .section-title h2 { font-size: 2rem; font-weight: 700; margin-bottom: 10px; }
+  .section-title p { color: var(--text-dim); font-size: .95rem; }
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 18px;
+    padding: 32px 28px; transition: all .3s; position: relative; overflow: hidden;
+  }
+  .card::before {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(135deg, rgba(139,92,246,.12), transparent 60%);
+    opacity: 0; transition: opacity .3s;
+  }
+  .card:hover { transform: translateY(-6px); border-color: rgba(139, 92, 246, .4); box-shadow: 0 20px 50px rgba(0, 0, 0, .4); }
+  .card:hover::before { opacity: 1; }
+  .card-icon {
+    width: 52px; height: 52px; border-radius: 14px; margin-bottom: 20px;
+    display: grid; place-items: center; font-size: 1.5rem;
+    background: var(--grad); box-shadow: 0 6px 20px rgba(139, 92, 246, .35);
+  }
+  .card h3 { font-size: 1.15rem; margin-bottom: 10px; position: relative; }
+  .card p { color: var(--text-dim); font-size: .9rem; position: relative; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 20px; margin: 90px 0; }
+  .stat { text-align: center; padding: 32px 16px; background: var(--card); border: 1px solid var(--border); border-radius: 18px; }
+  .stat-num { font-size: 2.4rem; font-weight: 800; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stat-label { color: var(--text-dim); font-size: .85rem; margin-top: 6px; }
+  footer { border-top: 1px solid var(--border); margin-top: 60px; padding: 36px 0; text-align: center; color: var(--text-dim); font-size: .85rem; }
+  footer .heart { color: var(--accent2); }
+  .reveal { opacity: 0; transform: translateY(30px); transition: opacity .7s ease, transform .7s ease; }
+  .reveal.visible { opacity: 1; transform: translateY(0); }
+  @media (max-width: 640px) {
+    .nav-links { display: none; }
+    .hero { padding: 70px 0 50px; }
+  }
+  section { scroll-margin-top: 90px; }
+  .hero { padding-left: 24px; padding-right: 24px; }
+  .features { grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+  .reveal { opacity: 1; transform: none; }
+  .reveal.pending { opacity: 0; transform: translateY(24px); }
+  .eyebrow { color: #c4b5fd; letter-spacing: .22em; font-size: .75rem; margin-bottom: 16px; }
+  .workspace { border: 1px solid rgba(185,166,255,.25); border-radius: 20px; background: rgba(18,18,30,.9); box-shadow: 0 30px 100px #0006; overflow: hidden; }
+  .window-bar { display: flex; align-items: center; gap: 7px; padding: 16px 22px; border-bottom: 1px solid var(--border); color: var(--text-dim); font-size: .75rem; }
+  .window-dot { width: 9px; height: 9px; border-radius: 50%; background: #f87171; }
+  .window-dot:nth-child(2) { background: #fbbf24; }
+  .window-dot:nth-child(3) { background: #4ade80; }
+  .window-bar span:last-child { margin-left: auto; }
+  .editor-layout { display: grid; grid-template-columns: 210px minmax(0,1fr); }
+  .sidebar { padding: 30px 22px; border-right: 1px solid var(--border); color: var(--text-dim); font-size: .85rem; }
+  .sidebar p { padding: 12px 0; }
+  .sidebar .active { color: #ddd0ff; background: #8b5cf61a; padding: 12px; border-radius: 8px; }
+  .writing-area { padding: 36px; min-width: 0; }
+  .writing-area label { display: block; font-size: 1.5rem; font-weight: 700; margin-bottom: 18px; }
+  textarea { display: block; width: 100%; min-height: 240px; resize: vertical; border: 0; background: transparent; color: #c8c8db; font: 1rem/2.2 Georgia, "Microsoft YaHei", serif; }
+  .editor-bottom { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 14px; align-items: center; padding-top: 20px; border-top: 1px solid var(--border); }
+  .editor-bottom p, .note { color: var(--text-dim); font-size: .8rem; }
+  button { cursor: pointer; font-family: inherit; }
+  .btn-primary { border: 0; background: linear-gradient(120deg, #7141c9, #a32c7c); }
+  .btn-nav { background: #7541c7; }
+  :focus-visible { outline: 2px solid var(--accent3); outline-offset: 5px; }
+  ::selection { background: #8b5cf655; color: white; }
+  footer { position: relative; z-index: 1; padding-left: 24px; padding-right: 24px; }
+  @media (max-width: 640px) {
+    .editor-layout { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+    .writing-area { padding: 24px; }
+    .logo { font-size: .95rem; }
+    .btn-nav { padding: 8px 12px; }
+    .section-title { margin-top: 60px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .reveal.pending { opacity: 1; transform: none; }
+  }
+  .pipeline { margin-top: 70px; }
+  .pipeline-panel { padding: 28px; border: 1px solid #8b5cf64d; border-radius: 22px; background: linear-gradient(145deg,#19132b,#10121f); }
+  .pipeline-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; }
+  .pipeline-panel label { display: block; color: #d6c9f5; font-size: .9rem; margin-bottom: 8px; }
+  .pipeline-panel input, .pipeline-panel select, .pipeline-panel textarea { width: 100%; padding: 12px; border: 1px solid #ffffff25; border-radius: 10px; background: #10101c; color: var(--text); font: inherit; }
+  .pipeline-panel textarea { min-height: 100px; }
+  .pipeline-panel select option { background: #10101c; }
+  .pipeline-wide { grid-column: 1 / -1; }
+  .pipeline-steps { display: flex; flex-wrap: wrap; gap: 10px; list-style: none; margin: 24px 0; }
+  .pipeline-steps li { padding: 8px 14px; border: 1px solid var(--border); border-radius: 99px; color: var(--text-dim); font-size: .8rem; }
+  .pipeline-steps li[data-state="active"] { border-color: #a78bfa; background: #8b5cf625; color: #e5d9ff; }
+  .pipeline-steps li[data-state="done"] { border-color: #34d39955; color: #6ee7b7; }
+  .pipeline-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+  button:disabled { cursor: not-allowed; opacity: .45; transform: none !important; }
+  .pipeline-panel progress { width: 100%; height: 8px; accent-color: #a78bfa; }
+  .pipeline-result { white-space: pre-wrap; overflow-wrap: anywhere; font: 1rem/2 "Microsoft YaHei",sans-serif; min-height: 100px; padding: 20px; margin: 18px 0; background: #08091380; border-radius: 12px; }
+  #pipeline-log { color: #b8b8d0; font-size: .8rem; padding-left: 24px; }
+  @media(max-width:640px) { .pipeline-grid { grid-template-columns: 1fr; } .pipeline-panel { padding: 20px; } }
+  .catalog-tools { margin-bottom: 24px; }
+  .catalog-tools label { display: block; margin-bottom: 10px; }
+  .catalog-tools input { width: 100%; padding: 15px 18px; border: 1px solid var(--border); border-radius: 12px; background: #141421; color: var(--text); font: inherit; margin-bottom: 10px; }
+  #feature-catalog ul { padding-left: 19px; color: #bcbcd1; font-size: .88rem; }
+  #feature-catalog li { margin: 10px 0; }
+  .card::before { pointer-events: none; }
+  .card .source-note { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border); color: #bca2f5; font-size: .76rem; }
+  .scope-notes { margin-top: 32px; padding: 24px; border: 1px solid var(--border); border-radius: 16px; background: var(--card); }
+  .scope-notes summary { cursor: pointer; color: #ddd0ff; }
+  .scope-notes p { margin-top: 14px; color: var(--text-dim); font-size: .88rem; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="glow glow-1" aria-hidden="true"></div>
+<div class="glow glow-2" aria-hidden="true"></div>
+<div class="glow glow-3" aria-hidden="true"></div>
+<div class="grid-overlay" aria-hidden="true"></div>
+<nav aria-label="主导航">
+  <div class="container nav-inner">
+    <a href="#top" class="logo"><span class="logo-icon" aria-hidden="true">✎</span>墨匠 InkSmith</a>
+    <div class="nav-links"><a href="#features">功能全览</a><a href="#pipeline">AI 流水线</a><a href="#studio">写作体验</a></div>
+    <a href="web/index.html" class="btn-nav">进入创作工作台 ↗</a>
+  </div>
+</nav>
+<main id="top">
+  <header class="hero container">
+    <div class="badge"><span class="dot" aria-hidden="true"></span> 为热爱故事的你 · 概念设计演示</div>
+    <h1>让每一个灵感<br>都成为动人的故事</h1>
+    <p>在喧嚣之外，留一处安静的写作空间。<br>从脑海中一闪而过的念头，到属于你的万千世界。</p>
+    <div class="hero-actions">
+      <a href="#studio" class="btn btn-primary">写下故事的第一行 →</a>
+      <a href="#features" class="btn btn-ghost">探索创作灵感</a>
+    </div>
+  </header>
+  <section id="studio" class="container" aria-labelledby="studio-title">
+    <div class="workspace">
+      <div class="window-bar"><i class="window-dot" aria-hidden="true"></i><i class="window-dot" aria-hidden="true"></i><i class="window-dot" aria-hidden="true"></i><span>MY CREATIVE SPACE / 写作体验</span></div>
+      <div class="editor-layout">
+        <aside class="sidebar" aria-label="创作空间装饰预览">
+          <div class="eyebrow">你的故事，从这里开始</div>
+          <p>▤ &nbsp; 雾中的来信</p>
+          <p class="active">01 &nbsp; 故事的开端</p>
+          <p>✧ &nbsp; 无限可能的下一页</p>
+          <p class="note">不必等到准备完美，<br>先写下此刻的灵感。</p>
+        </aside>
+        <div class="writing-area">
+          <div class="eyebrow">CHAPTER ONE</div>
+          <label id="studio-title" for="draft">第一章 · 雾中的来信</label>
+          <textarea id="draft" aria-describedby="draft-note" spellcheck="false">清晨六点，整座城市还沉在淡蓝色的雾里。
+
+林深推开旧书店的门，在门缝下发现了一封没有署名的信。信封上只有一句话：
+
+「如果你还记得那年夏天，就在日落前回来。」</textarea>
+          <div class="editor-bottom">
+            <p><span id="count">0</span> 字 · <span id="save-status" role="status">准备就绪</span></p>
+            <button id="export" type="button" class="btn btn-ghost">导出这段故事 ↓</button>
+          </div>
+          <p id="draft-note" class="note">可直接编辑；尝试保存在当前浏览器。重要内容请导出备份，清理浏览器数据会删除草稿。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section id="pipeline" class="container pipeline" aria-labelledby="pipeline-title">
+    <div class="section-title"><div class="eyebrow">AI WRITING LAB</div><h2 id="pipeline-title">从一个念头，到一章故事</h2><p>体验五角色协作流程 · 本地模板模拟，不调用 AI，不消耗额度</p></div>
+    <div class="pipeline-panel">
+      <form id="pipeline-form">
+        <div class="pipeline-grid">
+          <div><label for="pipeline-name">主角名</label><input id="pipeline-name" value="林深" maxlength="20" required></div>
+          <div><label for="pipeline-genre">故事题材</label><select id="pipeline-genre"><option>悬疑</option><option>玄幻</option><option>都市</option><option>科幻</option><option>言情</option></select></div>
+          <div><label for="pipeline-quality">演示档位（网页独有，非软件质量评分）</label><select id="pipeline-quality"><option value="quick">灵感速写 · 简短片段</option><option value="standard" selected>标准创作 · 场景展开</option><option value="polished">细节打磨 · 增加描写</option></select></div>
+          <div><label for="pipeline-route">模型路由示意（不会连接服务）</label><select id="pipeline-route"><option value="local">本地模型 · Ollama / llama.cpp</option><option value="cloud">云端模型 · 兼容 API</option><option value="roles">多角色 · 独立模型分工</option></select></div>
+          <div class="pipeline-wide"><label for="pipeline-idea">故事设定</label><textarea id="pipeline-idea" maxlength="800" required>旧书店收到一封来自十年前的信，落款却是明天。</textarea></div>
+        </div>
+        <p class="note" id="route-note">本地模型需另行部署。当前仅演示路由标签，不检测或访问本机服务。</p>
+        <div class="pipeline-actions"><button id="pipeline-run" class="btn btn-primary" type="submit">运行创作演示 ✦</button><button id="pipeline-stop" class="btn btn-ghost" type="button" disabled>停止演示</button></div>
+      </form>
+      <ol class="pipeline-steps" aria-label="模拟流水线阶段"><li>01 总规划官</li><li>02 正文写手</li><li>03 去 AI 味编辑</li><li>04 标题官</li><li>05 一致性审校</li></ol>
+      <progress id="pipeline-progress" max="5" value="0" aria-label="演示进度"></progress>
+      <p id="pipeline-status" role="status" class="note">填写设定，开启一次模拟创作。</p>
+      <ol id="pipeline-log" aria-label="演示运行日志"></ol>
+      <h3 style="margin-top:20px">生成结果 <span class="note">/ 固定模板示例，非真实 AI 输出</span></h3>
+      <div id="pipeline-result" class="pipeline-result">你的下一段故事，正在这里等待。</div>
+      <button id="pipeline-append" class="btn btn-ghost" type="button" disabled>追加到上方写作区 ↑</button>
+      <p class="note">结果不会自动覆盖草稿；选择追加后将触发浏览器本地保存。真实软件流水线另有配置、任务存储和质量检查机制。</p>
+    </div>
+  </section>
+  <section id="features" class="container" aria-labelledby="features-title">
+    <div class="section-title reveal">
+      <div class="eyebrow">THE COMPLETE WRITING TOOLKIT</div>
+      <h2 id="features-title">从书架到成书，创作所需尽在这里</h2>
+      <p>依据当前 Flutter 源码整理。下方为软件功能介绍，不是网页中的可执行入口。</p>
+    </div>
+    <div class="catalog-tools"><label for="feature-search">搜索软件功能</label><input id="feature-search" type="search" placeholder="试试：世界书、校对、EPUB、伏笔…"><p id="feature-count" class="note" role="status">全部功能分组</p></div>
+    <div class="features" id="feature-catalog">
+      <article class="card"><div class="eyebrow">01 / LIBRARY</div><h3>作品书架与项目管理</h3><ul><li>新建作品：书名、题材、基调</li><li>标题搜索、排序；全部 / 写作中 / 已归档筛选</li><li>作品重命名、删除、归档与取消归档</li><li>卡片展示章数、字数、更新时间</li><li>单项目 JSON 文件存储，拷贝文件迁移</li><li>明亮 / 深色 / 跟随系统主题</li></ul><p class="source-note">软件入口：作品列表</p></article>
+      <article class="card"><div class="eyebrow">02 / EDITOR</div><h3>沉浸编辑与写作效率</h3><ul><li>三栏工作区，侧栏切换与专注模式</li><li>自动保存、失焦保存与手动保存</li><li>实时字数、目标进度、段落与句子统计、今日写作量、平均句长</li><li>字号、行距与衬线字体切换</li><li>章内查找替换、匹配跳转、全部替换；全书搜索定位</li><li>25 分钟番茄钟与键盘快捷操作</li></ul><p class="source-note">软件入口：工作区 → 编辑器</p></article>
+      <article class="card"><div class="eyebrow">03 / STRUCTURE</div><h3>章节、大纲与创作留底</h3><ul><li>章节新增、删除、标题编辑、上下移动与拖拽排序</li><li>章节大纲编辑；卷纲总览、复制与回到章节编辑</li><li>按空行块拆分长章节并重排</li><li>存稿箱：暂存、预览、转为正式章节、删除</li><li>历史版本快照查看与恢复</li><li>节拍板：场景结构、编辑节拍、切换骨架、按骨架重写</li></ul><p class="source-note">软件入口：章节栏 / 编辑器更多 / 工具箱</p></article>
+      <article class="card"><div class="eyebrow">04 / WORLD BUILDING</div><h3>角色档案与世界书</h3><ul><li>角色姓名、定位、性格、背景、关系与对话风格</li><li>角色与世界观设定增删改</li><li>世界观分类、标题及设定正文</li><li>世界书角色档案与关系网展示</li><li>按分类浏览世界观；生成并复制上下文文本</li><li>生成时复用已有角色设定；AI 记忆自动提取并积累新信息</li></ul><p class="source-note">软件入口：右侧设定面板 / 工具箱 → 世界书</p></article>
+      <article class="card"><div class="eyebrow">05 / GENERATION</div><h3>一键生成与 AI 辅助</h3><ul><li>离线模板引擎 / LLM 引擎切换</li><li>玄幻、都市、科幻、言情、悬疑五种题材</li><li>基调、目标字数、随机度、主角与章节大纲</li><li>段落结构与文风设置；AI 扩写大纲</li><li>1–10 章连写、卷纲分配、承接上文、AI 章节标题</li><li>生成进度、取消；编辑器流式续写、选中修改、全文校对及勾选应用</li></ul><p class="source-note">软件入口：一键生成 / 编辑器 AI 工具</p></article>
+      <article class="card"><div class="eyebrow">06 / MODEL CONNECTION</div><h3>模型连接与生成设置</h3><ul><li>提供商、模型名、Base URL、API Key 与温度设置</li><li>测试连接、检测本地模型</li><li>Ollama / llama.cpp 本地服务及兼容云端 API</li><li>AI 记忆开关与生成偏好保存</li><li>模型服务需自行部署或配置；云端调用可能产生费用</li><li>本网页不接收密钥、不连接服务、不上传正文</li></ul><p class="source-note">软件入口：设定面板 → AI 设置</p></article>
+      <article class="card"><div class="eyebrow">07 / AI PIPELINE</div><h3>五角色长篇流水线</h3><ul><li>任务创建、列表刷新、查看与删除</li><li>目标总字数、章节上限、题材与主角配置</li><li>规划官、正文写手、去 AI 味编辑、标题官、一致性审校独立模型配置</li><li>润色开关、每五章一致性审校开关</li><li>手动运行、停止请求、进度日志、已完成章节断点保存与续跑</li><li>简版质检报告；完成任务导入书架、导出 TXT</li></ul><p class="source-note">软件入口：书架 → AI 流水线</p></article>
+      <article class="card"><div class="eyebrow">08 / CONTINUITY</div><h3>自动衔接与质量护栏</h3><ul><li>全书大纲 → 场景拆分 → 正文 → 润色 → 标题</li><li>短场景续写、字数不足补写、首尾衔接去重</li><li>润色失败或缩减过多时保留原文</li><li>章末钩子检查与补写、本地规则质检</li><li>五维语义评分、低分重写尝试、跨章状态追踪</li><li>伏笔台账与长期未回收提醒；已配置备用链时的模型故障转移</li></ul><p class="source-note">流水线自动执行；部分参数仅底层配置，非界面开关</p></article>
+      <article class="card"><div class="eyebrow">09 / REVIEW</div><h3>敏感词检查与全书体检</h3><ul><li>分类敏感词检查、命中上下文与分类统计</li><li>自定义词增删、历史累计命中排行；保存与替换后复查</li><li>全书体检：文笔卫生、规则闸门与商业指标</li><li>总分卡、章节问题与重新体检</li><li>复制定点修指令、导出 TXT 体检报告</li><li>检测与评分仅供辅助，不承诺平台过审或准确识别 AI 写作</li></ul><p class="source-note">软件入口：编辑器检查 / 书架 → 全书体检</p></article>
+      <article class="card"><div class="eyebrow">10 / READER</div><h3>阅读与排版预览</h3><ul><li>内置阅读器及章节导航</li><li>上一章 / 下一章切换</li><li>白色、米黄、夜间三种阅读主题</li><li>字号、行距与衬线字体调节</li><li>阅读偏好本地持久化</li></ul><p class="source-note">软件入口：工作区 → 阅读预览</p></article>
+      <article class="card"><div class="eyebrow">11 / PUBLISHING</div><h3>五种格式与封面生成</h3><ul><li>TXT 纯文本、Markdown、Word DOCX</li><li>EPUB 电子书、JSON 项目备份</li><li>TXT / Markdown / Word 附带角色与世界观附录</li><li>一键导出全部格式、选择保存路径、记忆导出偏好</li><li>本地封面绘制、预览、另存为 PNG</li><li>网页写作区仅提供 TXT 导出，其余格式在软件内使用</li></ul><p class="source-note">软件入口：导出 / 工具箱 → 封面生成</p></article>
+      <article class="card"><div class="eyebrow">12 / LOCAL FIRST</div><h3>本地数据与运行诊断</h3><ul><li>项目及应用偏好保存在本机</li><li>模板生成、编辑、阅读、导出无需云端推理</li><li>崩溃日志查看与隐私说明入口</li><li>AI 云端请求需网络；本地 AI 需运行模型服务</li><li>任务配置可能包含 API Key，请勿随意分享配置文件</li></ul><p class="source-note">软件入口：书架菜单 / 隐私页面</p></article>
+    </div>
+    <p id="feature-empty" class="note" hidden>没有匹配的功能，请换一个关键词。</p>
+    <details class="scope-notes"><summary>进阶脚本、未接入组件与使用边界</summary>
+      <p><strong>命令行扩展：</strong>Python 长篇流水线另有前情文件续写、JSONL 断点恢复、大纲写前审查、读者反馈、收官终审、问题章重写、收尾补章，以及评估卡、终审卡、书名 / 简介 / 标签上架包文件输出。这些属于脚本工具，不是应用已有按钮，也不会自动发布到平台。</p>
+      <p><strong>源码组件：</strong>写作教练、分支抉择、修订对比和单章质量体检存在独立组件；当前未确认完整的界面调用链，故不作为可用入口宣传。分支弹窗本身不等于自动重写下游剧情。</p>
+      <p><strong>真实 AI 流水线：</strong>创建任务后仍需手动运行；停止请求不保证即时中断当前模型请求。重新运行会跳过已有章节。达到章节上限或大纲结束也可能完成任务，不保证达到目标字数或质量标准。备用链及部分评分参数属于底层配置。</p>
+      <p><strong>连接提醒：</strong>流水线角色表单目前没有协议选择器；新配置的默认协议可能与云端地址不匹配，应核实提供商协议和端点，不能只改 URL 就假定连通。AI 内容需人工审阅。</p>
+      <p><strong>网页范围：</strong>本页为功能全览与独立演示。实际可用的是草稿编辑、本机保存、TXT 导出、功能搜索、模板流水线演示与结果追加；未移植 Flutter 后端，也不会读取桌面软件项目。</p>
+    </details>
+    <div class="section-title reveal">
+      <div class="eyebrow">THE NEXT PAGE IS YOURS</div>
+      <h2>好故事，始于你落笔的这一刻。</h2>
+      <p>不用急着抵达结局，享受每一页的旅程。</p>
+      <div class="hero-actions" style="margin-top:28px"><a href="#studio" class="btn btn-primary">回到我的写作空间 ↗</a></div>
+    </div>
+  </section>
+</main>
+<footer><p>墨匠 InkSmith <span class="heart">✦</span> 用心书写每一个故事</p><p class="note">© 2026 · 软件功能全览与独立网页演示 · 实际 AI 能力取决于模型配置</p></footer>
+<script>
+(() => {
+  'use strict';
+  const draft = document.getElementById('draft');
+  const count = document.getElementById('count');
+  const status = document.getElementById('save-status');
+  const key = 'novel-writer-landing-draft-v1';
+  const updateCount = () => { count.textContent = Array.from(draft.value.replace(/\s/g, '')).length; };
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved !== null) { draft.value = saved; status.textContent = '已恢复本地草稿'; }
+  } catch { status.textContent = '本地存储不可用，请导出备份'; }
+  updateCount();
+  draft.addEventListener('input', () => {
+    updateCount();
+    try { localStorage.setItem(key, draft.value); status.textContent = '已保存到本机'; }
+    catch { status.textContent = '保存失败，请导出备份'; }
+  });
+  document.getElementById('export').addEventListener('click', () => {
+    const url = URL.createObjectURL(new Blob(['\uFEFF', draft.value], { type: 'text/plain;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = '我的故事.txt';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    status.textContent = '已发起导出，请查看浏览器下载';
+  });
+  const byId = id => document.getElementById(id);
+  const cards = [...document.querySelectorAll('#feature-catalog .card')];
+  const filterFeatures = () => {
+    const query = byId('feature-search').value.trim().toLocaleLowerCase();
+    let visible = 0;
+    cards.forEach(card => { card.hidden = !card.textContent.toLocaleLowerCase().includes(query); if (!card.hidden) visible++; });
+    byId('feature-count').textContent = `显示 ${visible} / ${cards.length} 个功能分组`;
+    byId('feature-empty').hidden = visible !== 0;
+  };
+  byId('feature-search').addEventListener('input', filterFeatures);
+  filterFeatures();
+  const form = byId('pipeline-form');
+  const run = byId('pipeline-run');
+  const stop = byId('pipeline-stop');
+  const append = byId('pipeline-append');
+  const progress = byId('pipeline-progress');
+  const result = byId('pipeline-result');
+  const message = byId('pipeline-status');
+  const steps = [...document.querySelectorAll('.pipeline-steps li')];
+  const controls = [...form.querySelectorAll('input, select, textarea')];
+  let timer = null;
+  let output = '';
+  let running = false;
+  const busy = value => {
+    running = value; run.disabled = value; stop.disabled = !value;
+    controls.forEach(control => { control.disabled = value; });
+  };
+  byId('pipeline-route').addEventListener('change', event => {
+    const notes = {
+      local: '本地模型需另行部署。当前仅演示路由标签，不检测或访问本机服务。',
+      cloud: '真实云端调用需要正确协议、网络、鉴权和额度。本演示不发送任何请求。',
+      roles: '真实软件可为五个角色分别配置模型。本演示使用固定模板呈现分工。'
+    };
+    byId('route-note').textContent = notes[event.target.value];
+  });
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    if (running || !form.reportValidity()) return;
+    const name = byId('pipeline-name').value.trim();
+    const idea = byId('pipeline-idea').value.trim();
+    if (!name || !idea) { message.textContent = '主角名与故事设定不能只有空白。'; return; }
+    const genre = byId('pipeline-genre').value;
+    const quality = byId('pipeline-quality').value;
+    const route = byId('pipeline-route').selectedOptions[0].textContent;
+    const places = { '悬疑': '旧书店', '玄幻': '山门', '都市': '末班地铁站', '科幻': '轨道观测站', '言情': '街角花店' };
+    let story = `${name}在${places[genre]}门前停下脚步。口袋里的纸条只写着一个线索：${idea}\n\n门内传来三声轻响。${name}没有后退，而是把纸条压在掌心，推开了门。`;
+    if (quality !== 'quick') story += '\n\n桌上摆着两只杯子，其中一只还冒着热气。有人刚刚离开，也有人一直在等待。\n\n“你比约定的时间晚了一分钟。”角落里的人说。';
+    if (quality === 'polished') story += `\n\n雨水顺着${name}的袖口落下，在地板上洇出一小片深色。墙上的钟停在六点，秒针却仍在发出细响。\n\n${name}看向第二只杯子。杯底，压着自己的照片。`;
+    output = ''; append.disabled = true; progress.value = 0;
+    result.textContent = '正在准备固定模板示例…';
+    byId('pipeline-log').replaceChildren();
+    steps.forEach(step => { step.dataset.state = 'waiting'; });
+    busy(true);
+    let index = 0;
+    const advance = () => {
+      steps[index].dataset.state = 'active';
+      message.textContent = `模拟中：${steps[index].textContent} · ${route}`;
+      timer = setTimeout(() => {
+        steps[index].dataset.state = 'done';
+        progress.value = index + 1;
+        const item = document.createElement('li');
+        item.textContent = `${steps[index].textContent}：演示阶段完成（未调用模型）`;
+        byId('pipeline-log').appendChild(item);
+        if (index === 1) result.textContent = story;
+        index++;
+        if (index < steps.length) advance();
+        else {
+          timer = null; output = `【${genre} · 门后的来客｜模板演示】\n\n${story}`;
+          result.textContent = output; busy(false); append.disabled = false;
+          message.textContent = '模拟完成 · 5 / 5 阶段；未运行真实质检，不代表质量达标。';
+        }
+      }, 450);
+    };
+    advance();
+  });
+  stop.addEventListener('click', () => {
+    clearTimeout(timer); timer = null; busy(false); output = ''; append.disabled = true;
+    steps.forEach(step => { if (step.dataset.state === 'active') step.dataset.state = 'waiting'; });
+    message.textContent = '演示已停止，可重新运行。未修改写作区草稿。';
+  });
+  append.addEventListener('click', () => {
+    if (!output || running) return;
+    draft.value += (draft.value ? '\n\n' : '') + output;
+    draft.dispatchEvent(new Event('input', { bubbles: true }));
+    append.disabled = true; output = '';
+    message.textContent = '已追加到写作区，原有草稿保留。保存结果请查看写作区状态。';
+  });
+  if ('IntersectionObserver' in window && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) { entry.target.classList.remove('pending'); observer.unobserve(entry.target); }
+      });
+    }, { threshold: 0.1 });
+    document.querySelectorAll('.reveal').forEach(el => { el.classList.add('pending'); observer.observe(el); });
+  }
+})();
+</script>
+</body>
+</html>
