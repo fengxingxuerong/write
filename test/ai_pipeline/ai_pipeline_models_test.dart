@@ -29,7 +29,7 @@ void main() {
         protagonist: '沈度',
         useEditor: false,
         roles: <AiRole, AiRoleConfig>{
-          AiRole.writer: const AiRoleConfig(
+          AiRole.writer: AiRoleConfig(
             role: AiRole.writer,
             llm: LlmConfig(
               provider: LlmProvider.openaiCompatible,
@@ -102,7 +102,7 @@ void main() {
         useEditor: false,
         useVerifier: false,
         roles: <AiRole, AiRoleConfig>{
-          AiRole.planner: const AiRoleConfig(
+          AiRole.planner: AiRoleConfig(
             role: AiRole.planner,
             llm: LlmConfig(
               provider: LlmProvider.openaiCompatible,
@@ -111,7 +111,7 @@ void main() {
               baseUrl: 'https://example.com/v1/chat/completions',
             ),
           ),
-          AiRole.writer: const AiRoleConfig(
+          AiRole.writer: AiRoleConfig(
             role: AiRole.writer,
             llm: LlmConfig(
               provider: LlmProvider.openaiCompatible,
@@ -120,7 +120,7 @@ void main() {
               baseUrl: 'https://example.com/v1/chat/completions',
             ),
           ),
-          AiRole.titler: const AiRoleConfig(
+          AiRole.titler: AiRoleConfig(
             role: AiRole.titler,
             llm: LlmConfig(
               provider: LlmProvider.openaiCompatible,

@@ -35,6 +35,29 @@ void main() {
     }
   });
 
+  group('语料合规（版权卫生）', () {
+    // 语料契约（names_corpus.dart 头注释）：全部素材须为自研或公有领域，
+    // 严禁打包受版权文本。以下均为现代作品的标志性人名/艺名，
+    // 一旦回潮会被闸门判「同质化」并有版权风险。
+    const List<String> ipNames = <String>[
+      '西门吹雪', '花无缺', '云澈', '墨渊', '姜望', '百里屠',
+      '李逍遥', '赵灵儿', '韩立', '萧峰', '沈浪',
+      '邓超', '葛优', '顾廷烨', '萧景琰', '李承鄞',
+    ];
+    const List<String> allGenres = <String>[
+      'xuanhuan', 'dushi', 'kehuan', 'yanqing', 'xuanyi',
+      'xianxia', 'lishi', 'game', 'jingsai', 'kongbu',
+    ];
+    for (final g in allGenres) {
+      test('[$g] 姓名语料不含已知 IP 人名', () {
+        final List<String> names = NamesCorpus.forGenre(g).names;
+        for (final String ip in ipNames) {
+          expect(names, isNot(contains(ip)), reason: '$g 语料含 IP 人名「$ip」');
+        }
+      });
+    }
+  });
+
   group('语料兜底与聚合', () {
     test('未知题材回退到玄幻且不抛异常', () {
       expect(NamesCorpus.forGenre('unknown').names.length, greaterThanOrEqualTo(30));

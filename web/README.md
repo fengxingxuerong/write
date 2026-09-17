@@ -26,7 +26,8 @@
 
 ```powershell
 node D:\novel-writer\scripts\verify_web.cjs
-node D:\novel-writer\scripts\verify_ai_module.cjs
+node D:\novel-writer\scripts\verify_ai_failure.cjs
+node D:\novel-writer\scripts\verify_web_ai.cjs
 ```
 
 浏览器测试覆盖创建/取消/空白输入、章节编辑与刷新恢复、排序与删除确认、角色编辑、世界观、查找替换、阅读、归档筛选、320–1440px 布局。AI 测试使用 mock fetch，不访问外部网络。

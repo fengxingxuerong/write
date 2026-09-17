@@ -36,7 +36,7 @@ class SentenceTemplates {
   static const List<String> _common = <String>[
     // —— 基础叙事 ——
     '{name}望着远方，{emotion}。',
-    '就在这时，{name}{action}，心中{emotion}。',
+    '转念之间，{name}{action}，心中{emotion}。',
     '{place}的风，吹动了{name}的衣角。',
     '「{dialogue}」{name}低声说道。',
     '{name}没有回答，只是{action}。',
@@ -50,7 +50,7 @@ class SentenceTemplates {
     '一道微光掠过，{name}{emotion}。',
     '「{dialogue}」这话让{name}{emotion}。',
     '{object}在{name}掌心泛起温润的光。',
-    '{name}深吸一口气，{action}。',
+    '{name}把呼吸压平，{action}。',
     '风过{place}，带走了些许{emotion}。',
     '{name}知道，真正的考验才刚刚开始。',
     '这一刻，{place}仿佛只剩下{name}一个人的心跳。',

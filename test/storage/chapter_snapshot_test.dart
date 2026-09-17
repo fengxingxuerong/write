@@ -27,7 +27,7 @@ void main() {
     }
   });
 
-  Novel _buildNovel(String id, Chapter chapter) => Novel(
+  Novel buildNovel(String id, Chapter chapter) => Novel(
         id: id,
         title: 'Test',
         genre: 'default',
@@ -112,7 +112,7 @@ void main() {
   group('ChapterRepository + snapshots', () {
     test('updateChapterContent 自动留快照（新内容）', () async {
       final AppDatabase db = AppDatabase.initForTest(tmpRoot.path);
-      final Novel novel = _buildNovel(
+      final Novel novel = buildNovel(
         'novelA',
         Chapter(
           id: 'c1',
@@ -153,7 +153,7 @@ void main() {
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
       );
-      await db.writeNovel(_buildNovel('novelB', old));
+      await db.writeNovel(buildNovel('novelB', old));
       final ChapterSnapshotService service =
           ChapterSnapshotService(directory: tmpRoot.path, keep: 20);
       final ChapterRepository repo =

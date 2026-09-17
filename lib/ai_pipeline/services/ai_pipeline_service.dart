@@ -5,6 +5,7 @@ import 'package:novel_writer/ai_pipeline/prompts/pipeline_prompts.dart';
 import 'package:novel_writer/ai_pipeline/services/llm_router.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
+import 'package:novel_writer/engine/quality/fanqie_gate_checker.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
 /// 多模型协作长篇小说流水线（Dart 原生编排）。
@@ -352,6 +353,8 @@ class AiPipelineService {
       }
 
       // 3) 去AI味润色（编辑）
+      // 字数下限守卫（与 Python 端 EDITOR_MIN_RATIO=0.85 同步）：fulltest 实测编辑链
+      // 曾把 3805 字章润色成 1921 字砍半，过度压缩视为无效产出，保留原文并告警
       int rawWords = w;
       if (task.config.useEditor) {
         final String edited = await _call(
@@ -361,14 +364,21 @@ class AiPipelineService {
         );
         if (edited.isNotEmpty) {
           final int wEdited = _countWords(edited);
-          task.addLog('  [编辑] 润色完成 $w -> $wEdited 字');
-          fullText = edited;
+          if (wEdited >= w * 0.85) {
+            task.addLog('  [编辑] 润色完成 $w -> $wEdited 字');
+            fullText = edited;
+          } else {
+            task.addLog('  [编辑] ⚠ 润色产出 $w -> $wEdited 字，过度压缩（<85%），拒绝采纳保留原文');
+          }
         } else {
           task.addLog('  [编辑] 润色失败，保留原文');
         }
       }
 
       // 3.5) 章末钩子兜底：结尾 200 字无钩子信号词时，补写钩子句（保追读）
+      //      补丁卫生：补写产出先过 FanqieGateChecker.patchReject，被拒时改用章纲钩子本地兜底。
+      //      实测事故：补写返回「我拿到的指令是补写钩子，不是扩写…」被原样拼进正文；
+      //      另一章补出「手机屏幕亮了。不是短信。」把玄幻书写成了都市悬疑。
       if (fullText.trim().isNotEmpty && !PipelineQa.hasEndingHook(fullText)) {
         task.addLog('  [钩子] 章末缺钩，自动补写钩子...');
         final String add = await _call(
@@ -376,13 +386,32 @@ class AiPipelineService {
           writerSystemPrompt,
           '下面是本章结尾，最后 1~2 句太平淡，没有留下让读者必须看下一章的悬念。'
           '请接着补写 30~80 字的钩子句（悬念/变故/威胁逼近/秘密将揭，按${task.config.genre}题材），'
-          '不新增情节、不改变已发生的事，只把结尾收在悬念上。只输出补写内容：\n\n${_tail(fullText, 300)}',
+          '不新增情节、不改变已发生的事，只把结尾收在悬念上。'
+          '只输出补写内容本身，不要任何解释、说明或字数报告：\n\n${_tail(fullText, 300)}',
         );
-        if (add.trim().length > 8) {
+        final String? why = FanqieGateChecker.patchReject(
+          add,
+          baseText: fullText,
+          genre: task.config.genre,
+          maxWords: 160,
+        );
+        if (why == null) {
           fullText = '${fullText.trimRight()}\n\n${add.trim()}';
           task.addLog('  [钩子] 已补写钩子');
         } else {
-          task.addLog('  [钩子] 补写失败，保留原文');
+          task.addLog('  [钩子] LLM 补写被拒（$why）→ 章纲钩子本地兜底');
+          final String fallback = _localHookFallback(
+            _chapterHookHint(ch),
+            task.config.protagonist,
+            task.config.genre,
+          );
+          if (fallback.isNotEmpty) {
+            fullText = '${fullText.trimRight()}\n\n$fallback';
+            task.addLog('  [钩子] 本地兜底：'
+                '${fallback.length > 40 ? fallback.substring(0, 40) : fallback}');
+          } else {
+            task.addLog('  [钩子] 无可用兜底素材，保留原文');
+          }
         }
       }
 
@@ -616,5 +645,45 @@ class AiPipelineService {
       }
     }
     return count;
+  }
+
+  /// 从章纲里取钩子原文（本地兜底的唯一素材：规划官写的钩子，必然在题材内）。
+  ///
+  /// 与 Python 侧 `extract_chapter_hook` 同口径：钩子多写在 goal 里
+  /// （`…｜钩子=威胁逼近：血煞盟的人影一闪而逝`），结构补章才带独立 hook 字段。
+  static String _chapterHookHint(Map<String, dynamic> ch) {
+    final String goal = (ch['goal'] as String?) ?? '';
+    final RegExpMatch? m =
+        RegExp(r'钩子[=＝:：]\s*([^｜|]+)').firstMatch(goal);
+    if (m != null) return m.group(1)!.trim();
+    return (ch['hook'] as String?)?.trim() ?? '';
+  }
+
+  /// 零 LLM 钩子兜底：用章纲自带的钩子写死一句章末悬念，保证不掉钩、不跑题。
+  ///
+  /// 与 Python 侧 `local_hook_fallback` 同口径。LLM 补写被拒
+  /// （指令残留/题材漂移/重复）或全模型不可用时，仍要留住追读命门。
+  static String _localHookFallback(String hookHint, String protagonist, String genre) {
+    String txt = hookHint.trim();
+    if (txt.isEmpty) return '';
+    final RegExpMatch? colon = RegExp(r'[：:]').firstMatch(txt);
+    if (colon != null) txt = txt.substring(colon.end);
+    txt = txt.replaceAll(RegExp(r'^[（）()「」『』\s]+'), '').trim();
+    if (txt.isEmpty) return '';
+    final String head = protagonist.isNotEmpty ? protagonist : '他';
+    const List<String> signals = <String>[
+      '还没', '突然', '竟然', '不对劲', '盯着', '动静', '浮现', '逼近', '异动',
+    ];
+    String out;
+    if (txt.contains(head)) {
+      out = txt;
+    } else {
+      out = '$head回头。${txt.replaceAll(RegExp(r'。$'), '')}。';
+    }
+    if (!signals.any(out.contains)) {
+      // 保证章末有钩子信号（与 PipelineQa.hasEndingHook 的词表对齐）
+      out = '${out.replaceAll(RegExp(r'。$'), '')}——他还没看清那是什么。';
+    }
+    return out;
   }
 }

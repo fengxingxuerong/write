@@ -24,7 +24,7 @@ except Exception:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generate_novel import (has_ending_hook, has_quick_opening, count_words,
                             thrill_per_thousand, surge_per_thousand, AI_CLICHE,
-                            OPENING_ACTION_WORDS, deep_ai_metrics)
+                            deep_ai_metrics)
 
 
 CHAPTER_RE = re.compile(r"^第\s*(\d+)\s*章")
@@ -134,11 +134,18 @@ NON_POWER_FANTASY_GENRES = ("悬疑", "刑侦", "灵异", "历史")
 
 
 def _collapse_zones(rows, threshold=0.5, min_len=2):
-    """连续 >=min_len 章爽点密度 <threshold 的区段，返回 [(起章, 止章, 章数)]。"""
+    """连续 >=min_len 章「爽点双低」（直白 <threshold 且异动 <1.0）的区段。
+
+    双通道判定：含蓄变强流（✨ 异动高、💥 直白低）不算塌陷——
+    与 chapterIssues 的「爽点过淡需双低」口径一致，避免对含蓄文风误判。
+    返回 [(起章, 止章, 章数)]。
+    """
     zones = []
     start = None
     for i, r in enumerate(rows):
-        if r["thrill_per_k"] < threshold:
+        flat = (r["thrill_per_k"] < threshold
+                and r.get("surge_per_k", 0.0) < 1.0)
+        if flat:
             if start is None:
                 start = i
         else:
@@ -175,8 +182,7 @@ def _sign_verdict(total, flags, unjudged):
         notes.append("硬伤一票否决：" + "；".join(flags))
     elif unjudged:
         # 有维度没评：总分只是「部分维度上的均值」，不够格说「直接投」。
-        if idx < 1:
-            idx = 1
+        idx = max(idx, 1)
         notes.append("未评维度：" + "、".join(unjudged) + "（结论已降级，不给「可直接投稿」）")
     return levels[idx], notes
 
@@ -393,7 +399,10 @@ def main():
         if r["idx"] <= 3 and not r["has_quick_opening"]:
             print("      ↳ 开场 300 字未进入变故/冲突（黄金三章要求）")
         if r["thrill_per_k"] < 0.5:
-            print("      ↳ 爽点过淡（<0.5/千字）")
+            if r.get("surge_per_k", 0.0) < 1.0:
+                print("      ↳ 爽点过淡（💥<0.5 且 ✨<1.0/千字）")
+            else:
+                print("      ↳ 含蓄变强流（💥<0.5 但 ✨>=1.0，建议补外显爽点）")
 
     # ===== 爽点密度曲线（ASCII） =====
     print("\n【爽点密度曲线】每章每千字爽点数（💥 参考线：1.5 合格 / 1.0 及格 / 0.5 过淡）")
@@ -410,7 +419,7 @@ def main():
 
     hook_rate = total_hook / len(rows) * 100
     print("-" * 78)
-    print(f"\n【汇总】")
+    print("\n【汇总】")
     print(f"  章末钩子覆盖率：{total_hook}/{len(rows)} 章（{hook_rate:.0f}%）")
     print(f"  黄金三章开场通过：{total_open}/{min(3, len(rows))} 章")
     avg = sum(r["ai_echo_pct"] for r in rows) / len(rows)
@@ -430,9 +439,9 @@ def main():
     print(f"  AI 味深度（0~4，≥3 为偏重）：均值 {deep_avg:.1f} {deep_flag}"
           f"｜偏重章节 {deep_heavy}/{len(deep_levels)}")
     if deep_heavy > 0:
-        print(f"    ↳ 提示：句长过于均匀/「的」字过多/叠词修饰/句首连接词 超标，建议编辑润色")
-    print(f"\n  💡 钩子覆盖率 < 80% 或前三章开场未全过 → 建议启用新版生成标准重跑；")
-    print(f"     > 90% → 说明写作准则的「结尾留钩」执行到位，生成质量基线良好。\n")
+        print("    ↳ 提示：句长过于均匀/「的」字过多/叠词修饰/句首连接词 超标，建议编辑润色")
+    print("\n  💡 钩子覆盖率 < 80% 或前三章开场未全过 → 建议启用新版生成标准重跑；")
+    print("     > 90% → 说明写作准则的「结尾留钩」执行到位，生成质量基线良好。\n")
 
 
 def _print_thrill_curve(rows):
@@ -467,11 +476,11 @@ def _print_thrill_curve(rows):
 
 
 def _print_collapse_zones(rows):
-    """检测连续 >=2 章爽点密度 <0.5 的节奏塌陷区（与签约报告共用同一算法）。"""
+    """检测连续 >=2 章「爽点双低」的节奏塌陷区（与签约报告共用同一算法）。"""
     zones = _collapse_zones(rows)
 
     if zones:
-        print("【⚠ 节奏塌陷区】连续 2 章以上爽点 <0.5/千字：")
+        print("【⚠ 节奏塌陷区】连续 2 章以上爽点双低（💥<0.5 且 ✨<1.0/千字）：")
         for s, e, cnt in zones:
             print(f"  ⚠ 第 {s}-{e} 章（连续 {cnt} 章）——读者流失高风险，建议重写或插入爽点场景")
     else:

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 /// 修订模式弹窗：对比原文与AI修订版，接受或拒绝修订。
 class RevisionDialog {

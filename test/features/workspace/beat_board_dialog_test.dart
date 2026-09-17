@@ -16,7 +16,7 @@ void main() {
         ),
       );
 
-  Novel _testNovel() => Novel(
+  Novel testNovel() => Novel(
         id: 'n1',
         title: 'Test',
         genre: 'xuanhuan',
@@ -29,7 +29,7 @@ void main() {
         worldSettings: const [],
       );
 
-  Chapter _testChapter() => Chapter(
+  Chapter testChapter() => Chapter(
         id: 'ch1',
         novelId: 'n1',
         title: 'Chapter 1',
@@ -41,8 +41,8 @@ void main() {
 
   group('BeatBoardDialog beat board', () {
     testWidgets('shows chapter title in header', (tester) async {
-      final novel = _testNovel();
-      final ch = _testChapter();
+      final novel = testNovel();
+      final ch = testChapter();
       await tester.pumpWidget(
         wrap(Material(
           child: Builder(
@@ -63,8 +63,8 @@ void main() {
       tester.view.physicalSize = const Size(800, 1200);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
-      final novel = _testNovel();
-      final ch = _testChapter();
+      final novel = testNovel();
+      final ch = testChapter();
       await tester.pumpWidget(
         wrap(Material(
           child: Builder(
@@ -85,8 +85,8 @@ void main() {
     });
 
     testWidgets('skeleton chip selector shows count', (tester) async {
-      final novel = _testNovel();
-      final ch = _testChapter();
+      final novel = testNovel();
+      final ch = testChapter();
       await tester.pumpWidget(
         wrap(Material(
           child: Builder(
@@ -104,8 +104,8 @@ void main() {
     });
 
     testWidgets('close button works', (tester) async {
-      final novel = _testNovel();
-      final ch = _testChapter();
+      final novel = testNovel();
+      final ch = testChapter();
       await tester.pumpWidget(
         wrap(Material(
           child: Builder(

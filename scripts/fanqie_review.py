@@ -119,6 +119,39 @@ PROMPT_LEAK = ["本场景任务", "必须完成的节拍", "爽点：", "钩子�
                "遭遇强敌或瓶颈", "心境蜕变", "就在众人以为风平浪静时", "targetWords",
                "【场景", "【跨章状态"]
 
+# 元话语/指令残留（模型把「补写操作说明」当正文吐出来，拼进成书 = 直接判废）
+# 实测事故：钩子补写返回「我拿到的指令是补写钩子，不是扩写。你贴的那段"充到 2000 字以上"…」
+# 被原样拼到第 1 章末尾，本地评审仍给 92 分（旧 PROMPT_LEAK 只覆盖骨架词，抓不到这类）。
+# 选词原则：只收「叙事里不可能出现」的短语，避免误伤正文（不用「抱歉」「请确认」这类口语）。
+META_TALK = [
+    "我拿到的指令", "拿到的指令是", "根据你的指令", "按你的指令", "按照你的要求", "按你的要求",
+    "作为AI", "作为人工智能", "作为一个AI", "作为语言模型", "我无法完成", "我无法直接",
+    "抱歉，我", "很抱歉，我", "你贴的那段", "你提供的文本", "以下是我的改写", "以上是补写",
+    "字数要求", "扩写到", "如需继续", "如果你需要", "希望这符合", "无法满足这个要求",
+]
+
+# 题材漂移：给「古风/非现代」题材用的现代生活标志词。
+# 实测事故：玄幻书第 3 章整章变成现代都市悬疑（路灯/手机/牛皮纸袋/面包车），
+# 逐章本地评审仍给 84 分，直到终审官通读才发现「书名标称玄幻，末章主角换人」。
+# 只收古风题材几乎不可能自然出现的词：「钥匙/医院/巷口」这类玄幻也合法的词一律不收。
+MODERN_MARKERS = [
+    "手机", "电脑", "网络", "微信", "支付宝", "电梯", "汽车", "面包车", "出租车", "公交车",
+    "马路", "红绿灯", "路灯", "屏幕", "短信", "沙发", "咖啡", "监控", "摄像头", "银行卡",
+    "外卖", "快递", "物业", "办公室", "上班", "加班", "房租", "塑料袋", "牛皮纸袋", "客服",
+    "二维码", "充电", "导航", "直播", "朋友圈", "地铁", "高铁", "身份证",
+]
+
+# 需要锁题材的「非现代」题材（其余题材如都市/校园/悬疑不做现代词漂移判定）
+ANCIENT_GENRES = ("玄幻", "仙侠", "武侠", "修真", "历史", "古代", "宫斗", "权谋",
+                  "奇幻", "东方", "洪荒", "仙", "古言")
+
+# 章内大段重复判定：重复块最短字数 / 指纹长度
+INTRA_REPEAT_MIN_BLOCK = 120
+INTRA_REPEAT_GRAM = 12
+
+# 阻断级硬伤的下限字数：番茄单章建议 2000~3000，低于这条线不给「可投」
+BLOCKING_MIN_WORDS = 1500
+
 
 # ------------------------------------------------------------
 # 基础统计
@@ -404,9 +437,13 @@ def name_drift(text, protagonist=""):
         if nm != protagonist and not looks_like_name(nm):
             continue
         cnt[nm] = cnt.get(nm, 0) + 1
-    hot = sorted(((w, c) for w, c in cnt.items() if c >= 3), key=lambda x: -x[1])
+    # 主角高频出现是正常叙事，不计入漂移判定（与 Dart 端 FanqieGateChecker 同口径）
+    hot = sorted(((w, c) for w, c in cnt.items() if c >= 3 and w != protagonist),
+                 key=lambda x: -x[1])
     probs = []
-    if len(hot) > 1:
+    # 「对手 + 盟友」两个常驻配角同章活跃是正常戏剧结构（与 Dart 端
+    # FanqieGateChecker 同口径）；真正的视角漂移信号是 3 个以上高频配角。
+    if len(hot) > 2:
         probs.append("同章出现多个高频人名：" + "、".join("%s×%d" % (w, c) for w, c in hot[:4])
                      + "（视角/主角漂移）")
     if protagonist and (text or "").count(protagonist) < 3:
@@ -415,22 +452,219 @@ def name_drift(text, protagonist=""):
     return probs
 
 
+def blocking_reasons(row):
+    """阻断级硬伤（不修完不给「可投」）。
+
+    与「扣分项」分开的原因：分数只回答「写得好不好」，阻断项回答「能不能投」。
+    实测事故：第 1 章 92 分（仅字数不足）时 fix_prompt 直接返回空串 → 那一章再也没被修，
+    泄漏/跑题就留在了成书里。阻断项必须能独立触发定点修。
+    """
+    out = []
+    for p in row.get("problems") or []:
+        t, msg = p.get("type", ""), p.get("msg", "")
+        if t == "泄漏":
+            out.append("提示词/元话语残留")
+        elif t == "重复" and "章内大段重复" in msg:
+            out.append("章内大段重复")
+        elif t == "一致性" and "题材漂移" in msg:
+            out.append("题材漂移")
+        elif t == "一致性" and "没接住主角" in msg:
+            out.append("主角缺席")
+        elif t == "一致性" and "世界观专名" in msg:
+            out.append("世界观未落地")
+        elif t == "钩子":
+            out.append("无章末钩子")
+    if row.get("words", 0) < BLOCKING_MIN_WORDS:
+        out.append(f"单章仅 {row.get('words', 0)} 字")
+    return out
+
+
 def prompt_leak(text):
     """骨架/规划官提示词漏进正文。"""
     return [p for p in PROMPT_LEAK if p in (text or "")]
 
 
+def meta_talk(text):
+    """模型元话语/操作说明残留（补写、定点修把「我在干什么」写进正文）。"""
+    return [p for p in META_TALK if p in (text or "")]
+
+
+def genre_drift(text, genre=""):
+    """题材漂移：非现代题材正文里出现现代生活标志词。
+
+    level："" 不报 / 「修改」个别穿帮 / 「重写」整章跑题（≥3 个不同标志词）。
+    都市/校园/悬疑等现代题材不做判定（它们本来就该有这些词）。
+    """
+    g = (genre or "").strip()
+    if not g or not any(a in g for a in ANCIENT_GENRES):
+        return {"level": "", "hits": [], "count": 0, "total": len(MODERN_MARKERS)}
+    hits = [w for w in MODERN_MARKERS if w in (text or "")]
+    n = sum((text or "").count(w) for w in hits)
+    if len(hits) >= 3:
+        return {"level": "重写", "hits": hits, "count": n, "total": len(MODERN_MARKERS)}
+    if hits:
+        return {"level": "修改", "hits": hits, "count": n, "total": len(MODERN_MARKERS)}
+    return {"level": "", "hits": [], "count": 0, "total": len(MODERN_MARKERS)}
+
+
+def _dup_spans(t, gram=INTRA_REPEAT_GRAM, step=3, min_block=INTRA_REPEAT_MIN_BLOCK):
+    """滑动指纹找长重复块：返回 [(起点, 终点)]（第二次出现的区间）。O(n)。"""
+    seen, spans = {}, []
+    for i in range(0, max(len(t) - gram + 1, 0), step):
+        g = t[i:i + gram]
+        first = seen.get(g)
+        if first is None:
+            seen[g] = i
+            continue
+        k = 0
+        while first + k < len(t) and i + k < len(t) and t[first + k] == t[i + k]:
+            k += 1
+        if k >= min_block:
+            spans.append((i, i + k))
+    merged = []
+    for a, b in sorted(spans):
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def _long_paras(text, min_words=INTRA_REPEAT_MIN_BLOCK):
+    """长段落及其在原文/扁平文本中的位置（段落级近似重复用）。"""
+    out = []
+    for p in paragraphs(text):
+        if count_words(p) >= min_words:
+            out.append(p)
+    return out
+
+
+def _para_dup(text, min_words=INTRA_REPEAT_MIN_BLOCK):
+    """段落级近似重复（标点/个别用词微调也算）：相似度 ≥0.9 判重。"""
+    import difflib
+    long_paras = _long_paras(text, min_words)
+    hits = []
+    for i in range(1, len(long_paras)):
+        for j in range(i):
+            a = re.sub(r"\s+", "", long_paras[j])
+            b = re.sub(r"\s+", "", long_paras[i])
+            if not a or not b:
+                continue
+            ratio = difflib.SequenceMatcher(None, a, b).ratio()
+            if ratio >= 0.9:
+                hits.append((long_paras[i], ratio))
+                break
+    return hits
+
+
+def intra_repeat(text):
+    """章内大段重复：同章 ≥120 字的整块文字出现两次（复制粘贴事故）。
+
+    两条通道：① 扁平文本滑动指纹（完全相同的长块）；
+    ② 段落级近似比对（标点/个别用词微调，实测事故正是这种形态）。
+    返回 {"blocks", "words", "sample"}。
+    """
+    t = re.sub(r"\s+", "", text or "")
+    spans = _dup_spans(t) if len(t) >= INTRA_REPEAT_MIN_BLOCK * 2 else []
+    words = sum(b - a for a, b in spans)
+    sample = t[spans[0][0]:spans[0][0] + 24] if spans else ""
+    fuzzy = _para_dup(text) if not spans else []
+    if fuzzy and not spans:
+        words = count_words(fuzzy[0][0])
+        sample = fuzzy[0][0][:24]
+    return {"blocks": len(spans) + (1 if (fuzzy and not spans) else 0),
+            "words": words, "sample": sample}
+
+
+def dedup_intra_repeat(text, min_para_words=40):
+    """章内重复段去重（保留首次出现，删掉后面复制的段）。返回 (新文本, 删除字数)。
+
+    只对「与前面完全相同的段（≥40 字）」动手：短句复诵（"他点头。"）与刻意排比不受影响。
+    """
+    if not text:
+        return text, 0
+    seen, out, removed = set(), [], 0
+    for ln in text.split("\n"):
+        norm = re.sub(r"\s+", "", ln)
+        if len(norm) >= min_para_words:
+            if norm in seen:
+                removed += len(norm)
+                continue
+            seen.add(norm)
+        out.append(ln)
+    if not removed:
+        return text, 0
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip(), removed
+
+
+def patch_gate(patch, base_text="", genre="", max_words=260):
+    """补丁卫生：补写/扩写/定点修的产出在拼回正文前必须过这道闸。
+
+    返回 (ok, reason)。拦三类事故（都有实测案例）：
+    ① 指令/元话语残留（模型把操作说明当正文）；
+    ② 题材漂移（玄幻书补出「手机屏幕亮了」）；
+    ③ 与正文尾部重复（补写把结尾复述一遍）。
+    """
+    p = (patch or "").strip()
+    if not p:
+        return False, "空产出"
+    if count_words(p) > max_words:
+        return False, f"超长（{count_words(p)} 字 > {max_words}）"
+    leak = prompt_leak(p) + meta_talk(p)
+    if leak:
+        return False, f"指令/元话语残留「{leak[0]}」"
+    dr = genre_drift(p, genre)
+    if dr["level"]:
+        return False, f"题材漂移：{'、'.join(dr['hits'][:3])}"
+    rl = [h for h in redline_scan(p) if h["level"] == "否决"]
+    if rl:
+        return False, f"合规红线「{rl[0]['word']}」（{rl[0]['category']}）"
+    if base_text:
+        flat_p = re.sub(r"\s+", "", p)
+        tail = re.sub(r"\s+", "", base_text)[-400:]
+        for k in range(min(len(flat_p), 80), 19, -5):
+            if k <= len(flat_p) and flat_p[:k] and flat_p[:k] in tail:
+                return False, f"与正文尾部重复 {k} 字"
+    return True, ""
+
+
+def local_hook_fallback(hook_hint="", protagonist="", genre=""):
+    """零 LLM 钩子兜底：用章纲自带的钩子写死一句章末悬念，保证不掉钩、不跑题。
+
+    用途：LLM 补写被拒（指令残留/题材漂移/重复）或全部模型不可用时，仍要留住追读命门。
+    """
+    txt = (hook_hint or "").strip()
+    if not txt:
+        return ""
+    txt = re.sub(r"^.*?[：:]", "", txt, count=1) if "：" in txt or ":" in txt else txt
+    txt = txt.strip("（）() 「」『』")
+    if not txt:
+        return ""
+    head = protagonist or "他"
+    if head in txt:
+        return txt if txt.endswith(("。", "！", "？", "…")) else txt + "。"
+    return f"{head}回头。{txt.rstrip('。')}。"
+
+
 # ------------------------------------------------------------
 # 章节 / 全书评估
 # ------------------------------------------------------------
-def review_chapter(text, prev_text="", idx=1, genre="", protagonist="", world_terms=()):
-    """单章评估：返回分数 + 问题清单 + 可直接喂回模型的修改指令。"""
+def review_chapter(text, prev_text="", idx=1, genre="", protagonist="", world_terms=(),
+                   has_hook=None):
+    """单章评估：返回分数 + 问题清单 + 可直接喂回模型的修改指令。
+
+    has_hook：调用方（novel_pipeline）传入的本地理钩子检测结果（has_ending_hook）。
+    None=未检测（CLI/旧调用，行为不变）；False=明确无章末钩子 → 记「重写」级问题扣分。
+    治「评审 100 分但钩子无」的评分分裂——终审官《断脉逆命诀》实测抓到的案例。"""
     probs = []
     words = count_words(text)
     if words < 1800:
         probs.append(("结构", f"本章仅 {words} 字（番茄单章建议 2000~3000）", "重写"))
     if words > 3800:
         probs.append(("结构", f"本章 {words} 字偏长，建议压到 3000 内", "建议"))
+    if has_hook is False:
+        probs.append(("钩子", "本章无章末钩子（本地钩子检测直白+隐喻双通道均未命中）"
+                      "——追读命门，结尾必须收在悬念/变故/威胁上", "重写"))
     fs_probs, _ = first_screen_check(text)
     probs += [("首屏", m, a) for m, a in fs_probs]
 
@@ -475,6 +709,19 @@ def review_chapter(text, prev_text="", idx=1, genre="", protagonist="", world_te
     leak = prompt_leak(text)
     if leak:
         probs.append(("泄漏", f"提示词/骨架残留漏进正文：{'、'.join(leak[:5])}", "重写"))
+    meta = meta_talk(text)
+    if meta:
+        probs.append(("泄漏", f"模型操作说明/元话语混进正文：{'、'.join(meta[:3])}"
+                      "（补写或定点修的说明文字被当成正文采纳）", "重写"))
+    gd = genre_drift(text, genre)
+    if gd["level"]:
+        probs.append(("一致性", f"题材漂移：{genre}题材出现现代标志词 "
+                      f"{'、'.join(gd['hits'][:4])}（共 {gd['count']} 处）"
+                      "——补写/改写把正文带出了本书世界观", gd["level"]))
+    ir = intra_repeat(text)
+    if ir["blocks"]:
+        probs.append(("重复", f"章内大段重复：{ir['words']} 字整块出现两次"
+                      f"（如「{ir['sample']}…」），属复制粘贴级事故", "重写"))
 
     rl = redline_scan(text)
     veto = [h for h in rl if h["level"] == "否决"]
@@ -485,13 +732,21 @@ def review_chapter(text, prev_text="", idx=1, genre="", protagonist="", world_te
         score -= 8 if kind == "重写" else (4 if kind == "修改" else 1.5)
     score -= len(veto) * 45 + len(warn) * 5
     score = round(max(0.0, score), 1)
-    verdict = "可投" if (score >= 80 and not veto) else ("需修" if score >= 55 else "不予推荐")
-    return {"idx": idx, "words": words, "score": score, "verdict": verdict,
-            "problems": [{"type": c, "msg": m, "action": k} for c, m, k in probs],
-            "redline": {"veto": veto, "warn": warn},
-            "metrics": {"pace": pace, "filler": fr, "filler_paras": fr_n,
-                        "cliche": cl["per_k"],
-                        "repeat": rep, "agency": ag}}
+    row = {"idx": idx, "words": words, "score": score, "verdict": "",
+           "problems": [{"type": c, "msg": m, "action": k} for c, m, k in probs],
+           "redline": {"veto": veto, "warn": warn},
+           "metrics": {"pace": pace, "filler": fr, "filler_paras": fr_n,
+                       "cliche": cl["per_k"],
+                       "repeat": rep, "agency": ag}}
+    row["blockers"] = blocking_reasons(row)
+    if veto:
+        row["verdict"] = "不予推荐"
+    elif row["blockers"]:
+        # 阻断项在身，分数再高也只能是「需修」——杜绝「92 分可投但整章跑题」
+        row["verdict"] = "需修"
+    else:
+        row["verdict"] = "可投" if score >= 80 else ("需修" if score >= 55 else "不予推荐")
+    return row
 
 
 def review_book(chapters, genre="", protagonist="", world_terms=()):
@@ -507,10 +762,22 @@ def review_book(chapters, genre="", protagonist="", world_terms=()):
     first3 = [r for r in rows if r["idx"] <= 3]
     first3_avg = round(sum(r["score"] for r in first3) / max(len(first3), 1), 1)
 
+    # 「阻断项」= 不能让书投出去的硬伤（与逐章评分的软指标分开）。
+    # 逐章分只回答「这一章写得好不好」，阻断项回答「这本书现在能不能投」——
+    # 实测事故：逐章 92/80/64 但第 3 章整章跑成现代都市、主角缺席、单章 671 字，
+    # 旧版 review_book 仍可能给「可投」，与终审官「36 分 不建议」完全背离。
+    blockers = []
+    for r in rows:
+        why = r.get("blockers") or blocking_reasons(r)
+        if why:
+            blockers.append(f"第 {r['idx']} 章：{'、'.join(why)}")
+
     if veto_rows:
         verdict = "不予推荐 ❌（存在合规红线，先删改再谈质量）"
     elif len(rows) < 3:
         verdict = "样本不足 ⚠（不足 3 章，无法评估黄金三章）"
+    elif blockers:
+        verdict = f"不予推荐 ❌（{len(blockers)} 章存在阻断级硬伤，先执行定点修再重扫）"
     elif avg >= 82 and first3_avg >= 80:
         verdict = "可投 ✅（前 3 章达标，具备冷启动条件）"
     elif avg >= 68:
@@ -519,15 +786,18 @@ def review_book(chapters, genre="", protagonist="", world_terms=()):
         verdict = "不予推荐 ❌（首屏、节奏、主角性多项不达标）"
 
     return {"avg_score": avg, "first3_score": first3_avg, "verdict": verdict,
-            "chapters": rows, "veto_count": sum(len(r["redline"]["veto"]) for r in veto_rows)}
+            "chapters": rows, "blockers": blockers,
+            "veto_count": sum(len(r["redline"]["veto"]) for r in veto_rows)}
 
 
 def fix_prompt(review, content):
     """把评估结果转成「定点修」提示（只改问题处，保留已写好的剧情与文字）。
 
-    达线（无重写/修改级问题）时返回空串——与 Dart 侧 fixPrompt 同一约定。"""
+    达线且无阻断项（无重写/修改级问题）时返回空串——与 Dart 侧 fixPrompt 同一约定。
+    阻断项在身时即使分数达标也照样出单（实测事故：92 分章含「元话语残留」被判可投，
+    于是修复链跳过，脏文本一路留到成书）。"""
     probs = [p for p in review["problems"] if p["action"] in ("重写", "修改")]
-    if not probs or review.get("verdict") == "可投":
+    if not probs or (review.get("verdict") == "可投" and not review.get("blockers")):
         return ""
     lines = [f"- {p['type']}：{p['msg']}" for p in probs]
     rl = review["redline"]["veto"]
@@ -541,7 +811,8 @@ def fix_prompt(review, content):
         + "\n\n【改写要求】首屏 300 字必须有主角在场、正在发生的冲突、至少一句对白；"
           "主角本章至少做出一次有代价的主动选择；对话占比提到 25%~45%；"
           "删掉所有「删了不影响剧情」的段落；句子尽量控制在 25 字内；段落不超过 3 行。\n"
-          "只输出改写后的完整正文："
+          "**题材与世界观必须与本作一致**：不得出现现代词汇、不得更换主角、不得引入新故事线。\n"
+          "**只输出改写后的正文**：不要任何解释、说明、前言、字数报告或操作描述（写进正文即判废）。\n"
         + "\n\n" + content
     )
 
@@ -589,6 +860,10 @@ def main():
             print(f"        ☠ 红线（{h['category']}）「{h['word']}」 … {h['context']}")
     print("  " + "-" * 76)
     print(f"  均分 {res['avg_score']}（前 3 章 {res['first3_score']}）｜红线命中 {res['veto_count']} 处")
+    if res.get("blockers"):
+        print(f"  ⛔ 阻断项 {len(res['blockers'])} 章（不修完不给「可投」）：")
+        for b in res["blockers"][:8]:
+            print(f"      · {b}")
     print(f"  结论：{res['verdict']}\n")
 
 

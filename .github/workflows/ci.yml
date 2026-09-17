@@ -19,6 +19,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Python scripts quality check
+        # scripts/ Python 流水线必须通过：语法编译 + ruff F 类静态检查
+        # （F 类含未定义名/未使用导入等运行时级 bug，compileall 抓不到；
+        # 历史教训：StateError 错用就是纯语法检查漏掉的 NameError）。
+        run: |
+          python3 -m compileall -q scripts
+          python3 -m pip install --quiet ruff
+          # 只对「已入库的脚本」做 F 类检查：临时探针/诊断脚本不入库也不设防
+          git ls-files 'scripts/*.py' | xargs -r python3 -m ruff check --select=F --output-format=concise
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -31,6 +41,12 @@ jobs:
 
       - name: Pub get
         run: flutter pub get
+
+      - name: Offline demo write smoke
+        # 零 API 费端到端回归：模板引擎连写三章 + 番茄双质检（NovelQualityChecker
+        # + FanqieGateChecker）必须产出非空正文并返回成功。结果会写入
+        # verify-logs/（gitignore），不污染工作区。
+        run: dart run tool/write_demo_novel.dart
 
       - name: Dart analyze
         run: dart analyze

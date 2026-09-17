@@ -29,7 +29,8 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
-  test: ^1.31.0
+  # 注：不引入 package:test —— flutter_test 已内建等价 API，
+  # 避免与 flutter_test 的 test_api 版本约束产生解析冲突。
 
 # 注意：本工程刻意不引入任何网络库（http / dio 等），
 # 从依赖层面保证「完全离线、零 API、零网络请求」。

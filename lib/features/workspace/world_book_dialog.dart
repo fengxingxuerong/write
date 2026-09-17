@@ -410,7 +410,7 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
                 label: const Text('复制全部'),
                 onPressed: () async {
                   await Clipboard.setData(ClipboardData(text: ctx));
-                  if (context.mounted) {
+                  if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('已复制到剪贴板')),
                     );

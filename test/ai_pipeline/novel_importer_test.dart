@@ -30,7 +30,7 @@ void main() {
         protagonist: '陆沉',
         useEditor: false,
         roles: <AiRole, AiRoleConfig>{
-          AiRole.writer: const AiRoleConfig(
+          AiRole.writer: AiRoleConfig(
             role: AiRole.writer,
             llm: LlmConfig(
               provider: LlmProvider.openaiCompatible,

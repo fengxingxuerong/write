@@ -12,6 +12,18 @@ linter:
     non_constant_identifier_names: true
     slash_for_doc_comments: true
     unnecessary_this: false
+    # —— 以下为新增的现代化/防退化规则 ——
+    # 子类构造器用 super 参数（淘汰 super.key 手动转发）
+    use_super_parameters: true
+    # 不必要的 late 修饰（延迟初始化应在确有 loading 语义时才用）
+    unnecessary_late: true
+    # child/children 参数排到最后（Flutter 可读性惯例）
+    sort_child_properties_last: true
+    # 私有字段能 final 就 final（防意外重绑）
+    prefer_final_fields: true
+    # 局部布尔插值、字符串拼接等常见噪音
+    unnecessary_string_interpolations: true
+    unnecessary_string_escapes: true
 
 analyzer:
   errors:

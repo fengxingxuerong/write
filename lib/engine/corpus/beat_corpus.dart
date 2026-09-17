@@ -114,17 +114,18 @@ class BeatCorpus {
 
   /// 情节阶段 → 功能组及权重映射。
   ///
-  /// - 起：开篇为主，辅以五感与推进；
-  /// - 承：推进为主，穿插对话与独白；
-  /// - 转：张力 / 高潮 / 转折按 4:3:3 加权；
+  /// - 起：开篇为主，辅以五感与推进，开局即入对白（首屏有对白是闸门硬指标）；
+  /// - 承：推进与对话并重（闸门对白占比下限 18%，对话是完读率抓手）；
+  /// - 转：张力 / 高潮 / 转折为主，对话交锋穿插；
   /// - 合：收束为主，辅以独白。
   static Map<String, int> groupsForStage(String stage) {
     switch (stage) {
       case '起':
         return <String, int>{
-          _openersRef: 5,
+          _openersRef: 4,
           _sensoryRef: 2,
-          _developmentRef: 2,
+          _developmentRef: 3,
+          _dialoguePairsRef: 2,
           _innerThoughtsRef: 1,
         };
       case '转':
@@ -132,7 +133,7 @@ class BeatCorpus {
           _tensionRef: 4,
           _climaxRef: 3,
           _twistRef: 3,
-          _dialoguePairsRef: 1,
+          _dialoguePairsRef: 4,
         };
       case '合':
         return <String, int>{
@@ -143,8 +144,8 @@ class BeatCorpus {
       case '承':
       default:
         return <String, int>{
-          _developmentRef: 5,
-          _dialoguePairsRef: 2,
+          _developmentRef: 4,
+          _dialoguePairsRef: 5,
           _innerThoughtsRef: 2,
           _tensionRef: 1,
           _sensoryRef: 1,
@@ -257,6 +258,14 @@ const List<String> _kDevelopment = <String>[
   '时间一点点过去，{place}的气氛却越来越不对。',
   '{name}试着催动体内那股暖流，这一次竟没有半分滞涩。',
   '线索断在这里，{name}却从{object}的夹层里摸出了新东西。',
+  '{name}把{object}翻来覆去看了三遍，终于看出了门道。',
+  '路过的仆役多看了{ally}一眼，又飞快地低下头去。',
+  '{name}借着整理袖口的动作，把角落里的动静尽收眼底。',
+  '验过腰牌，门房的脸色变了变，还是把人放了进去。',
+  '{name}与{rival}擦肩而过，谁都没有先开口。',
+  '消息比人跑得快，{name}还没进门，{place}里已经传开了。',
+  '{ally}塞给{name}一张字条，转身就混进了人群。',
+  '{name}按着{rival}留下的记号，一路摸到了后院墙根。',
 ];
 
 const List<String> _kTension = <String>[
@@ -272,6 +281,12 @@ const List<String> _kTension = <String>[
   '远处传来一声闷响，紧接着是第二声、第三声，越来越近。',
   '所有人都看得出，这一击之下必有一方倒下。',
   '灯花爆了一声，{place}里的火光骤然暗了一瞬。',
+  '烛火无风自动，{name}握着{object}的手紧了紧。',
+  '{rival}身后的人影一字排开，堵死了最后一条路。',
+  '空气里有血的味道，很淡，但{name}不会闻错。',
+  '第二遍钟声响到一半，戛然而止。',
+  '{name}听见自己的名字从{rival}口中吐出来，像含着一把碎冰。',
+  '鼓声停了，全场只剩{rival}的脚步声，一步一步踩在人心上。',
 ];
 
 const List<String> _kClimax = <String>[
@@ -287,6 +302,10 @@ const List<String> _kClimax = <String>[
   '{name}咬碎了牙关，硬扛着这雷霆一击没有后退半步。',
   '满场哗然之中，唯有{name}的呼吸依旧平稳如初。',
   '胜负在此一举，{name}把所有底牌都摊在了这一击里。',
+  '{name}借力旋身，反手一记肘击正中{rival}胸口。',
+  '地面裂开蛛网般的纹路，两道身影在尘埃里交错而过。',
+  '{name}把最后一丝力气都灌进了这一击。',
+  '{rival}的兵刃断了，断口处还冒着白气。',
 ];
 
 const List<String> _kTwist = <String>[
@@ -302,6 +321,10 @@ const List<String> _kTwist = <String>[
   '{rival}临走前丢下的那句话，此刻才显出真正的分量。',
   '账目对不上，缺的那一笔恰好指向最不可能的人。',
   '{name}反复确认了三遍，结论依然荒谬得可怕。',
+  '{ally}递来的水囊里，飘着一缕几乎看不见的丝线。',
+  '{rival}的鞋底沾着{place}特有的红泥——他根本不该来过这里。',
+  '那份名单上，赫然写着{ally}的名字。',
+  '{name}忽然想起，{object}的钥匙从来只有一把。',
 ];
 
 const List<String> _kResolution = <String>[
@@ -320,7 +343,7 @@ const List<String> _kResolution = <String>[
 ];
 
 const List<String> _kHooks = <String>[
-  '就在这时，门外传来一阵极轻、却绝对刻意放出来的脚步声。',
+  '门外传来一阵极轻、却绝对刻意放出来的脚步声。',
   '{rival}留下的最后一句话在耳边反复回响——「三日之后，老地方。」',
   '{object}忽然毫无征兆地震了一下。',
   '深夜，{faction}方向的天空亮起了一道不祥的红光。',
@@ -356,12 +379,24 @@ const List<String> _kDialoguePairs = <String>[
   '「{dialogue}。」{name}答得干脆，不给对方留半分余地。',
   '{rival}眯起眼：「{dialogue}——有意思，可惜晚了。」',
   '「{dialogue}。」这句话很轻，落在耳中却重若千钧。',
-  '{name}沉默片刻，才缓缓开口：「{dialogue}。」',
+  '{name}沉默片刻，才接住话头：「{dialogue}。」',
   '「{dialogue}！」{rival}拍案而起，满座皆惊。',
   '{ally}苦笑着摇头：「{dialogue}。你自己掂量吧。」',
   '「{dialogue}。」{name}说完转身就走，任凭身后议论纷纷。',
   '「{dialogue}。」对方话里有话，{name}听懂了，面上却不露分毫。',
   '{rival}盯着{name}看了许久，忽而一笑：「{dialogue}。」',
+  '「{dialogue}。」{name}顿了顿，又补了一句，「别让我说第二遍。」',
+  '{rival}抱着臂：「{dialogue}？」见{name}不接话，他又笑，「装，接着装。」',
+  '「{dialogue}。」{ally}把声音压到只有两个人听得见，「信我一次。」',
+  '{name}摇头：「{dialogue}。这话，你留着骗别人吧。」',
+  '「{dialogue}？」{rival}像是听见了天大的笑话，「就凭你们？」',
+  '{ally}急了：「{dialogue}！你要是有个三长两短，我怎么交代？」',
+  '「{dialogue}。」{name}把{object}推了过去，「东西你收好。」',
+  '{rival}凑近半步，一字一顿：「{dialogue}。你，听明白了？」',
+  '「{dialogue}。」{ally}说完便退到一边，把路让了出来。',
+  '{name}笑了：「{dialogue}。可惜，你猜错了。」',
+  '「{dialogue}？」{rival}的手按上了刀柄，「再说一遍试试。」',
+  '「{dialogue}。」{name}淡淡道，「我数三声。」',
 ];
 
 const List<String> _kInnerThoughts = <String>[

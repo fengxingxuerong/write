@@ -163,7 +163,72 @@ void main() {
       expect(r.pass, isFalse);
       expect(r.fixPrompt, contains('只针对这些点改写'));
       expect(r.fixPrompt, contains('对白'));
-      expect(r.fixPrompt, contains('只输出改写后的完整正文'));
+      expect(r.fixPrompt, contains('只输出改写后的正文'));
+    });
+  });
+
+  group('补丁卫生与题材漂移（2026-09 事故回归）', () {
+    test('元话语/操作说明残留被判重写，且成为阻断项', () {
+      final FanqieGateReport r = plain.check(
+          '${buildPassableChapter(blocks: 6)}\n\n我拿到的指令是补写钩子，不是扩写。');
+      expect(
+          r.issues.any((FanqieGateIssue e) =>
+              e.type == '泄漏' && e.message.contains('元话语')),
+          isTrue);
+      expect(r.blockers, contains('提示词/元话语残留'));
+      expect(r.pass, isFalse);
+    });
+
+    test('玄幻正文出现现代标志词 → 题材漂移（重写级 + 阻断项）', () {
+      const FanqieGateChecker c = FanqieGateChecker(genre: '玄幻');
+      final String body = '手机屏幕亮了。不是短信。是一个陌生号码的来电，路灯下有人影一闪。' * 20;
+      final FanqieGateReport r = c.check(body);
+      expect(r.issues.any((FanqieGateIssue e) => e.message.contains('题材漂移')),
+          isTrue);
+      expect(r.blockers, contains('题材漂移'));
+      expect(r.pass, isFalse);
+    });
+
+    test('都市题材不做现代词漂移判定', () {
+      expect(FanqieGateChecker.genreDrift('他掏出手机打车，路过便利店。', '都市').level,
+          isEmpty);
+      expect(FanqieGateChecker.genreDrift('', '玄幻').level, isEmpty);
+    });
+
+    test('章内大段重复会被抓（复制粘贴级事故）', () {
+      final String block =
+          '脚步声从巷子另一头传来，一下，又一下，像有人拿钝器敲着地面，震得墙皮簌簌往下掉。' * 4;
+      final FanqieGateReport r = plain.check('$block\n\n中间正常推进的一句。\n\n$block');
+      expect(r.issues.any((FanqieGateIssue e) => e.message.contains('章内大段重复')),
+          isTrue);
+      expect(r.blockers, contains('章内大段重复'));
+    });
+
+    test('patchReject：拦元话语 / 题材漂移 / 与正文尾部重复，放行正常补写', () {
+      expect(FanqieGateChecker.patchReject('我拿到的指令是补写钩子。', genre: '玄幻'),
+          isNotNull);
+      expect(
+          FanqieGateChecker.patchReject(
+              '手机屏幕亮了。不是短信。是一个陌生号码的来电，他接了起来。',
+              genre: '玄幻'),
+          isNotNull);
+      const String dupTail =
+          '巷子深处传来一声极轻的哨响，三长一短，像有人在数着他的脚步，一步一步逼近。';
+      expect(
+          FanqieGateChecker.patchReject('$dupTail他没停。',
+              baseText: '$dupTail风又灌进来。'),
+          isNotNull);
+      expect(
+          FanqieGateChecker.patchReject(
+              '季渊回头。血煞盟的人影在人群中一闪而逝——他还没看清那是什么。',
+              genre: '玄幻'),
+          isNull);
+    });
+
+    test('字数不足 1500 是阻断项（单章 671 字事故）', () {
+      final FanqieGateReport r = plain.check('季渊把玉简推回原位。' * 40);
+      expect(r.blockers.any((String b) => b.contains('单章仅')), isTrue);
+      expect(r.pass, isFalse);
     });
   });
 

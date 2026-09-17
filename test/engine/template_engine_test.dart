@@ -141,5 +141,46 @@ void main() {
       expect(result.actualWords, greaterThanOrEqualTo(target));
       expect(result.actualWords, lessThanOrEqualTo(20000));
     });
+
+    test('多章连写：不同 continuation 产生不同正文（换皮回归护栏）', () async {
+      // _deriveSeed 必须把 continuation 混入种子：否则多章连写的每一章
+      // 拿同一随机序列，生成节奏/句式/人物出场完全同构的「换皮章节」。
+      const engine = TemplateEngine();
+      final r1 = await engine.generate(
+        _buildConfig(targetWords: 500)
+            .copyWith(continuation: '上一章结尾：他握紧了手中的剑。'),
+        _buildContext(),
+      );
+      final r2 = await engine.generate(
+        _buildConfig(targetWords: 500)
+            .copyWith(continuation: '上一章结尾：她转身走进了雨里。'),
+        _buildContext(),
+      );
+      expect(r1.content, isNot(equals(r2.content)));
+    });
+
+    test('骨架提示词不得泄漏进正文（番茄闸门口径）', () async {
+      // 节拍描述词是抽象规划语言，原样落进正文会被闸门判「泄漏」。
+      // 回归护栏：一旦 _writeStageParagraph 重新把 hint 织进正文即失败。
+      const engine = TemplateEngine();
+      final result = await engine.generate(
+        _buildConfig(targetWords: 800),
+        _buildContext(),
+      );
+      const List<String> skeletonHints = <String>[
+        '一次奇遇让主角获得机缘',
+        '遭遇强敌或瓶颈',
+        '心境蜕变',
+        '本场景任务',
+        '必须完成的节拍',
+      ];
+      for (final String hint in skeletonHints) {
+        expect(
+          result.content.contains(hint),
+          isFalse,
+          reason: '骨架提示词「$hint」泄漏进正文',
+        );
+      }
+    });
   });
 }

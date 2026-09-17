@@ -177,11 +177,9 @@ class LlmEngine implements GenerationEngine {
 
   /// 获取或初始化共享 HttpClient；连接池化减少 TCP/TLS 握手。
   HttpClient _obtainClient() {
-    if (_sharedClient == null) {
-      _sharedClient = (clientFactory ?? HttpClient.new)()
+    _sharedClient ??= (clientFactory ?? HttpClient.new)()
         ..connectionTimeout = const Duration(seconds: 8)
         ..idleTimeout = const Duration(seconds: 30);
-    }
     return _sharedClient!;
   }
 

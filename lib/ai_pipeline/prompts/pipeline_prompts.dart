@@ -301,7 +301,14 @@ $head''';
 ///
 /// 由审校官（verifier）执行，输出结构化 JSON，低于 60 分的章节
 /// 在流水线中标记告警（只记录不阻塞）。
-String qualityReviewPrompt(String text) {
+///
+/// [qaEvidence]：本地质检证据（钩子命中/爽点密度等，与 Python 端
+/// quality_review_prompt 的 qa_evidence 参数同口径）。注入后 LLM 评审
+/// 带证据打分，避免与本地规则引擎互相矛盾（「100 分无钩子」类分裂）。
+String qualityReviewPrompt(String text, {String qaEvidence = ''}) {
+  final String ev = qaEvidence.isEmpty
+      ? ''
+      : '\n【本地质检证据（规则引擎实测，评分时必须与之对照，不得与证据矛盾）】\n$qaEvidence\n';
   return '''
 请以网文编辑的眼光为下面的章节打分（每项 0~100）：
 1. opening：开篇是否快速进入事件、有代入感（黄金三章标准）
@@ -309,7 +316,7 @@ String qualityReviewPrompt(String text) {
 3. hook：章末钩子是否让人想看下一章（悬念/变故/威胁）
 4. motivation：人物动机是否清晰、行为是否合理
 5. rhythm：节奏是否张弛有度、无注水、无流水账
-
+$ev
 严格输出 JSON（不要 Markdown 包裹）：
 {"scores":{"opening":85,"thrill":60,"hook":90,"motivation":75,"rhythm":80},"overall":78,"comment":"一句话点评（30字内）"}
 

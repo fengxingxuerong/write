@@ -138,7 +138,7 @@ class MultiPassChapterEngine {
     // 既不看 Retry-After，也不能注入 sleep 做测试。
     final RetryPolicy policy = RetryPolicy(
       maxAttempts: _maxSceneRetries + 1,
-      baseBackoff: Duration(milliseconds: _baseBackoffMs),
+      baseBackoff: const Duration(milliseconds: _baseBackoffMs),
       sleep: retrySleep ?? _delayed,
     );
     try {

@@ -45,7 +45,7 @@ class FanqieGateIssue {
   final FanqieGateAction action;
 
   @override
-  String toString() => '[$action] $type：$message';
+  String toString() => '[${action.label}] $type：$message';
 }
 
 /// 红线命中。
@@ -71,6 +71,7 @@ class FanqieGateReport {
     this.fillerCounted = 0,
     required this.worldHit,
     required this.worldTotal,
+    this.words = 0,
   });
 
   /// 0~100 分。
@@ -90,8 +91,36 @@ class FanqieGateReport {
   final int worldHit;
   final int worldTotal;
 
-  /// 是否达线（无否决红线且分数 >= 80）。
-  bool get pass => !hasVeto && score >= 80;
+  /// 正文汉字数（0 = 未知；阻断项判定需要它）。
+  final int words;
+
+  /// 阻断级硬伤（不修完不给「可投」）。与 Python 侧 `blocking_reasons` 同口径。
+  ///
+  /// 与「扣分项」分开的原因：分数只回答「这一章写得好不好」，阻断项回答
+  /// 「这本书现在能不能投」。实测事故：92 分的章里混着补写模型的操作说明
+  /// （元话语残留），旧的 `pass` 只看分数 → 判「可投」且 fixPrompt 返回空串，
+  /// 那一章再也没被修，脏文本一路留到成书。
+  List<String> get blockers {
+    final List<String> out = <String>[];
+    for (final FanqieGateIssue e in issues) {
+      if (e.type == '泄漏') {
+        out.add('提示词/元话语残留');
+      } else if (e.type == '重复' && e.message.contains('章内大段重复')) {
+        out.add('章内大段重复');
+      } else if (e.type == '一致性' && e.message.contains('题材漂移')) {
+        out.add('题材漂移');
+      } else if (e.type == '一致性' && e.message.contains('没接住主角')) {
+        out.add('主角缺席');
+      } else if (e.type == '一致性' && e.message.contains('没接住设定')) {
+        out.add('世界观未落地');
+      }
+    }
+    if (words > 0 && words < 1500) out.add('单章仅 $words 字');
+    return out;
+  }
+
+  /// 是否达线（无否决红线、无阻断级硬伤且分数 >= 80）。
+  bool get pass => !hasVeto && blockers.isEmpty && score >= 80;
 
   /// 是否存在一票否决级红线。
   bool get hasVeto => redlines.any((FanqieRedlineHit h) => h.veto);
@@ -109,10 +138,11 @@ class FanqieGateReport {
       .toList();
 
   /// 把不达标项转成「只改问题处」的定点修指令（与 Python 侧 fix_prompt 同语义）。
-  /// 达线时返回空串——调用方据此跳过一轮 LLM 调用。
+  /// 达线且无阻断项时返回空串——调用方据此跳过一轮 LLM 调用。
+  /// 有阻断项时即使分数达标也要出单（阻断项不修完不算过关）。
   String get fixPrompt {
     final List<FanqieGateIssue> todo = blockingIssues;
-    if (todo.isEmpty || pass) return '';
+    if (todo.isEmpty || (pass && blockers.isEmpty)) return '';
     final StringBuffer b = StringBuffer()
       ..writeln('这一章要过番茄初审，评审器给出以下硬伤。请**只针对这些点改写**，'
           '保持人物名、事件顺序、已埋伏笔完全不变，不要重写无关段落：');
@@ -127,7 +157,8 @@ class FanqieGateReport {
       ..writeln('【改写要求】首屏 300 字必须有主角在场、正在发生的冲突、至少一句对白；'
           '主角本章至少做一次有代价的主动选择；对话占比提到 25%~45%；'
           '删掉所有「删了不影响剧情」的段落；句子尽量 25 字内，段落不超过 3 行。')
-      ..writeln('只输出改写后的完整正文：');
+      ..writeln('**题材与世界观必须与本作一致**：不得出现现代词汇、不得更换主角、不得引入新故事线。')
+      ..writeln('**只输出改写后的正文**：不要任何解释、说明、前言、字数报告或操作描述（写进正文即判废）。');
     return b.toString();
   }
 }
@@ -205,6 +236,41 @@ class FanqieGateChecker {
     '遭遇强敌或瓶颈', '心境蜕变', '就在众人以为风平浪静时', 'targetWords',
     '【场景', '【跨章状态',
   ];
+
+  /// 元话语/指令残留（模型把「补写操作说明」当正文吐出来 = 直接判废）。
+  ///
+  /// 实测事故：钩子补写返回「我拿到的指令是补写钩子，不是扩写…」被原样拼进第 1 章末尾，
+  /// 旧词表只覆盖骨架词，抓不到这类元话语。选词原则：只收叙事里不可能出现的短语。
+  static const List<String> _metaTalk = <String>[
+    '我拿到的指令', '拿到的指令是', '根据你的指令', '按你的指令', '按照你的要求', '按你的要求',
+    '作为AI', '作为人工智能', '作为一个AI', '作为语言模型', '我无法完成', '我无法直接',
+    '抱歉，我', '很抱歉，我', '你贴的那段', '你提供的文本', '以下是我的改写', '以上是补写',
+    '字数要求', '扩写到', '如需继续', '如果你需要', '希望这符合', '无法满足这个要求',
+  ];
+
+  /// 题材漂移：给非现代题材用的现代生活标志词。
+  ///
+  /// 实测事故：玄幻书第 3 章整章变成现代都市悬疑（路灯/手机/牛皮纸袋/面包车），
+  /// 逐章本地评审仍给 84 分，直到终审官通读才发现。玄幻里也可能合法的词（钥匙/医院/巷口）
+  /// 一律不收，避免误伤。
+  static const List<String> _modernMarkers = <String>[
+    '手机', '电脑', '网络', '微信', '支付宝', '电梯', '汽车', '面包车', '出租车', '公交车',
+    '马路', '红绿灯', '路灯', '屏幕', '短信', '沙发', '咖啡', '监控', '摄像头', '银行卡',
+    '外卖', '快递', '物业', '办公室', '上班', '加班', '房租', '塑料袋', '牛皮纸袋', '客服',
+    '二维码', '充电', '导航', '直播', '朋友圈', '地铁', '高铁', '身份证',
+  ];
+
+  /// 需要锁题材的非现代题材（都市/校园/悬疑等题材不做现代词漂移判定）。
+  static const List<String> _ancientGenres = <String>[
+    '玄幻', '仙侠', '武侠', '修真', '历史', '古代', '宫斗', '权谋', '奇幻', '东方', '洪荒',
+    '仙', '古言',
+  ];
+
+  /// 章内重复块最短字数（与 Python 侧 INTRA_REPEAT_MIN_BLOCK 同口径）。
+  static const int intraRepeatMinBlock = 120;
+
+  /// 章内重复指纹长度（与 Python 侧 INTRA_REPEAT_GRAM 同口径）。
+  static const int _intraGram = 12;
 
   /// 番茄专有红线类别（其余类别走 [SensitiveWordsService] 内置词库）。
   static const Map<String, List<String>> _extraRedline = <String, List<String>>{
@@ -362,6 +428,30 @@ class FanqieGateChecker {
           '提示词/骨架残留漏进正文：${leak.take(4).join('、')}',
           FanqieGateAction.rewrite));
     }
+    // 元话语/指令残留：补写与定点修把「我在干什么」写进正文（实测被拼进成书）
+    final List<String> meta = _metaTalk.where(text.contains).toList();
+    if (meta.isNotEmpty) {
+      issues.add(FanqieGateIssue('泄漏',
+          '模型操作说明/元话语混进正文：${meta.take(3).join('、')}'
+          '（补写或定点修的说明文字被当成正文采纳）',
+          FanqieGateAction.rewrite));
+    }
+    // 题材漂移：玄幻书写成都市悬疑（终审官抓到的整章跑题，旧规则看不见）
+    final ({String level, List<String> hits, int count}) drift = genreDrift(text, genre);
+    if (drift.level.isNotEmpty) {
+      issues.add(FanqieGateIssue('一致性',
+          '题材漂移：$genre 题材出现现代标志词 ${drift.hits.take(4).join('、')}'
+          '（共 ${drift.count} 处）——补写/改写把正文带出了本书世界观',
+          drift.level == '重写' ? FanqieGateAction.rewrite : FanqieGateAction.revise));
+    }
+    // 章内大段重复：复制粘贴级事故（实测第 3 章开头 800 字整块两遍）
+    final ({int blocks, int words, String sample}) inrep = intraRepeat(text);
+    if (inrep.blocks > 0) {
+      issues.add(FanqieGateIssue('重复',
+          '章内大段重复：${inrep.words} 字整块出现两次（如「${inrep.sample}…」），'
+          '属复制粘贴级事故',
+          FanqieGateAction.rewrite));
+    }
 
     // ---- 一致性与主角性 ----
     for (final String msg in _nameDrift(text)) {
@@ -409,6 +499,7 @@ class FanqieGateChecker {
       fillerCounted: filler.counted,
       worldHit: worldTerms.where((String t) => _termHit(text, t)).length,
       worldTotal: worldTerms.length,
+      words: words,
     );
   }
 
@@ -496,6 +587,159 @@ class FanqieGateChecker {
 
   /// 兼容旧签名：只取水段率。
   static double fillerRatioOf(String text) => fillerStats(text).ratio;
+
+  /// 章内大段重复：同章 ≥120 字的整块文字出现两次（复制粘贴级事故）。
+  ///
+  /// 与 Python 侧 `fanqie_review.intra_repeat` 同口径：
+  /// ① 扁平文本滑动指纹（完全相同的长块）；② 段落级近似比对（标点/个别用词微调）。
+  /// `blocks` > 0 即判「重写」级事故（实测：第 3 章开头 800 字整块出现两遍）。
+  static ({int blocks, int words, String sample}) intraRepeat(String text) {
+    final String flat = text.replaceAll(RegExp(r'\s+'), '');
+    final List<List<int>> spans =
+        flat.length >= intraRepeatMinBlock * 2 ? _dupSpans(flat) : <List<int>>[];
+    if (spans.isNotEmpty) {
+      int words = 0;
+      for (final List<int> s in spans) {
+        words += s[1] - s[0];
+      }
+      final int head = spans.first[0];
+      final int end = head + 24 > flat.length ? flat.length : head + 24;
+      return (blocks: spans.length, words: words, sample: flat.substring(head, end));
+    }
+    // 近似重复通道：段落级二元组相似度 ≥0.85（标点/个别用词微调也算）
+    final List<String> longParas = _paragraphs(text)
+        .where((String p) => _hanCount(p) >= intraRepeatMinBlock)
+        .toList();
+    for (int i = 1; i < longParas.length; i++) {
+      for (int j = 0; j < i; j++) {
+        if (_bigramJaccard(longParas[j], longParas[i]) >= 0.85) {
+          final String p = longParas[i];
+          return (
+            blocks: 1,
+            words: _hanCount(p),
+            sample: p.length > 24 ? p.substring(0, 24) : p,
+          );
+        }
+      }
+    }
+    return (blocks: 0, words: 0, sample: '');
+  }
+
+  /// 滑动指纹找长重复块：返回 [起点, 终点] 列表（第二次出现的区间）。
+  static List<List<int>> _dupSpans(String t) {
+    final Map<String, int> seen = <String, int>{};
+    final List<List<int>> spans = <List<int>>[];
+    for (int i = 0; i + _intraGram <= t.length; i += 3) {
+      final String g = t.substring(i, i + _intraGram);
+      final int? first = seen[g];
+      if (first == null) {
+        seen[g] = i;
+        continue;
+      }
+      int k = 0;
+      while (first + k < t.length &&
+          i + k < t.length &&
+          t[first + k] == t[i + k]) {
+        k++;
+      }
+      if (k >= intraRepeatMinBlock) spans.add(<int>[i, i + k]);
+    }
+    spans.sort((List<int> a, List<int> b) => a[0].compareTo(b[0]));
+    final List<List<int>> merged = <List<int>>[];
+    for (final List<int> s in spans) {
+      if (merged.isNotEmpty && s[0] <= merged.last[1]) {
+        if (s[1] > merged.last[1]) merged.last[1] = s[1];
+      } else {
+        merged.add(<int>[s[0], s[1]]);
+      }
+    }
+    return merged;
+  }
+
+  /// 题材漂移：非现代题材里出现现代生活标志词。
+  ///
+  /// `level`：'' 不报 / '修改' 个别穿帮 / '重写' 整章跑题（≥3 个不同标志词）。
+  /// 都市/校园/悬疑等现代题材不做判定（它们本来就该有这些词）。
+  static ({String level, List<String> hits, int count}) genreDrift(
+      String text, String genre) {
+    final String g = genre.trim();
+    final bool lock =
+        g.isNotEmpty && _ancientGenres.any((String a) => g.contains(a));
+    if (!lock) return (level: '', hits: <String>[], count: 0);
+    final List<String> hits = _modernMarkers.where(text.contains).toList();
+    int count = 0;
+    for (final String w in hits) {
+      count += _countOccurrences(text, w);
+    }
+    if (hits.length >= 3) return (level: '重写', hits: hits, count: count);
+    if (hits.isNotEmpty) return (level: '修改', hits: hits, count: count);
+    return (level: '', hits: <String>[], count: 0);
+  }
+
+  /// 补丁卫生（与 Python 侧 `patch_gate` 同口径）：补写/扩写/定点修的产出
+  /// 在拼回正文前过这道闸。返回 null = 通过；否则返回拒绝原因。
+  ///
+  /// 拦三类事故：① 指令/元话语残留；② 题材漂移；③ 与正文尾部重复。
+  static String? patchReject(
+    String patch, {
+    String baseText = '',
+    String genre = '',
+    int maxWords = 260,
+  }) {
+    final String p = patch.trim();
+    if (p.isEmpty) return '空产出';
+    if (_hanCount(p) > maxWords) return '超长（${_hanCount(p)} 字 > $maxWords）';
+    final List<String> leak = <String>[
+      ..._leak.where(p.contains),
+      ..._metaTalk.where(p.contains),
+    ];
+    if (leak.isNotEmpty) return '指令/元话语残留「${leak.first}」';
+    final ({String level, List<String> hits, int count}) gd = genreDrift(p, genre);
+    if (gd.level.isNotEmpty) return '题材漂移：${gd.hits.take(3).join('、')}';
+    if (baseText.trim().isNotEmpty) {
+      final String flatP = p.replaceAll(RegExp(r'\s+'), '');
+      final String base = baseText.replaceAll(RegExp(r'\s+'), '');
+      final String tail = base.length > 400 ? base.substring(base.length - 400) : base;
+      final int top = flatP.length < 80 ? flatP.length : 80;
+      for (int k = top; k > 19; k -= 5) {
+        if (k <= flatP.length && tail.contains(flatP.substring(0, k))) {
+          return '与正文尾部重复 $k 字';
+        }
+      }
+    }
+    return null;
+  }
+
+  /// 两段文字的汉字二元组 Jaccard 相似度（段落级近似重复判定用）。
+  static double _bigramJaccard(String a, String b) {
+    Set<String> grams(String s) {
+      final String t = s.replaceAll(RegExp(r'\s+'), '');
+      final Set<String> set = <String>{};
+      for (int i = 0; i + 1 < t.length; i++) {
+        set.add(t.substring(i, i + 2));
+      }
+      return set;
+    }
+
+    final Set<String> ga = grams(a);
+    final Set<String> gb = grams(b);
+    if (ga.isEmpty || gb.isEmpty) return 0.0;
+    return ga.intersection(gb).length / ga.union(gb).length;
+  }
+
+  /// 子串出现次数。
+  static int _countOccurrences(String text, String needle) {
+    if (needle.isEmpty) return 0;
+    int count = 0;
+    int i = 0;
+    while (true) {
+      final int found = text.indexOf(needle, i);
+      if (found < 0) break;
+      count++;
+      i = found + needle.length;
+    }
+    return count;
+  }
 
   // ---------------- 内部工具 ----------------
 
@@ -585,11 +829,14 @@ class FanqieGateChecker {
       cnt[nm] = (cnt[nm] ?? 0) + 1;
     }
     final List<String> hot = cnt.entries
-        .where((MapEntry<String, int> e) => e.value >= 3)
+        .where((MapEntry<String, int> e) =>
+            e.value >= 3 && e.key != protagonist)
         .map((MapEntry<String, int> e) => '${e.key}×${e.value}')
         .toList();
     final List<String> out = <String>[];
-    if (hot.length > 1) {
+    // 「对手 + 盟友」两个常驻配角同章活跃是正常戏剧结构；
+    // 真正的视角漂移信号是 3 个以上高频配角各说各话。
+    if (hot.length > 2) {
       out.add('同章出现多个高频人名：${hot.take(4).join('、')}（视角/主角漂移）');
     }
     if (protagonist.isNotEmpty) {

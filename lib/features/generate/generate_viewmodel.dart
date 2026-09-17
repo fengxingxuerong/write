@@ -230,6 +230,8 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
 
     try {
       String? continuation = config.continuation;
+      // 上一章正文：番茄闸门的跨章 8-gram 重合检查（自我重复）需要它。
+      String prevChapterForGate = '';
       for (int i = 0; i < count; i++) {
         // 取消：跳出循环。
         if (_cancelToken.isCancelled) {
@@ -340,8 +342,11 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
               ctx.worldSettings.map((w) => '${w.title} ${w.content}'),
             ),
           );
-          final FanqieGateReport before =
-              gate.check(finalContent, chapterIndex: i + 1);
+          final FanqieGateReport before = gate.check(
+            finalContent,
+            prevContent: prevChapterForGate,
+            chapterIndex: i + 1,
+          );
           if (!before.pass && before.fixPrompt.isNotEmpty) {
             state = state.copyWith(
               stage: count > 1
@@ -359,8 +364,11 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
                   )
                   .timeout(kPolishWait, onTimeout: () => finalContent);
               if (fixed.trim().isNotEmpty && fixed != finalContent) {
-                final FanqieGateReport after =
-                    gate.check(fixed, chapterIndex: i + 1);
+                final FanqieGateReport after = gate.check(
+                  fixed,
+                  prevContent: prevChapterForGate,
+                  chapterIndex: i + 1,
+                );
                 if (after.score >= before.score) {
                   finalContent = fixed.trim();
                   state = state.copyWith(
@@ -402,6 +410,8 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
         final String tail = finalContent.trim();
         continuation =
             tail.length > 300 ? tail.characters.skip(tail.length - 300).toString() : tail;
+        // 为下一章的闸门跨章重合检查留存本章正文。
+        prevChapterForGate = finalContent;
 
         // 前情提要：为下一章积累剧情摘要。LLM 提炼优先（超时/失败回退
         // 本地启发式摘要），仅多章连写的中间章需要（末章无需为下一章准备）。

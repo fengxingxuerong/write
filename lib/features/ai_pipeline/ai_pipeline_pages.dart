@@ -403,7 +403,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
     );
     await ref.read(pipelineStorageProvider).saveRecentConfig(config);
     await ref.read(pipelineStorageProvider).saveTask(task);
-    if (!context.mounted) return;
+    if (!mounted) return;
     await context.push('/ai-pipeline/run/${task.id}');
   }
 
@@ -711,7 +711,7 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
     if (!await dir.exists()) await dir.create(recursive: true);
     final File file = File('${dir.path}${Platform.pathSeparator}${task.id}.txt');
     await file.writeAsString(buf.toString(), flush: true);
-    if (!context.mounted) return;
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('已导出：${file.path}')),
     );

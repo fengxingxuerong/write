@@ -141,7 +141,7 @@ def planning_prompt_idea(total_words=200000, prev_summary="", genre="玄幻", us
 """
     if used_names:
         s += f"- 跨书查重：以下主角名已被其他书籍使用，本次【绝对禁止】再使用（包括同音字、近形字变体）：「{'/'.join(used_names)}」。必须另起一个全新的冷门名。\n"
-    s += f"""要求输出以下 JSON（不要 Markdown 包裹）：
+    s += f"""要求输出以下 JSON（不要 Markdown 包裹）。重要：所有字符串值内禁止出现换行符（blurb 的"三行式"用句号分隔，不要真的换行）：
 {{
   "title": "小说名（6~12 字，含题材关键词与爽点承诺）",
   "title_candidates": ["书名1", "书名2", "书名3"],
@@ -312,7 +312,6 @@ def call_llm(base_url, model, system, user, api_key, max_tokens, temperature=0.8
                         continue
                 return "".join(chunks)
         except urllib.error.HTTPError as e:
-            last_err = e
             body_text = ""
             try:
                 body_text = e.read().decode("utf-8", errors="replace")[:300]
@@ -339,13 +338,12 @@ def call_llm(base_url, model, system, user, api_key, max_tokens, temperature=0.8
             print(f"    [HTTP {e.code}] {body_text}")
             return ""
         except Exception as e:
-            last_err = e
             wait = min(120, (3 ** attempt) * 5 + random.randint(1, 10))
             print(f"    [retry {attempt + 1}/{retries}] {e} (等待 {wait}s)")
             if attempt < retries:
                 time.sleep(wait)
                 continue
-    print(f"    [FAILED] ")
+    print("    [FAILED] ")
     return ""
 
 
@@ -426,14 +424,17 @@ def parse_json_from_llm(text, repair=True):
         if not repair:
             print(f"    [JSON parse error] {e}")
             return None
-        # 尝试修复
+        # 尝试修复（repair 可能引入新的裸控制字符，再做一次 sanitize）
         try:
             repaired = repair_json(t_clean)
+            repaired = _sanitize_ctrl(repaired)
             result = json.loads(repaired)
-            print(f"    [JSON repaired]")
+            print("    [JSON repaired]")
             return result
         except Exception as e2:
             print(f"    [JSON parse error] {e} (repair failed: {e2})")
+            visible_nl = '\\n'  # 换行显示为可见标记（f-string 表达式内不能含反斜杠）
+            print(f"    [JSON 原文前300]: {t_clean[:300].replace(chr(10), visible_nl)}")
             return None
 
 
@@ -629,6 +630,52 @@ AI_ADVERBS = ['微微', '轻轻', '淡淡', '深深', '缓缓', '悄悄', '默�
 SENTENCE_CONNECTORS = ['然而', '但是', '因此', '与此同时', '于是', '随即',
                        '紧接着', '然后', '不过', '可是']
 
+# —— 句式层 AI 指纹（2026-09-12 补：词表层/统计层抓不到的三类句式模式）——
+# 对齐 FANQIE_SYSTEM_PROMPT 第 21 条（「像……似的」每千字不超过 2 次）：
+# 此前约束已写进 prompt 但质检抓不到违规（有约束无检测），写手超密比喻无法被发现。
+# 比喻：只抓明喻强结构（像X一样/似的/般、跟X似的）+ 比喻独词（仿佛/宛如等）；
+# 「他像他爹」这类判断句不带结构标记，不计入（宁漏检勿误报）。
+METAPHOR_PAT = re.compile(
+    r"像[^。！？！?，\n]{1,18}(?:一样|似的|般)|跟[^。！？！?，\n]{1,18}(?:一样|似的)"
+    r"|如同[^。！？！?，\n]{1,14}(?:一样|一般|似的)|仿佛|宛如|好似|犹如|恰似")
+
+# 身体反应四件套（发烫/发凉/嗓子发干/汗毛立起一类）：真人写作只在关键节点用，
+# AI 会每个场景配一套，形成可统计的风格指纹。阈值 2.5/千字（回测校准后定）。
+BODY_REACTION_WORDS = ['发烫', '发凉', '发冷', '嗓子发干', '喉咙发干', '汗毛',
+                       '头皮发麻', '掌心出汗', '手心出汗', '脊背发凉', '寒意',
+                       '牙根发酸', '后槽牙', '呼吸一窒', '心跳漏拍', '胃里发紧',
+                       '指尖发麻', '指尖发凉', '太阳穴一跳']
+
+# 单句成段阈值：段落 ≤14 字视为单句段（喘气段），占比过高 = 机械节奏感
+SINGLE_PARA_MAX_CHARS = 14
+
+
+def _style_fingerprint_metrics(text):
+    """句式层 AI 指纹三项：比喻密度 / 单句成段占比 / 身体反应密度（返回值与超标判定分离）。"""
+    if not text:
+        return {'metaphor_density': 0.0, 'single_para_rate': 0.0, 'body_reaction_density': 0.0}
+    words = count_words(text)
+    # 1) 比喻密度（每千字）
+    metaphor_hits = len(METAPHOR_PAT.findall(text))
+    metaphor_density = round(metaphor_hits / words * 1000, 2) if words else 0.0
+    # 2) 单句成段占比（≤14 字短段 / 非空段落）
+    paras = [p.strip() for p in text.split("\n") if p.strip()]
+    single_para_rate = (round(sum(1 for p in paras if count_words(p) <= SINGLE_PARA_MAX_CHARS)
+                              / len(paras) * 100, 1)) if paras else 0.0
+    # 3) 身体反应密度（每千字）
+    body_hits = sum(text.count(w) for w in BODY_REACTION_WORDS)
+    body_reaction_density = round(body_hits / words * 1000, 2) if words else 0.0
+    return {'metaphor_density': metaphor_density, 'single_para_rate': single_para_rate,
+            'body_reaction_density': body_reaction_density}
+
+
+# 句式指纹超标线（2026-09-12 四本真实成书回测校准，见 docs/quality-enhancement-log.md 第十一节）：
+# - 比喻 2.0/千字：对齐 SYSTEM_PROMPT 第 21 条的承诺线（实测正常书 1.0-2.0，
+#   《铁幕孤刃》4.75 超线但人工确认为好书——该线定位是「标记风格特征供人工复核」，非否决线）
+# - 单句成段 30%：正常书 11-18%，仅《断脉逆命诀》31% 超标（第 5 章 44.7%，恰为终审官点名的追读断裂章）
+# - 身体反应 1.5/千字：正常书 0.5-1.2，仅断脉第 1 章（风格指纹最重章）1.53 超线（回测后从 2.5 收紧）
+STYLE_FP_LIMITS = {'metaphor_density': 2.0, 'single_para_rate': 30.0, 'body_reaction_density': 1.5}
+
 
 def _split_sentences(text):
     import re as _re
@@ -636,10 +683,14 @@ def _split_sentences(text):
 
 
 def deep_ai_metrics(text):
-    """AI 味深度指标：句长CV / 的字密度 / 叠词密度 / 句首连接词率 + level(0~4)。"""
+    """AI 味深度指标：句长CV / 的字密度 / 叠词密度 / 句首连接词率
+    + 句式指纹三项（比喻密度/单句成段占比/身体反应密度，2026-09-12 补）
+    + level(0~5)：原四项各超标 +1；句式指纹三项中 ≥2 项超标再 +1（合并计 1 项，口径变化最小）。"""
     if not text:
         return {'sentence_cv': 0.0, 'de_density': 0.0,
-                'adverb_density': 0.0, 'connector_rate': 0.0, 'level': 0}
+                'adverb_density': 0.0, 'connector_rate': 0.0,
+                'metaphor_density': 0.0, 'single_para_rate': 0.0, 'body_reaction_density': 0.0,
+                'level': 0}
     words = count_words(text)
 
     # 1) 句长变异系数
@@ -668,11 +719,18 @@ def deep_ai_metrics(text):
             conn_hits += 1
     connector_rate = round(conn_hits / len(sents), 2) if sents else 0.0
 
+    # 5) 句式指纹三项（≥2/3 超标 → 记 1 项超标，不逐项累加以免 level 失真）
+    fp = _style_fingerprint_metrics(text)
+    fp_over = sum(1 for k, lim in STYLE_FP_LIMITS.items() if fp[k] > lim)
+
     level = (1 if cv < 0.55 else 0) + (1 if de_density > 4.0 else 0) + \
-            (1 if adverb_density > 2.0 else 0) + (1 if connector_rate > 0.15 else 0)
-    return {'sentence_cv': cv, 'de_density': de_density,
-            'adverb_density': adverb_density, 'connector_rate': connector_rate,
-            'level': level}
+            (1 if adverb_density > 2.0 else 0) + (1 if connector_rate > 0.15 else 0) + \
+            (1 if fp_over >= 2 else 0)
+    out = {'sentence_cv': cv, 'de_density': de_density,
+           'adverb_density': adverb_density, 'connector_rate': connector_rate,
+           'level': level}
+    out.update(fp)
+    return out
 
 
 def has_ending_hook(text):
@@ -794,6 +852,7 @@ def export_txt(path, title, chapters):
 def main():
     p = argparse.ArgumentParser(description="墨匠长篇小说生成器")
     p.add_argument("--provider", default="openai")
+    p.add_argument("--genre", default="玄幻", help="题材（玄幻/都市/悬疑等，映射写作准则与爽点豁免）")
     p.add_argument("--base-url", required=True)
     p.add_argument("--model", required=True)
     p.add_argument("--api-key", default="")
@@ -838,7 +897,7 @@ def main():
         if len(chars) > 5:
             print(f"     ... 及更多 {len(chars) - 5} 章")
         append_state(args.output, "outline", outline)
-        print(f"[OK] 大纲已写入进度文件\n")
+        print("[OK] 大纲已写入进度文件\n")
         if args.dry_run:
             print("[DRY RUN] 结束")
             return
@@ -891,7 +950,7 @@ def main():
             if plan and plan.get("scenes"):
                 break
         if not plan or not plan.get("scenes"):
-            print(f"  [SKIP] 场景规划失败，跳过本章")
+            print("  [SKIP] 场景规划失败，跳过本章")
             continue
 
         scenes = plan["scenes"]
@@ -918,7 +977,7 @@ def main():
                 scene_texts.append(text)
                 prev_text = text
             if w < tw * 0.4 and len(text) > 50:
-                print(f"    [WARN] 字数偏少，尝试补充...")
+                print("    [WARN] 字数偏少，尝试补充...")
                 add = call_llm(base_url_raw, args.model, SYSTEM_PROMPT,
                                f"请续写 300 字，承接：\n{text[-100:]}\n\n只输出续写正文：",
                                api_key, 600, 0.8)
@@ -955,7 +1014,7 @@ def main():
     # ====== 第三步：质检汇总 ======
     print(f"\n{'=' * 60}")
     print("[质检] 运行一致性检查...")
-    report = quality_check(state["chapters"])
+    quality_check(state["chapters"])  # 副作用：填充各章 _world_conflicts 等质检字段
     print(f"{'=' * 60}")
     total_issues = 0
     for ch in state["chapters"]:
@@ -966,19 +1025,18 @@ def main():
         hook_flag = "🪝" if ch.get("_has_hook") else "✗无钩"
         open_flag = "⚡" if ch.get("_has_quick_opening", True) else "✗开场慢"
         thrill_flag = "💥" if ch.get("_thrill_per_k", 1) >= 0.5 else "✗爽点淡"
-        surge_flag = "✨" if ch.get("_surge_per_k", 1) >= 1.0 else ""
         deep_flag = "🤖" if ch.get("_ai_deep_level", 0) >= 3 else ""
         print(f"  {flag} 第 {ch['idx']} 章：{ch['_words']} 字｜AI囷痕 {ch['_ai_echo_pct']}%｜{hook_flag}｜{open_flag}｜{thrill_flag}({ch.get('_thrill_per_k', 0)}/千字)｜✨{ch.get('_surge_per_k', 0)}/千字｜{deep_flag}")
         if not ch.get("_has_hook"):
-            print(f"      → 章末疑似缺少钩子（结尾 200 字未见悬念信号）")
+            print("      → 章末疑似缺少钩子（结尾 200 字未见悬念信号）")
         if ch.get("idx", 99) <= 3 and not ch.get("_has_quick_opening"):
-            print(f"      → 开场 300 字未检测到变故/冲突信号（黄金三章要求快速进入事件）")
+            print("      → 开场 300 字未检测到变故/冲突信号（黄金三章要求快速进入事件）")
         if ch.get("_ai_deep_level", 0) >= 3:
-            print(f"      → AI 腔偏重（句长均匀/的字过多/叠词修饰/句首连接词 超标）")
+            print("      → AI 腔偏重（句长均匀/的字过多/叠词修饰/句首连接词 超标）")
         if ch.get("idx", 99) > 0 and ch.get("_thrill_per_k", 1) < 0.5 and ch.get("_surge_per_k", 1) < 1.0:
-            print(f"      → 爽点过淡（直白爽点 <0.5 且变强异动 <1.0/千字，建议安排打脸/升级/收获/揭露至少一处）")
+            print("      → 爽点过淡（直白爽点 <0.5 且变强异动 <1.0/千字，建议安排打脸/升级/收获/揭露至少一处）")
         elif ch.get("idx", 99) > 0 and ch.get("_thrill_per_k", 1) < 0.5:
-            print(f"      → 含蓄变强流（外显爽点偏少，建议补充打脸/收获等外显爽点增强追读）")
+            print("      → 含蓄变强流（外显爽点偏少，建议补充打脸/收获等外显爽点增强追读）")
     print(f"\n  世界观冲突：{total_issues} 处")
 
     # ====== 第四步：导出 ======

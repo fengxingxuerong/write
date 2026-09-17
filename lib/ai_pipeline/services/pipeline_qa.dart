@@ -13,10 +13,12 @@ import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 ///
 /// 双端同步须知：本文件的词表常量（aiClicheWords / _hookWords /
 /// _openingStrong / _openingWeak / thrillWords / powerSurgeWords /
-/// _aiAdverbs / _sentenceConnectors / worldKeywords）与 deepAiMetrics
-/// 四项统计阈值，与 `scripts/generate_novel.py` 的对应常量（HOOK_WORDS /
+/// _aiAdverbs / _sentenceConnectors / _bodyReactionWords / worldKeywords）与
+/// deepAiMetrics 统计阈值（含句式指纹三项 styleFpLimits），与
+/// `scripts/generate_novel.py` 的对应常量（HOOK_WORDS /
 /// OPENING_STRONG / OPENING_WEAK / THRILL_WORDS / POWER_SURGE_WORDS /
-/// AI_ADVERBS / SENTENCE_CONNECTORS）及 deep_ai_metrics 阈值同步维护，
+/// AI_ADVERBS / SENTENCE_CONNECTORS / BODY_REACTION_WORDS / METAPHOR_PAT /
+/// STYLE_FP_LIMITS）及 deep_ai_metrics 阈值同步维护，
 /// 调优时必须同一次同时更新两端，防止标准漂移。
 class PipelineQa {
   PipelineQa._();
@@ -233,6 +235,75 @@ class PipelineQa {
     '然后', '不过', '可是',
   ];
 
+  /// 句式层 AI 指纹·比喻强结构正则（与 Python METAPHOR_PAT 同口径）：
+  /// 只抓明喻强结构（像X一样/似的/般、跟X似的、如同X一般）+ 比喻独词；
+  /// 「他像他爹」类判断句不带结构标记不计入（宁漏检勿误报）。
+  static final RegExp _metaphorPattern = RegExp(
+    r'像[^。！？！?，\n]{1,18}(?:一样|似的|般)'
+    r'|跟[^。！？！?，\n]{1,18}(?:一样|似的)'
+    r'|如同[^。！？！?，\n]{1,14}(?:一样|一般|似的)'
+    r'|仿佛|宛如|好似|犹如|恰似',
+  );
+
+  /// 句式层 AI 指纹·身体反应四件套词表（与 Python BODY_REACTION_WORDS 同步）。
+  static const List<String> _bodyReactionWords = <String>[
+    '发烫', '发凉', '发冷', '嗓子发干', '喉咙发干', '汗毛',
+    '头皮发麻', '掌心出汗', '手心出汗', '脊背发凉', '寒意',
+    '牙根发酸', '后槽牙', '呼吸一窒', '心跳漏拍', '胃里发紧',
+    '指尖发麻', '指尖发凉', '太阳穴一跳',
+  ];
+
+  /// 单句成段阈值：段落 ≤14 字视为单句段（喘气段）。
+  static const int _singleParaMaxChars = 14;
+
+  /// 句式指纹超标线（与 Python STYLE_FP_LIMITS 同步，2026-09-12 四本书回测校准）：
+  /// 比喻 2.0 对齐写手准则承诺线；单句段 30%、身体反应 1.5 由真实成书分布定。
+  /// 定位是「标记风格特征供人工复核」，非否决线。
+  static const Map<String, double> styleFpLimits = <String, double>{
+    'metaphorDensity': 2.0,
+    'singleParaRate': 30.0,
+    'bodyReactionDensity': 1.5,
+  };
+
+  /// 句式指纹三项：比喻密度 / 单句成段占比 / 身体反应密度。
+  static Map<String, double> styleFingerprintMetrics(String text) {
+    if (text.isEmpty) {
+      return <String, double>{
+        'metaphorDensity': 0.0,
+        'singleParaRate': 0.0,
+        'bodyReactionDensity': 0.0,
+      };
+    }
+    final int words = AppConstants.countWords(text);
+    // 1) 比喻密度（每千字）
+    final int metaphorHits = _metaphorPattern.allMatches(text).length;
+    final double metaphorDensity =
+        words > 0 ? metaphorHits / words * 1000 : 0.0;
+    // 2) 单句成段占比
+    final List<String> paras = text
+        .split('\n')
+        .map((String p) => p.trim())
+        .where((String p) => p.isNotEmpty)
+        .toList();
+    final double singleParaRate = paras.isEmpty
+        ? 0.0
+        : paras.where((String p) => AppConstants.countWords(p) <= _singleParaMaxChars).length /
+            paras.length *
+            100;
+    // 3) 身体反应密度（每千字）
+    int bodyHits = 0;
+    for (final String w in _bodyReactionWords) {
+      bodyHits += _countOccurrences(text, w);
+    }
+    final double bodyReactionDensity =
+        words > 0 ? bodyHits / words * 1000 : 0.0;
+    return <String, double>{
+      'metaphorDensity': double.parse(metaphorDensity.toStringAsFixed(2)),
+      'singleParaRate': double.parse(singleParaRate.toStringAsFixed(1)),
+      'bodyReactionDensity': double.parse(bodyReactionDensity.toStringAsFixed(2)),
+    };
+  }
+
   /// 按句末标点切分句子。
   static List<String> _splitSentences(String text) {
     return text
@@ -246,8 +317,10 @@ class PipelineQa {
   /// 2. 「的」字密度（AI 爱用「他的眼底」式修饰 → 密度高）
   /// 3. 叠词修饰密度（微微/轻轻/淡淡…）
   /// 4. 句首连接词比例（然而/于是/随即…）
+  /// 5. 句式指纹三项：比喻密度 / 单句成段占比 / 身体反应密度
+  ///    （三项中 ≥2 项超标合并计入 1 档，保守设计防 level 失真）
   ///
-  /// 返回各指标 + level（0~4，每项超标 +1；>=3 视为 AI 腔偏重）。
+  /// 返回各指标 + level（0~5，超标 +1；>=3 视为 AI 腔偏重）。
   static Map<String, dynamic> deepAiMetrics(String text) {
     if (text.isEmpty) {
       return <String, dynamic>{
@@ -255,6 +328,9 @@ class PipelineQa {
         'deDensity': 0.0,
         'adverbDensity': 0.0,
         'connectorRate': 0.0,
+        'metaphorDensity': 0.0,
+        'singleParaRate': 0.0,
+        'bodyReactionDensity': 0.0,
         'level': 0,
       };
     }
@@ -308,21 +384,33 @@ class PipelineQa {
     final double connectorRate =
         _splitSentences(text).isEmpty ? 0.0 : connHits / _splitSentences(text).length;
 
-    // 综合档位
+    // 5) 句式指纹三项（≥2/3 超标 → 记 1 档，与 Python deep_ai_metrics 同口径）
+    final Map<String, double> fp = styleFingerprintMetrics(text);
+    final int fpOver = <bool>[
+      fp['metaphorDensity']! > styleFpLimits['metaphorDensity']!,
+      fp['singleParaRate']! > styleFpLimits['singleParaRate']!,
+      fp['bodyReactionDensity']! > styleFpLimits['bodyReactionDensity']!,
+    ].where((bool b) => b).length;
+
+    // 综合档位（原四项各超标 +1；句式指纹 ≥2 项超标再 +1）
     final int level = (cv < 0.55 ? 1 : 0) +
         (deDensity > 4.0 ? 1 : 0) +
         (adverbDensity > 2.0 ? 1 : 0) +
-        (connectorRate > 0.15 ? 1 : 0);
+        (connectorRate > 0.15 ? 1 : 0) +
+        (fpOver >= 2 ? 1 : 0);
     return <String, dynamic>{
       'sentenceCv': double.parse(cv.toStringAsFixed(2)),
       'deDensity': double.parse(deDensity.toStringAsFixed(2)),
       'adverbDensity': double.parse(adverbDensity.toStringAsFixed(2)),
       'connectorRate': double.parse(connectorRate.toStringAsFixed(2)),
+      'metaphorDensity': fp['metaphorDensity'],
+      'singleParaRate': fp['singleParaRate'],
+      'bodyReactionDensity': fp['bodyReactionDensity'],
       'level': level,
     };
   }
 
-  /// AI 味深度告警（level>=3 时提示具体超标项）。
+  /// AI 味深度告警（level>=3 时提示具体超标项，含句式指纹超标项）。
   static List<String> deepAiIssues(String text) {
     final Map<String, dynamic> m = deepAiMetrics(text);
     if ((m['level'] as int) < 3) return const <String>[];
@@ -338,6 +426,16 @@ class PipelineQa {
     }
     if ((m['connectorRate'] as double) > 0.15) {
       issues.add('句首连接词偏多（${(m['connectorRate'] as double) * 100}% 句子以「然而/于是/随即」开头）');
+    }
+    // 句式指纹：≥2 项超标会推高 level，告警里列出具体项供定点修
+    if ((m['metaphorDensity'] as double) > styleFpLimits['metaphorDensity']!) {
+      issues.add('比喻密度偏高（${m['metaphorDensity']}/千字，>2.0 偏 AI 风格指纹）');
+    }
+    if ((m['singleParaRate'] as double) > styleFpLimits['singleParaRate']!) {
+      issues.add('单句成段过密（${m['singleParaRate']}% 段落 ≤14 字，喘气段过频节奏机械）');
+    }
+    if ((m['bodyReactionDensity'] as double) > styleFpLimits['bodyReactionDensity']!) {
+      issues.add('身体反应描写过密（${m['bodyReactionDensity']}/千字，发烫/发凉/嗓子发干类四件套）');
     }
     return issues;
   }

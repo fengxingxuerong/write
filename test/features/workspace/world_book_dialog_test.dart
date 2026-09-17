@@ -17,7 +17,7 @@ void main() {
         ),
       );
 
-  Novel _testNovel() => Novel(
+  Novel testNovel() => Novel(
         id: 'n1',
         title: '测试小说',
         genre: 'xuanhuan',
@@ -51,7 +51,7 @@ void main() {
 
   group('WorldBookDialog world book', () {
     testWidgets('title shows novel name', (tester) async {
-      final novel = _testNovel();
+      final novel = testNovel();
       await tester.pumpWidget(
         wrap(Material(
           child: Builder(
@@ -68,7 +68,7 @@ void main() {
     });
 
     testWidgets('character card shows name and traits', (tester) async {
-      final novel = _testNovel();
+      final novel = testNovel();
       await tester.pumpWidget(
         wrap(Material(
           child: Builder(
@@ -86,7 +86,7 @@ void main() {
     });
 
     testWidgets('world tab shows settings', (tester) async {
-      final novel = _testNovel();
+      final novel = testNovel();
       await tester.pumpWidget(
         wrap(Material(
           child: Builder(
@@ -106,7 +106,7 @@ void main() {
     });
 
     testWidgets('injection tab builds context text', (tester) async {
-      final novel = _testNovel();
+      final novel = testNovel();
       await tester.pumpWidget(
         wrap(Material(
           child: Builder(
@@ -126,7 +126,7 @@ void main() {
     });
 
     testWidgets('close button works', (tester) async {
-      final novel = _testNovel();
+      final novel = testNovel();
       await tester.pumpWidget(
         wrap(Material(
           child: Builder(

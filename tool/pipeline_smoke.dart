@@ -156,7 +156,7 @@ Future<void> main() async {
     txt
       ..writeln()
       ..writeln('第 ${ch.idx} 章  ${ch.title}')
-      ..writeln('${'-' * 20}')
+      ..writeln('-' * 20)
       ..writeln()
       ..writeln(ch.content);
   }

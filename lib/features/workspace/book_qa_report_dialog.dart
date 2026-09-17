@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 
 import 'package:novel_writer/ai_pipeline/services/book_qa_service.dart';
 import 'package:novel_writer/models/novel.dart';
-import 'package:novel_writer/widgets/common.dart';
+import 'package:novel_writer/widgets/page_shell.dart';
 
 /// 打开全书体检弹窗（书架入口）。
 Future<void> showBookQaReportDialog(BuildContext context, Novel novel) {

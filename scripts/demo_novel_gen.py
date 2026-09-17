@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """墨匠 InkSmith —— 模板引擎离线生成 + 质量评估演示"""
-import re, sys, json
+import re
 
 # ============================================================
 # 1. Mulberry32 PRNG —— 与 Dart SeededRandom 完全一致
@@ -19,7 +19,7 @@ class SeededRandom:
         if hi <= lo: return lo
         return lo + int(self.next() * (hi - lo))
     def pick(self, items):
-        if not items: raise StateError("empty")
+        if not items: raise ValueError("empty")
         return items[self.range(0, len(items))]
     def chance(self, p: float) -> bool:
         return self.next() < p
