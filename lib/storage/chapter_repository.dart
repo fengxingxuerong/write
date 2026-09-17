@@ -108,6 +108,11 @@ class ChapterRepository {
       final Novel novel = await db.readNovel(novelId);
       final Chapter? target =
           novel.chapters.where((c) => c.id == chapterId).firstOrNull;
+      // 内容未变化时直接跳过：防抖/失焦保存可能在无编辑时触发，
+      // 而整本全量落盘（jsonEncode + 备份复制）对长篇开销可观。
+      if (target != null && target.content == content) {
+        return;
+      }
       final List<Chapter> chapters = novel.chapters.map((c) {
         return c.id == chapterId
             ? c.copyWith(content: content, updatedAt: DateTime.now())

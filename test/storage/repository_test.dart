@@ -584,4 +584,52 @@ void main() {
     });
   });
 
+  group('删除清理备份', () {
+    test('deleteNovel 把主文件/备份/临时文件一并清掉（防止备份自愈复活已删项目）', () async {
+      final Novel novel = await novelRepo.createNovel(
+        title: '删除清理',
+        genre: 'xuanhuan',
+        tone: '热血',
+      );
+      // addChapter 触发 _write → 生成 .bak.json 备份。
+      await chapterRepo.addChapter(novel.id);
+      expect(await db.novelBackupFile(novel.id).exists(), isTrue);
+
+      await novelRepo.deleteNovel(novel.id);
+
+      expect(await db.novelFile(novel.id).exists(), isFalse);
+      expect(await db.novelBackupFile(novel.id).exists(), isFalse,
+          reason: '备份残留会让 readNovel 的自愈逻辑把已删项目"复活"');
+      // 读取同样必须抛异常，而不是从备份返回数据。
+      await expectLater(
+        novelRepo.getNovel(novel.id),
+        throwsA(isA<AppException>()),
+      );
+    });
+  });
+
+  group('自动保存跳过无变化写入', () {
+    test('updateChapterContent 内容未变化时不落盘（updatedAt 不前移）', () async {
+      final Novel novel = await novelRepo.createNovel(
+        title: '无变化跳过',
+        genre: 'xuanhuan',
+        tone: '热血',
+      );
+      final Chapter ch = await chapterRepo.addChapter(novel.id);
+      await chapterRepo.updateChapterContent(novel.id, ch.id, '正文内容');
+
+      final Novel afterFirst = await novelRepo.getNovel(novel.id);
+      final DateTime firstSavedAt = afterFirst.chapters.first.updatedAt;
+
+      // 等一小段时间，保证旧实现「无脑重写」会得到更晚的 updatedAt。
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      await chapterRepo.updateChapterContent(novel.id, ch.id, '正文内容');
+
+      final Novel afterSecond = await novelRepo.getNovel(novel.id);
+      expect(afterSecond.chapters.first.updatedAt, firstSavedAt,
+          reason: '内容相同不应触发整本重写（防抖/失焦保存可能空转）');
+      expect(afterSecond.chapters.first.content, '正文内容');
+    });
+  });
+
 }

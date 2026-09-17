@@ -30,44 +30,59 @@ class AppDatabase {
   /// 获取指定 novelId 的排他锁并执行 [action]。
   ///
   /// 锁粒度为 per-novelId：不同小说的 [action] 可并发，同一小说的 [action] 严格串行。
-  /// 使用 [Completer] 链实现 FIFO 排队，避免 read-modify-write 竞争导致数据丢失。
+  /// 实现「登记-等待」链：每个调用者先登记自己的 [Completer]，再等待**前一个**
+  /// 持有者完成——锁释放瞬间只有一个等待者被唤醒，严格 FIFO 排队。
+  /// （旧实现是 while 轮询队尾，锁释放瞬间全部等待者同时醒来竞争去抢
+  /// `_locks[novelId]`，先到先得，顺序并不保证。）避免 read-modify-write
+  /// 竞争导致数据丢失。
   Future<T> withNovelLock<T>(String novelId, Future<T> Function() action) async {
-    // 等待当前锁释放（FIFO 排队）。
-    while (_locks.containsKey(novelId)) {
-      await _locks[novelId]!.future;
-    }
-    final Completer<void> completer = Completer<void>();
-    _locks[novelId] = completer;
+    final Completer<void>? prev = _locks[novelId];
+    final Completer<void> current = Completer<void>();
+    _locks[novelId] = current;
     try {
+      if (prev != null) {
+        try {
+          await prev.future;
+        } catch (_) {
+          // 前一持锁者异常不应卡住队列。
+        }
+      }
       return await action();
     } finally {
-      _locks.remove(novelId);
-      completer.complete();
+      // 防御：只有自己仍是队尾时才移除，避免误删后来者的登记。
+      if (identical(_locks[novelId], current)) {
+        _locks.remove(novelId);
+      }
+      current.complete();
     }
   }
 
   /// 索引写入队尾（全局单锁）。index.json 是跨项目共享的单个文件，
   /// per-novelId 锁罩不住它：两个不同项目同时落库会各自 readIndex →
   /// writeIndex，后写者把前者的条目抹掉。
-  static Future<void>? _indexTail;
+  static Completer<void>? _indexTail;
 
   /// 获取索引排他锁并执行 [action]（所有 index.json 的 read-modify-write 都该走这里）。
   ///
+  /// 与 [withNovelLock] 相同的「登记-等待」链实现，严格 FIFO。
   /// 加锁顺序约定：**先 [withNovelLock] 再本方法**；不得反向嵌套，否则死锁。
   Future<T> withIndexLock<T>(Future<T> Function() action) async {
-    while (_indexTail != null) {
-      try {
-        await _indexTail;
-      } catch (_) {
-        // 前一个持锁者失败不应卡住排队者。
-      }
-    }
+    final Completer<void>? prev = _indexTail;
     final Completer<void> done = Completer<void>();
-    _indexTail = done.future;
+    _indexTail = done;
     try {
+      if (prev != null) {
+        try {
+          await prev.future;
+        } catch (_) {
+          // 前一个持锁者失败不应卡住排队者。
+        }
+      }
       return await action();
     } finally {
-      _indexTail = null;
+      if (identical(_indexTail, done)) {
+        _indexTail = null;
+      }
       done.complete();
     }
   }
@@ -199,18 +214,27 @@ class AppDatabase {
 
   /// 读取整本小说（单 json）。
   ///
-  /// 主文件损坏时自动尝试备份文件（`<id>.bak.json`）自愈：
-  /// 备份可用则返回备份数据并把备份恢复为主文件；均不可用才抛异常。
+  /// 主文件缺失（如上次原子替换中断）或损坏时自动尝试备份文件
+  /// （`<id>.bak.json`）自愈：备份可用则返回备份数据并把备份恢复为主文件；
+  /// 均不可用才抛异常。
   Future<Novel> readNovel(String id) async {
     final File file = novelFile(id);
     if (!await file.exists()) {
-      throw const StorageException('项目文件不存在');
+      final File bak = novelBackupFile(id);
+      if (!await bak.exists()) {
+        throw const StorageException('项目文件不存在');
+      }
+      // 主文件缺失但备份在：先恢复主文件再走正常读取。
+      try {
+        await bak.copy(file.path);
+      } catch (_) {
+        throw const StorageException('项目文件不存在');
+      }
     }
     Novel? fallback;
     try {
-      final Map<String, dynamic> json =
-          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      return Novel.fromJson(json);
+      final Novel novel = await decodeNovel(await file.readAsString());
+      return novel;
     } on StorageException {
       rethrow;
     } catch (e) {
@@ -241,13 +265,13 @@ class AppDatabase {
   /// 写入整本小说（原子写：先写临时文件再重命名）。
   ///
   /// 写入成功后把新文件备份为 `<id>.bak.json`（备份永远是最新完好数据），
-  /// 供主文件损坏时自愈。
+  /// 供主文件损坏时自愈。JSON 序列化按体量自动分流（见 [encodeNovel]）。
   Future<void> writeNovel(Novel novel) async {
     final File file = novelFile(novel.id);
     final File tmp = File('${file.path}.tmp');
     try {
       await tmp.writeAsString(
-        jsonEncode(novel.toJson()),
+        await encodeNovel(novel),
         flush: true,
       );
       await tmp.rename(file.path);
@@ -355,6 +379,49 @@ class AppDatabase {
 
   /// 判断项目文件是否存在。
   Future<bool> exists(String id) => novelFile(id).exists();
+
+  /// 整本小说序列化：体量大时下沉后台 isolate，避免主线程掉帧。
+  ///
+  /// 数百章 × 2 万字的整本 `jsonEncode` 输入可达数 MB，纯主 isolate 编码
+  /// 会卡 UI（自动保存每 3 秒一次）。内容字符量超过
+  /// [AppConstants.isolateJsonThresholdChars] 时用 `compute` 在后台
+  /// isolate 编码；小于阈值直接同步编，省掉 isolate 往返开销。
+  /// Web 平台无 isolate 支持，恒走同步路径。
+  static Future<String> encodeNovel(Novel novel) {
+    if (kIsWeb || _novelCharSize(novel) < AppConstants.isolateJsonThresholdChars) {
+      return Future<String>.value(_encodeNovelJson(novel));
+    }
+    return compute(_encodeNovelJson, novel);
+  }
+
+  /// 整本小说反序列化：分流策略同 [encodeNovel]。
+  ///
+  /// 解码 + `Novel.fromJson` 一起放进 isolate，大书解析同样不占主线程。
+  static Future<Novel> decodeNovel(String raw) {
+    if (kIsWeb || raw.length < AppConstants.isolateJsonThresholdChars) {
+      return Future<Novel>.value(_decodeNovelJson(raw));
+    }
+    return compute(_decodeNovelJson, raw);
+  }
+
+  /// 估算小说内容的字符量（正文/存稿为主），作为 isolate 分流依据。
+  static int _novelCharSize(Novel novel) {
+    int size = novel.title.length + novel.chapters.length * 64;
+    for (final c in novel.chapters) {
+      size += c.content.length + c.title.length;
+    }
+    for (final d in novel.drafts) {
+      size += d.content.length;
+    }
+    return size;
+  }
+
+  /// 顶层可序列化编码（compute 跨 isolate 只能调静态/顶层函数）。
+  static String _encodeNovelJson(Novel novel) => jsonEncode(novel.toJson());
+
+  /// 顶层可序列化解码（compute 跨 isolate 只能调静态/顶层函数）。
+  static Novel _decodeNovelJson(String raw) =>
+      Novel.fromJson(jsonDecode(raw) as Map<String, dynamic>);
 }
 
 /// 忽略异步异常的便捷扩展。

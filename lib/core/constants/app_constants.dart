@@ -14,6 +14,14 @@ class AppConstants {
   /// 编辑器自动保存防抖时间（毫秒）。主理人裁定：失焦/退出立即保存 + 防抖 3 秒。
   static const int autosaveDebounceMs = 3000;
 
+  /// 整本小说 JSON 编解码下沉后台 isolate 的字符量阈值。
+  ///
+  /// 单 json 全量写是本项目存储格式的基本操作；数百章 × 2 万字时
+  /// `jsonEncode` 的输入可达数 MB，纯主 isolate 编码会掉帧。
+  /// 内容字符量（含章节正文/存稿）超过该阈值才走 isolate，
+  /// 小项目直接同步编解码，零 isolate 往返开销。
+  static const int isolateJsonThresholdChars = 100000;
+
   /// 一键生成默认目标字数。
   static const int defaultTargetWords = 2000;
 

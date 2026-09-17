@@ -96,11 +96,25 @@ class NovelRepository {
     return mutateNovel(id, (Novel novel) => novel.copyWith(archived: archived));
   }
 
-  /// 删除项目（删除 json 文件并从索引移除）。
+  /// 删除项目（删除 json / 备份 / 残留临时文件，并从索引移除）。
   Future<void> deleteNovel(String id) async {
     final File file = db.novelFile(id);
     if (await file.exists()) {
       await file.delete();
+    }
+    // 备份与临时文件必须一并清理：readNovel 有「主文件缺失时从备份自愈」
+    // 的兜底，若留下 .bak.json，已删除的项目会在下次读取时"复活"。
+    for (final File extra in <File>[
+      db.novelBackupFile(id),
+      File('${file.path}.tmp'),
+    ]) {
+      try {
+        if (await extra.exists()) {
+          await extra.delete();
+        }
+      } catch (_) {
+        // 清理失败不阻塞删除主流程（下次写同 id 时会被原子替换覆盖）。
+      }
     }
     await db.withIndexLock(() async {
       final List<NovelSummary> index = await db.readIndex();

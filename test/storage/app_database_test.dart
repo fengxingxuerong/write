@@ -111,6 +111,27 @@ void main() {
       expect(result, 'ok');
     });
 
+    test('锁释放后等待者按登记顺序执行（严格 FIFO）', () async {
+      final List<int> order = <int>[];
+
+      // 三个等待者依次登记（调用即同步登记自己的 Completer），
+      // 首个持锁 50ms；释放后必须按 t2 → t3 的登记顺序放行。
+      final Future<void> t1 = db.withNovelLock('fifo', () async {
+        order.add(1);
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      });
+      final Future<void> t2 = db.withNovelLock('fifo', () async {
+        order.add(2);
+      });
+      final Future<void> t3 = db.withNovelLock('fifo', () async {
+        order.add(3);
+      });
+
+      await Future.wait([t1, t2, t3]);
+      expect(order, [1, 2, 3],
+          reason: '「登记-等待」链保证锁释放瞬间只唤醒一个等待者，严格 FIFO');
+    });
+
     test('action 返回值正确传递', () async {
       final result = await db.withNovelLock('test', () async => 42);
       expect(result, 42);
@@ -143,6 +164,41 @@ void main() {
         () => db.readNovel('不存在'),
         throwsA(isA<Exception>()),
       );
+    });
+
+    test('主文件缺失但备份存在时自动从备份自愈', () async {
+      final novel = _buildSampleNovel('缺失自愈');
+      await db.writeNovel(novel);
+      // 模拟上次原子替换中断：主文件没了，只剩备份。
+      await db.novelFile(novel.id).delete();
+      expect(db.novelFile(novel.id).existsSync(), isFalse);
+
+      final loaded = await db.readNovel(novel.id);
+      expect(loaded.title, '缺失自愈');
+      // 主文件已从备份恢复回来。
+      expect(db.novelFile(novel.id).existsSync(), isTrue);
+    });
+
+    test('超过阈值的大书走 isolate 编解码往返正确', () async {
+      final novel = _buildSampleNovel('大书');
+      final Chapter big = Chapter(
+        id: 'big-1',
+        novelId: novel.id,
+        title: '大章节',
+        order: 0,
+        content: '字' * (120000),
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 1),
+      );
+      final Novel withBig = novel.copyWith(chapters: <Chapter>[big]);
+      expect(withBig.chapters.first.content.length, 120000,
+          reason: '前置：内容量要超过 isolateJsonThresholdChars（100000）');
+
+      await db.writeNovel(withBig);
+      final Novel loaded = await db.readNovel(withBig.id);
+      expect(loaded.chapters.length, 1);
+      expect(loaded.chapters.first.title, '大章节');
+      expect(loaded.chapters.first.content.length, 120000);
     });
   });
 
