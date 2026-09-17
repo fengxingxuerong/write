@@ -4,8 +4,10 @@ publish_to: 'none'
 version: 0.1.0+1
 
 environment:
-  sdk: ^3.4.0
-  flutter: ">=3.22.0"
+  # 代码使用 onReorderItem（Flutter 3.41+）/ Color.withValues（3.27+）等新 API，
+  # 与 CI 钉住的 3.44.9 对齐；Dart 对应 3.12.x。
+  sdk: ^3.12.0
+  flutter: ">=3.44.0"
 
 dependencies:
   flutter:

@@ -61,16 +61,16 @@ function Write-Result($name, $ok) {
 
 $global:allOk = $true
 
-# ---------- 1. dart analyze ----------
+# ---------- 1. dart analyze（--fatal-infos：与 CI 一致的零告警硬门槛） ----------
 if (-not $SkipAnalyze) {
-    Write-Step 'STEP 1/3: dart analyze'
+    Write-Step 'STEP 1/3: dart analyze --fatal-infos'
     Push-Location $proj
-    $analyzeOut = & $dartBin analyze 2>&1
+    $analyzeOut = & $dartBin analyze --fatal-infos 2>&1
     $analyzeOk = ($LASTEXITCODE -eq 0)
     $analyzeOut | ForEach-Object { Write-Output $_ }
     Pop-Location
     if (-not $analyzeOk) { $global:allOk = $false }
-    Write-Result 'dart analyze' $analyzeOk
+    Write-Result 'dart analyze --fatal-infos' $analyzeOk
 } else {
     Write-Host '  (跳过 analyze)' -ForegroundColor DarkGray
 }

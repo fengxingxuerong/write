@@ -1,6 +1,6 @@
 # 墨匠 InkSmith —— 完全离线一键小说写作工具
 
-[![CI](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml/badge.svg)](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml) ![Coverage](https://img.shields.io/badge/coverage-66%25-brightgreen) ![Tests](https://img.shields.io/badge/tests-661-blue) ![Dart](https://img.shields.io/badge/dart-3.4%2B-blue) ![Flutter](https://img.shields.io/badge/flutter-3.22%2B-blue)
+[![CI](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml/badge.svg)](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml) ![Coverage](https://img.shields.io/badge/coverage-66%25-brightgreen) ![Tests](https://img.shields.io/badge/tests-672-blue) ![Dart](https://img.shields.io/badge/dart-3.12%2B-blue) ![Flutter](https://img.shields.io/badge/flutter-3.44%2B-blue)
 
 > 单代码库 Flutter / Dart，核心链路零网络请求、零外部 API。所有生成与存储均在本机完成。
 > 支持接入本地大模型（llama.cpp / Ollama）实现 AI 辅助写作，同样完全离线。
@@ -77,7 +77,7 @@ lib/
 
 ### 前置
 
-- 安装 [Flutter 3.22+ / Dart 3.4+](https://docs.flutter.dev/get-started/install) 与平台工具链。**Windows 桌面为主力平台**（仓库维护 `windows/` 运行器且 CI 构建验证），Web 为次要平台；其余端未随仓库提供。
+- 安装 [Flutter 3.44+ / Dart 3.12+](https://docs.flutter.dev/get-started/install) 与平台工具链。**Windows 桌面为主力平台**（仓库维护 `windows/` 运行器且 CI 构建验证），Web 为次要平台；其余端未随仓库提供。
 - 国内镜像（可选）：
   ```bash
   $env:PUB_HOSTED_URL='https://pub.flutter-io.cn'
@@ -135,14 +135,14 @@ flutter analyze
 flutter test
 ```
 
-当前测试覆盖：**661 个用例**（模型序列化 / 模板引擎生成质量与番茄闸门过审 / 生成 ViewModel 多章连写 / 引擎抽象与种子可复现 / 存储层归档与数据可靠性 / 敏感词统计 / 编辑器体验 / 导出服务（txt·md·epub·docx·backup）/ AI 记忆链路 / 校对解析 / 语料版权卫生与骨架泄漏护栏 / 阅读设置 / 崩溃日志上报 / 其他核心逻辑），行覆盖率约 **66%**。
+当前测试覆盖：**672 个用例**（模型序列化 / 模板引擎生成质量与番茄闸门过审 / 生成 ViewModel 多章连写 / 引擎抽象与种子可复现 / 存储层归档与数据可靠性 / 敏感词统计 / 编辑器体验 / 导出服务（txt·md·epub·docx·backup）/ AI 记忆链路 / 校对解析 / 语料版权卫生与骨架泄漏护栏 / 阅读设置 / 崩溃日志上报 / 其他核心逻辑），行覆盖率约 **66%**。
 
 ### CI 流水线
 
 仓库已配置 GitHub Actions（`.github/workflows/ci.yml`）：push / PR 到 `main` 自动执行
 
-1. **dart analyze** — 静态检查零告警
-2. **flutter test --coverage** — 全量测试 + 覆盖率门槛 **50%**（当前约 65%）
+1. **dart analyze --fatal-infos** — 静态检查零告警（任何 info 含 deprecation 都算失败）
+2. **flutter test --coverage** — 全量测试 + 覆盖率门槛 **60%**（当前约 66%）
 3. **flutter build windows --release** — Windows 发布包构建，产物自动上传
 
 本地等价格令：`powershell -ExecutionPolicy Bypass -File verify-novel.ps1`（三步全跑）。

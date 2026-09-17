@@ -4,6 +4,11 @@
 
 name: CI
 
+# 同一分支有新推送时，取消仍在跑的旧 CI（省额度、更快反馈）
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [main, master]
@@ -32,7 +37,9 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
+          # 与开发环境/CI 双端一致：代码使用 onReorderItem（3.41+）、
+          # Color.withValues（3.27+）等新 API，3.24 无法编译。
+          flutter-version: '3.44.9'
           channel: stable
           cache: true
 
@@ -40,7 +47,8 @@ jobs:
         run: flutter config --enable-web
 
       - name: Pub get
-        run: flutter pub get
+        # pubspec.lock 已入库：强制按锁定版本装依赖，保证 CI 可复现
+        run: flutter pub get --enforce-lockfile
 
       - name: Offline demo write smoke
         # 零 API 费端到端回归：模板引擎连写三章 + 番茄双质检（NovelQualityChecker
@@ -49,7 +57,8 @@ jobs:
         run: dart run tool/write_demo_novel.dart
 
       - name: Dart analyze
-        run: dart analyze
+        # --fatal-infos：任何 info（含 deprecation）都算失败，兑现 README「零告警」承诺
+        run: dart analyze --fatal-infos
 
       - name: Flutter test
         run: flutter test --coverage
@@ -62,8 +71,8 @@ jobs:
           echo "Lines hit: $LH / $COV"
           PERCENT=$(python3 -c "print(round(100.0*$LH/$COV, 1))" 2>/dev/null || echo "unknown")
           echo "Coverage: $PERCENT%"
-          if [ "$PERCENT" != "unknown" ] && [ "$(python3 -c "print(1 if $PERCENT >= 50 else 0)")" = "0" ]; then
-            echo "::error::Coverage $PERCENT% below threshold 50%"
+          if [ "$PERCENT" != "unknown" ] && [ "$(python3 -c "print(1 if $PERCENT >= 60 else 0)")" = "0" ]; then
+            echo "::error::Coverage $PERCENT% below threshold 60%"
             exit 1
           fi
 
@@ -85,12 +94,12 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
+          flutter-version: '3.44.9'
           channel: stable
           cache: true
 
       - name: Pub get
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Build Windows Release
         run: flutter build windows --release
