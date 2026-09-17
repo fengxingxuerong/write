@@ -4,7 +4,8 @@ build/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
-pubspec.lock
+# 注：pubspec.lock 是 App 依赖锁定文件，应入库保证 CI/团队构建可复现
+# （本行已从忽略列表移除；仅纯 library 才建议忽略 lockfile）。
 
 # 本地验证日志
 verify-logs/
@@ -49,3 +50,7 @@ __pycache__/
 # 注：scripts/generate_novel.py 曾在此列，已核实全文无硬编码密钥（只读 --api-key / NOVEL_LLM_API_KEY），
 #     且 novel_pipeline.py / qa_scan_existing.py / ab_compare.py 均 import 它，必须入库。
 scripts/watchdog_pipeline.ps1
+
+
+# 一次性探测/诊断脚本（与 CI 口径一致：临时探针不入库、不设防）
+scripts/probe/
