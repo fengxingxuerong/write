@@ -143,9 +143,10 @@ class _BeatBoardDialogState extends ConsumerState<BeatBoardDialog> {
           child: ReorderableListView.builder(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
             itemCount: _beats.length,
-            onReorder: (oldIndex, newIndex) {
+            onReorderItem: (oldIndex, newIndex) {
               setState(() {
-                if (newIndex > oldIndex) newIndex -= 1;
+                // onReorderItem 已对「向下移动」自动校正 newIndex（扣除被移除项自身），
+                // 无需再手工 -1（旧 onReorder 回调要求的调整这里不再需要）。
                 final item = _beats.removeAt(oldIndex);
                 _beats.insert(newIndex, item);
               });

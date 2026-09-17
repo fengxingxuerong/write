@@ -644,7 +644,8 @@ class _NodeChipState extends State<_NodeChip> {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
-          transform: Matrix4.identity()..scale(_hovering ? 1.2 : 1.0),
+          transform: Matrix4.identity()
+            ..scaleByDouble(_hovering ? 1.2 : 1.0, _hovering ? 1.2 : 1.0, 1.0, 1.0),
           child: Container(
             width: 32,
             height: 32,

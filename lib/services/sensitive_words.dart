@@ -127,10 +127,8 @@ class SensitiveWordsService {
   /// 历史累计命中统计：词 → 累计命中次数。
   Map<String, int> _hitStats = <String, int>{};
 
-  /// 构造服务。[_customPath] 为用户词 JSON 文件（可空，空则不持久化）。
-  SensitiveWordsService({String? customPath, String? statsPath})
-      : _customPath = customPath,
-        _statsPath = statsPath {
+  /// 构造服务。customPath 为用户词 JSON 文件（可空，空则不持久化）。
+  SensitiveWordsService({this._customPath, this._statsPath}) {
     _loadCustom();
     _loadStats();
   }
