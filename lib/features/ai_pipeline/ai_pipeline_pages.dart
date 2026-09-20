@@ -4,13 +4,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:file_picker/file_picker.dart';
+import 'package:novel_writer/ai_pipeline/fixed_workflow_preset.dart';
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 import 'package:novel_writer/ai_pipeline/services/ai_pipeline_service.dart';
 import 'package:novel_writer/ai_pipeline/services/novel_importer.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
 import 'package:novel_writer/core/di/providers.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/models/llm_config.dart';
+import 'package:novel_writer/widgets/app_feedback.dart';
 
 /// 流水线存储 provider（应用支持目录 /ai_pipeline）。
 final Provider<PipelineStorage> pipelineStorageProvider =
@@ -95,7 +99,7 @@ class _AiPipelineHomePageState extends ConsumerState<AiPipelineHomePage> {
             return _buildEmpty(context);
           }
           return ListView.builder(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(AppTokens.s3),
             itemCount: tasks.length,
             itemBuilder: (BuildContext context, int index) =>
                 _TaskCard(task: tasks[index], onChanged: _reload),
@@ -110,8 +114,9 @@ class _AiPipelineHomePageState extends ConsumerState<AiPipelineHomePage> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: <Widget>[
-          const Icon(Icons.auto_stories_outlined, size: 64, color: Colors.grey),
-          const SizedBox(height: 12),
+          Icon(Icons.auto_stories_outlined,
+              size: 64, color: AppInk.of(context).inkFaint),
+          const SizedBox(height: AppTokens.s3),
           const Text('还没有生成任务'),
           const SizedBox(height: 4),
           Text(
@@ -141,16 +146,17 @@ class _TaskCard extends ConsumerWidget {
       PipelineTaskStatus.failed => '失败',
       PipelineTaskStatus.cancelled => '已取消',
     };
+    final AppInk ink = AppInk.of(context);
     final Color statusColor = switch (task.status) {
-      PipelineTaskStatus.running => Colors.blue,
-      PipelineTaskStatus.done => Colors.green,
-      PipelineTaskStatus.failed => Colors.red,
-      PipelineTaskStatus.cancelled => Colors.orange,
-      _ => Colors.grey,
+      PipelineTaskStatus.running => ink.primary,
+      PipelineTaskStatus.done => ink.success,
+      PipelineTaskStatus.failed => ink.danger,
+      PipelineTaskStatus.cancelled => ink.warn,
+      _ => ink.inkFaint,
     };
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: AppTokens.s2),
       child: ListTile(
         title: Text(
           task.title,
@@ -168,11 +174,11 @@ class _TaskCard extends ConsumerWidget {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
                 color: statusColor.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(AppTokens.r3),
               ),
               child: Text(
                 statusText,
-                style: TextStyle(color: statusColor, fontSize: 12),
+                style: AppFonts.text(statusColor, size: 12),
               ),
             ),
             PopupMenuButton<String>(
@@ -195,16 +201,12 @@ class _TaskCard extends ConsumerWidget {
                           .read(pipelineStorageProvider)
                           .saveTask(task);
                       if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('已导入书架：《${task.title}》')),
-                        );
+                        AppToast.success(context, '已导入书架：《${task.title}》');
                       }
                       onChanged();
                     } catch (e) {
                       if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('导入失败：$e')),
-                        );
+                        AppToast.error(context, '导入失败：$e');
                       }
                     }
                   case 'open':
@@ -289,7 +291,7 @@ class _TaskCard extends ConsumerWidget {
                         '第${c.idx}章 ${c.title}（${c.words}字）'
                         '　AI味 ${PipelineQa.aiEchoPct(c.content).toStringAsFixed(2)}%'
                         '　重复 ${PipelineQa.adjacentRepetition(c.content).toStringAsFixed(3)}',
-                        style: const TextStyle(fontSize: 12),
+                        style: AppFonts.text(AppInk.of(context).inkSoft, size: 12),
                       ),
                     ),
                 ],
@@ -333,6 +335,9 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
       TextEditingController(text: '');
   bool _useEditor = true;
   bool _useVerifier = true;
+
+  /// 是否把未实测的候选端点（NVIDIA / OpenRouter）也纳入备用链。
+  bool _useUnverified = false;
 
   /// 五角色配置（默认值；可从最近任务配置加载）。
   Map<AiRole, AiRoleConfig> _roles = <AiRole, AiRoleConfig>{
@@ -387,12 +392,9 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
     );
     final List<AiRole> missing = AiPipelineService.missingRoles(config);
     if (missing.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '以下角色未配置模型：${missing.map((r) => r.label).join('、')}',
-          ),
-        ),
+      AppToast.warn(
+        context,
+        '以下角色未配置模型：${missing.map((r) => r.label).join('、')}',
       );
       return;
     }
@@ -407,12 +409,79 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
     await context.push('/ai-pipeline/run/${task.id}');
   }
 
+  /// 提示条。
+  void _snack(String msg) {
+    if (!mounted) return;
+    AppToast.info(context, msg);
+  }
+
+  /// 导入本机 API 配置并按固定分工装配五角色端点链。
+  ///
+  /// 密钥只落在本机任务配置里（随 pipeline 存储），不进源码、不外发。
+  Future<void> _importLocalKeys() async {
+    String? text;
+    try {
+      final FilePickerResult? res = await FilePicker.platform.pickFiles(
+        dialogTitle: '选择 API 配置文件（.env.local / txt）',
+      );
+      final String? path = res?.files.singleOrNull?.path;
+      if (path != null) text = await File(path).readAsString();
+    } catch (_) {
+      text = null;
+    }
+    if (!mounted) return;
+
+    if (text == null || text.trim().isEmpty) {
+      final TextEditingController ctrl = TextEditingController();
+      final bool? ok = await showDialog<bool>(
+        context: context,
+        builder: (BuildContext c) => AlertDialog(
+          title: const Text('粘贴 API 配置'),
+          content: TextField(
+            controller: ctrl,
+            maxLines: 8,
+            decoration: const InputDecoration(
+              hintText: 'Base URL / 模型名 / API Key 混排即可，'
+                  '会自动识别 rc- / sk- / nvapi- / sk-or-v1- 开头的密钥',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: const Text('导入'),
+            ),
+          ],
+        ),
+      );
+      text = ok == true ? ctrl.text : null;
+      ctrl.dispose();
+      if (text == null || text.trim().isEmpty) return;
+    }
+
+    final Map<String, String> keys = FixedWorkflowPreset.parseKeys(text);
+    if (keys.isEmpty) {
+      _snack('未识别到 API Key（支持 rc- / sk- / nvapi- / sk-or-v1- 开头）');
+      return;
+    }
+    setState(() {
+      _roles =
+          FixedWorkflowPreset.roles(keys, includeCandidates: _useUnverified);
+    });
+    _snack('已按固定分工导入 ${keys.length} 个密钥（'
+        '策划/写手/编辑/标题/审校 各自的主备链已自动排序）');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('新建生成任务')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppTokens.s4),
         children: <Widget>[
           _section('基础设置'),
           Row(
@@ -427,7 +496,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: AppTokens.s3),
               Expanded(
                 child: TextField(
                   controller: _chaptersCtrl,
@@ -440,7 +509,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppTokens.s3),
           Row(
             children: <Widget>[
               Expanded(
@@ -452,7 +521,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: AppTokens.s3),
               Expanded(
                 child: TextField(
                   controller: _protagonistCtrl,
@@ -478,15 +547,50 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
             onChanged: (bool v) => setState(() => _useVerifier = v),
           ),
           const SizedBox(height: 8),
+          _section('固定角色分工'),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(AppTokens.s3),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  const Text(
+                    '把本机 API 配置导入后，软件会按固定分工自动装配：'
+                    '策划/写手/编辑/标题/审校 五岗各自的主模型与备用链、'
+                    '各自温度一次到位，无需逐个手填。',
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '密钥只写入本机任务配置，不进入源码，也不随导出外发。',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('同时纳入未实测候选端点'),
+                    subtitle: const Text(
+                        'NVIDIA（z-ai/glm-5.2）与 OpenRouter（stealth/ox-alpha）'
+                        '仅作链尾兜底'),
+                    value: _useUnverified,
+                    onChanged: (bool v) => setState(() => _useUnverified = v),
+                  ),
+                  FilledButton.tonalIcon(
+                    icon: const Icon(Icons.upload_file),
+                    label: const Text('导入本机 API 配置并固定分工'),
+                    onPressed: _importLocalKeys,
+                  ),
+                ],
+              ),
+            ),
+          ),
           _section('角色模型配置（各自填写 API 端点）'),
           for (final AiRole role in AiRole.values) _roleCard(role),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppTokens.s4),
           FilledButton.icon(
             icon: const Icon(Icons.play_arrow),
             label: const Text('创建并开始生成'),
             onPressed: _start,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: AppTokens.s6),
         ],
       ),
     );
@@ -494,7 +598,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
 
   Widget _section(String title) {
     return Padding(
-      padding: const EdgeInsets.only(top: 8, bottom: 8),
+      padding: const EdgeInsets.only(top: AppTokens.s2, bottom: AppTokens.s2),
       child: Text(title, style: Theme.of(context).textTheme.titleMedium),
     );
   }
@@ -509,9 +613,9 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
         TextEditingController(text: cfg.llm.apiKey);
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: AppTokens.s2),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(AppTokens.s3),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
@@ -712,9 +816,7 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
     final File file = File('${dir.path}${Platform.pathSeparator}${task.id}.txt');
     await file.writeAsString(buf.toString(), flush: true);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已导出：${file.path}')),
-    );
+    AppToast.success(context, '已导出：${file.path}');
   }
 
   Future<void> _importToShelf() async {
@@ -737,9 +839,7 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('导入失败：$e')),
-      );
+      AppToast.error(context, '导入失败：$e');
     }
   }
 
@@ -784,7 +884,7 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
       body: Column(
         children: <Widget>[
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(AppTokens.s3),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
@@ -818,14 +918,14 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
                 padding: const EdgeInsets.symmetric(vertical: 1),
                 child: Text(
                   task.log[index],
-                  style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                  style: AppFonts.text(AppInk.of(context).inkSoft, size: 12, monoFace: true),
                 ),
               ),
             ),
           ),
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(AppTokens.s3),
               child: Row(
                 children: <Widget>[
                   Expanded(
@@ -853,20 +953,21 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
   }
 
   Widget _statusChip(PipelineTaskStatus status) {
+    final AppInk ink = AppInk.of(context);
     final (String text, Color color) = switch (status) {
-      PipelineTaskStatus.running => ('运行中', Colors.blue),
-      PipelineTaskStatus.done => ('已完成', Colors.green),
-      PipelineTaskStatus.failed => ('失败', Colors.red),
-      PipelineTaskStatus.cancelled => ('已取消', Colors.orange),
-      PipelineTaskStatus.idle => ('待运行', Colors.grey),
+      PipelineTaskStatus.running => ('运行中', ink.primary),
+      PipelineTaskStatus.done => ('已完成', ink.success),
+      PipelineTaskStatus.failed => ('失败', ink.danger),
+      PipelineTaskStatus.cancelled => ('已取消', ink.warn),
+      PipelineTaskStatus.idle => ('待运行', ink.inkFaint),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(AppTokens.r3),
       ),
-      child: Text(text, style: TextStyle(color: color, fontSize: 12)),
+      child: Text(text, style: AppFonts.text(color, size: 12)),
     );
   }
 }

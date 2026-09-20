@@ -28,6 +28,7 @@ class SceneBuilder {
     required String genre,
     required String tone,
     String? prevSceneSummary,
+    String storyContext = '',
   }) async {
     try {
       final String raw = await _callLlm(
@@ -36,6 +37,7 @@ class SceneBuilder {
         genre: genre,
         tone: tone,
         prevSceneSummary: prevSceneSummary,
+        storyContext: storyContext,
       );
       return _parseResponse(raw, chapterTargetWords);
     } catch (_) {
@@ -49,6 +51,7 @@ class SceneBuilder {
     required String genre,
     required String tone,
     String? prevSceneSummary,
+    required String storyContext,
   }) async {
     final LlmChatClient client = LlmChatClient(config: config);
     final LlmChatResult res = await client.chat(
@@ -60,6 +63,7 @@ class SceneBuilder {
         genre: genre,
         tone: tone,
         prevSceneSummary: prevSceneSummary,
+        storyContext: storyContext,
       ),
     );
     return res.content;
@@ -71,6 +75,7 @@ class SceneBuilder {
     required String genre,
     required String tone,
     String? prevSceneSummary,
+    required String storyContext,
   }) {
     final StringBuffer b = StringBuffer();
     b.writeln('请把下面的章纲拆成 3~5 个场景，每个场景完成「起承转合」中的一段。');
@@ -82,6 +87,10 @@ class SceneBuilder {
     b.writeln('- 最后一个场景必须是「合」：收束本章并埋下章末钩子（未落地悬念）。');
     b.writeln();
     b.writeln('题材：$genre | 基调：$tone');
+    if (storyContext.trim().isNotEmpty) {
+      b.writeln('【故事上下文（规划不得与既有事实矛盾）】');
+      b.writeln(storyContext.trim());
+    }
     if (prevSceneSummary != null && prevSceneSummary.trim().isNotEmpty) {
       b.writeln();
       b.writeln('上一场景摘要（本场景必须承接此情境）：');

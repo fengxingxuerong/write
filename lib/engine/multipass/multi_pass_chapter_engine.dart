@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/generation_engine.dart';
+import 'package:novel_writer/engine/llm_context_brief.dart';
 import 'package:novel_writer/engine/llm_engine.dart';
 import 'package:novel_writer/engine/llm_retry.dart';
 import 'package:novel_writer/engine/multipass/scene_builder.dart';
@@ -48,8 +49,7 @@ class MultiPassChapterEngine {
       chapterTargetWords: chapterConfig.targetWords,
       genre: chapterConfig.genre,
       tone: chapterConfig.tone,
-      prevSceneSummary:
-          ctx.plotSummary.isNotEmpty ? ctx.plotSummary : null,
+      storyContext: LlmContextBrief.contextBlock(chapterConfig, ctx),
     );
 
     // Step 2: 逐场景生成
@@ -88,7 +88,7 @@ class MultiPassChapterEngine {
         lastSceneError ??= sceneResult.error;
       }
 
-      prevSummary = _summarizeScene(sceneText, 120);
+      prevSummary = LlmContextBrief.sceneHandoff(sceneText, tailChars: 120);
       if (totalWords >= chapterConfig.targetWords) break;
     }
 
@@ -206,19 +206,27 @@ class MultiPassChapterEngine {
       b.writeln('上一场景的情境（请承接，不要矛盾）：');
       b.writeln(prevSummary);
     }
-    if (ctx.characters.isNotEmpty) {
-      b.writeln();
-      b.writeln('【角色】');
-      for (final c in ctx.characters) {
-        b.writeln('- ${c.name}：${c.traits}');
-      }
+    b.write(LlmContextBrief.contextBlock(
+      chapterConfig,
+      ctx,
+      includeContinuation: prevSummary.trim().isEmpty,
+    ));
+    b.writeln('【题材】${chapterConfig.genre}');
+    b.writeln('【基调】${chapterConfig.tone}');
+    if (chapterConfig.protagonistName?.trim().isNotEmpty == true) {
+      b.writeln('【主角名】${chapterConfig.protagonistName}');
+    }
+    b.writeln('【写作风格】${chapterConfig.style.instruction}');
+    b.writeln('【文风】${chapterConfig.proseStyle.instruction}');
+    if (ctx.outline.trim().isNotEmpty) {
+      b.writeln('【整章大纲（仅作背景，本次只完成当前场景节拍）】');
+      b.writeln(ctx.outline.trim());
     }
     if (sceneIndex == 0) {
-      b.writeln();
       b.writeln(WritingGuidelines.structureRequirements);
-      b.writeln();
-      b.write(WritingGuidelines.genreGuidance(chapterConfig.genre));
     }
+    b.writeln('只推进当前场景，不提前完成后续场景或重复已发生的事件。');
+    b.write(WritingGuidelines.genreGuidance(chapterConfig.genre));
     if (scene.isEnding) {
       b.writeln();
       b.writeln('这是本章最后一个场景：结尾必须落在未落地的钩子上'
@@ -227,10 +235,5 @@ class MultiPassChapterEngine {
     b.writeln();
     b.writeln('只输出场景正文：');
     return b.toString();
-  }
-
-  String _summarizeScene(String text, int tailChars) {
-    if (text.length <= tailChars) return text;
-    return text.substring(text.length - tailChars);
   }
 }

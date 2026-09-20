@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 import 'package:novel_writer/ai_pipeline/prompts/pipeline_prompts.dart';
 import 'package:novel_writer/ai_pipeline/services/llm_router.dart';
+import 'package:novel_writer/ai_pipeline/services/outline_text.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
 import 'package:novel_writer/engine/quality/fanqie_gate_checker.dart';
@@ -211,7 +212,7 @@ class AiPipelineService {
       if (task.totalWords >= task.config.totalWords) break;
       if (idx > task.config.maxChapters) break;
 
-      final String goal = (ch['goal'] as String?) ?? '';
+      final String goal = outlineText(ch['goal']);
       final int target = (ch['target'] as num?)?.toInt() ?? 3000;
       final String lastSummary = _lastChapterTail(task);
       task.addLog('===== 第 $idx 章（目标 $target 字）：$goal =====');
@@ -219,9 +220,11 @@ class AiPipelineService {
       // 1) 场景规划（重试 2 次 → 默认骨架兜底），注入跨章状态
       List<Map<String, dynamic>> scenes = <Map<String, dynamic>>[];
       // 全书世界观（规划官设定）注入场景规划，防止正文脱离大纲（裴照系统流→赵铁柱超自然流 事故）
-      final Map<String, dynamic> outlineMap = task.outline as Map<String, dynamic>? ?? <String, dynamic>{};
-      final String worldHint = (outlineMap['world'] as String?) ?? '';
-      final String hookHint = (outlineMap['hook'] as String?) ?? '';
+      final Map<String, dynamic> outlineMap =
+          task.outline as Map<String, dynamic>? ?? <String, dynamic>{};
+      // 规划官按契约会把 world/protagonist 返回成对象，这里统一拍平成文本。
+      final String worldHint = outlineText(outlineMap['world']);
+      final String hookHint = outlineText(outlineMap['hook']);
       final String fullWorldHint = [
         if (worldHint.isNotEmpty) worldHint,
         if (hookHint.isNotEmpty) '开篇钩子：$hookHint',
@@ -237,9 +240,10 @@ class AiPipelineService {
             : (fsDecoded is List<dynamic> ? fsDecoded : <dynamic>[]);
         final List<String> fsOpen = fsItems
             .whereType<Map<String, dynamic>>()
-            .where((dynamic e) => e['status'] == 'open' && (e['desc'] as String? ?? '').isNotEmpty)
+            .where((dynamic e) =>
+                e['status'] == 'open' && outlineText(e['desc']).isNotEmpty)
             .take(8)
-            .map((dynamic e) => '- ${e['desc']}')
+            .map((dynamic e) => '- ${outlineText(e['desc'])}')
             .toList();
         if (fsOpen.isNotEmpty) {
           final String fsSummary = '【未收伏笔（写作时勿改相关设定，尽量自然推进/回收）】\n${fsOpen.join('\n')}';
@@ -277,11 +281,16 @@ class AiPipelineService {
       String prevText = lastSummary;
       for (int si = 0; si < scenes.length; si++) {
         final Map<String, dynamic> sc = scenes[si];
-        final String stage = (sc['stage'] as String?) ?? '承';
-        final String goalS = (sc['goal'] as String?) ?? '';
-        final List<String> beats = ((sc['beats'] as List<dynamic>?) ?? <dynamic>[])
-            .map((dynamic e) => e.toString())
-            .toList();
+        final String stage = outlineText(sc['stage']).isEmpty
+            ? '承'
+            : outlineText(sc['stage']);
+        final String goalS = outlineText(sc['goal']);
+        final List<String> beats = (sc['beats'] is Iterable)
+            ? (sc['beats'] as Iterable<dynamic>)
+                .map(outlineText)
+                .where((String e) => e.isNotEmpty)
+                .toList()
+            : <String>[];
         final int tw = ((sc['targetWords'] as num?)?.toInt() ?? 600).clamp(300, 1500);
         task.addLog('  [场景 ${si + 1}/${scenes.length}] $stage：$goalS（目标 $tw 字）');
         String text = await _call(
@@ -416,7 +425,8 @@ class AiPipelineService {
       }
 
       // 4) 章节标题（标题官）
-      String title = (ch['title'] as String?) ?? '第$idx章';
+      final String titleHint = outlineText(ch['title']);
+      String title = titleHint.isEmpty ? '第$idx章' : titleHint;
       final String t = await _call(
         AiRole.titler,
         titlerSystemPrompt,
@@ -495,7 +505,7 @@ class AiPipelineService {
             parsed?['scores'] as Map<String, dynamic>?;
         final int overall = (parsed?['overall'] as num?)?.toInt() ?? -1;
         if (overall >= 0) {
-          final String comment = (parsed?['comment'] as String?) ?? '';
+          final String comment = outlineText(parsed?['comment']);
           task.addLog('  [评分] 第 $idx 章 综合 $overall 分'
               '（开篇${scores?['opening'] ?? '-'}/爽点${scores?['thrill'] ?? '-'}'
               '/钩子${scores?['hook'] ?? '-'}/动机${scores?['motivation'] ?? '-'}'
@@ -652,11 +662,11 @@ class AiPipelineService {
   /// 与 Python 侧 `extract_chapter_hook` 同口径：钩子多写在 goal 里
   /// （`…｜钩子=威胁逼近：血煞盟的人影一闪而逝`），结构补章才带独立 hook 字段。
   static String _chapterHookHint(Map<String, dynamic> ch) {
-    final String goal = (ch['goal'] as String?) ?? '';
+    final String goal = outlineText(ch['goal']);
     final RegExpMatch? m =
         RegExp(r'钩子[=＝:：]\s*([^｜|]+)').firstMatch(goal);
     if (m != null) return m.group(1)!.trim();
-    return (ch['hook'] as String?)?.trim() ?? '';
+    return outlineText(ch['hook']);
   }
 
   /// 零 LLM 钩子兜底：用章纲自带的钩子写死一句章末悬念，保证不掉钩、不跑题。

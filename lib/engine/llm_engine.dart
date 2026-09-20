@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/generation_engine.dart';
+import 'package:novel_writer/engine/llm_context_brief.dart';
 import 'package:novel_writer/engine/llm_chat_client.dart';
 import 'package:novel_writer/engine/llm_http_errors.dart';
 import 'package:novel_writer/engine/llm_retry.dart';
@@ -87,9 +88,6 @@ class LlmEngine implements GenerationEngine {
     if (!this.config.isConfigured) {
       throw const EngineException('LLM 未配置：请先在设置页填写模型与地址');
     }
-    // 深度优化：复用共享 HttpClient（连接池化）。使用后不关闭，留给下一次请求复用。
-    final HttpClient client = _obtainClient();
-
     // 大纲扩写：把用户填的章节大纲扩写成结构化场景序列，
     // 让正文生成模型不必自己脑补结构（2B 模型尤其受益）。
     // 失败/超时回退原始大纲，不阻塞生成。
@@ -124,7 +122,7 @@ class LlmEngine implements GenerationEngine {
     // 建连与状态校验（429/5xx 在这里退避重来）。
     // 注意：一旦开始收流就不再重试——半章内容重发会变成两段重复正文。
     final HttpClientResponse response =
-        await _openWithRetry(client, config, ctx, cancelToken, onProgress);
+        await _openWithRetry(config, ctx, cancelToken, onProgress);
 
     // 流式读取响应，逐 token 拼接并回报进度。
     // 注意顺序：先按行切分（String），再逐行解析。
@@ -187,7 +185,6 @@ class LlmEngine implements GenerationEngine {
   ///
   /// 返回尚未消费的响应流；调用方一旦开始读正文，就不能再重试了。
   Future<HttpClientResponse> _openWithRetry(
-    HttpClient client,
     GenerationConfig genConfig,
     ContextBundle ctx,
     CancelToken? cancelToken,
@@ -202,7 +199,9 @@ class LlmEngine implements GenerationEngine {
       (int attempt) async {
         final HttpClientRequest request;
         try {
-          request = await _createRequest(client, genConfig, ctx);
+          // 每次尝试都重新获取 client：非 2xx 时共享连接已被强制关闭并置空，
+          // 复用闭包外的旧 client 会抛 "Client is closed"，导致重试必败。
+          request = await _createRequest(_obtainClient(), genConfig, ctx);
         } catch (e) {
           // 请求创建失败时连接可能已损坏，清空让下次重建。
           _sharedClient?.close(force: true);
@@ -521,42 +520,7 @@ class LlmEngine implements GenerationEngine {
       b.writeln('【主角名】${genConfig.protagonistName}');
     }
 
-    if (ctx.characters.isNotEmpty) {
-      b.writeln();
-      b.writeln('【已有角色】');
-      for (final c in ctx.characters) {
-        b.writeln('- ${c.name}（${c.role}）：${c.traits}');
-        if (c.background.isNotEmpty) b.writeln('  背景：${c.background}');
-        if (c.dialogueStyle.isNotEmpty) {
-          b.writeln('  说话风格：${c.dialogueStyle}');
-        }
-      }
-    }
-    if (ctx.worldSettings.isNotEmpty) {
-      b.writeln();
-      b.writeln('【世界观设定】');
-      for (final w in ctx.worldSettings) {
-        b.writeln('- ${w.title}（${w.category}）：${w.content}');
-      }
-    }
-    if (genConfig.continuation != null && genConfig.continuation!.isNotEmpty) {
-      b.writeln();
-      b.writeln('【上一章结尾（请承接此情节继续，不要复述）】');
-      b.writeln(genConfig.continuation);
-    }
-    if (ctx.plotSummary.trim().isNotEmpty) {
-      b.writeln();
-      b.writeln('【前情提要（最近的剧情进展，保持伏笔与人物弧光一致）】');
-      b.writeln(ctx.plotSummary.trim());
-    }
-    if (ctx.foreshadowing.trim().isNotEmpty) {
-      b.writeln();
-      b.writeln('【伏笔账本（未回收的伏笔，按埋设顺序）】');
-      b.writeln(ctx.foreshadowing.trim());
-      b.writeln('- 若本章大纲与某条伏笔相关，应自然推进或回收该伏笔；');
-      b.writeln('- 其余伏笔不得与之矛盾，也不要强行提前回收；');
-      b.writeln('- 本章埋设的新悬念须清晰可追踪，不要随手弃坑。');
-    }
+    b.write(LlmContextBrief.contextBlock(genConfig, ctx));
     if (ctx.outline.trim().isNotEmpty) {
       b.writeln();
       b.writeln('【本章大纲（按此顺序推进）】');

@@ -362,6 +362,52 @@ void main() {
       expect(engine.calls.single.plotSummary, isEmpty);
     });
 
+    test('单章续写保留调用方前情提要，下一任务不残留', () async {
+      final engine = _FakeEngine();
+      final vm = GenerateViewModel(
+        engine,
+        _FakeChapterRepo(),
+        _FakeSettingRepo(),
+        'n1',
+        _fakeRef(),
+      );
+      const summary = '第1章：林舟负伤离城，钥匙交给苏晚。';
+
+      await vm.generate(
+        _cfg(), _bundle().copyWith(plotSummary: summary), 2, '返城',
+      );
+      expect(vm.state.error, isNull);
+      expect(engine.calls.single.plotSummary, summary);
+
+      await vm.generate(_cfg(), _bundle(), 1, '新的任务');
+      expect(vm.state.error, isNull);
+      expect(engine.calls.last.plotSummary, isEmpty);
+    });
+
+    test('多章续写将既有摘要与新生成章节合并，最多保留三条', () async {
+      final engine = _FakeEngine();
+      final vm = GenerateViewModel(
+        engine,
+        _FakeChapterRepo(),
+        _FakeSettingRepo(),
+        'n1',
+        _fakeRef(),
+      );
+      await vm.generate(
+        _cfg(chapterCount: 2),
+        _bundle().copyWith(
+          plotSummary: '旧章甲\r\n\r\n旧章乙\n  旧章丙  \n旧章丁\n',
+        ),
+        5,
+        '重逢',
+      );
+
+      expect(vm.state.error, isNull);
+      expect(engine.calls, hasLength(2));
+      expect(engine.calls.first.plotSummary, '旧章乙\n旧章丙\n旧章丁');
+      expect(engine.calls.last.plotSummary, '旧章丙\n旧章丁\n第5章：第1章正文');
+    });
+
     test('多章连写：从第2章起注入前情提要（本地摘要兜底路径）', () async {
       final engine = _FakeEngine();
       final vm = GenerateViewModel(

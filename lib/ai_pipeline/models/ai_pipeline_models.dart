@@ -343,8 +343,12 @@ class AiPipelineTask {
   /// 已生成章节数。
   int get chapterCount => chapters.length;
 
-  /// 书名（大纲产出后可用）。
-  String get title => (outline['title'] as String?) ?? '未命名';
+  /// 书名（大纲产出后可用）。非字符串类型的 title 不抛错，回退为「未命名」。
+  String get title {
+    final dynamic v = outline['title'];
+    if (v is String && v.trim().isNotEmpty) return v.trim();
+    return '未命名';
+  }
 
   /// 是否可续跑（有进度且未完成）。
   bool get resumable =>

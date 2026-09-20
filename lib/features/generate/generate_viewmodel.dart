@@ -219,9 +219,19 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
       clearConsistencyReport: true,
     );
     final int count = config.chapterCount < 1 ? 1 : config.chapterCount;
-    // 前情提要从零积累：每次生成任务独立，不跨任务残留。
+    // 每次任务清理内部累积，但保留调用方提供的既有剧情。
+    // 否则续写已有小说（包括单章生成）会在第一章丢失前情提要。
     _plotSummaryLines.clear();
-    _plotSummary = '';
+    _plotSummaryLines.addAll(
+      ctx.plotSummary
+          .split(RegExp(r'[\r\n]+'))
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty),
+    );
+    if (_plotSummaryLines.length > 3) {
+      _plotSummaryLines.removeRange(0, _plotSummaryLines.length - 3);
+    }
+    _plotSummary = _plotSummaryLines.join('\n');
     final List<String> outlineParts = config.volumeOutline
         .split(RegExp(r'[\r\n]+'))
         .map((s) => s.trim())

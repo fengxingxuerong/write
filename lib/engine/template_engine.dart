@@ -186,10 +186,11 @@ class _TemplateEngineCore {
 
   /// 每个句池的去重窗口，防止短距离内句子重复。
   ///
-  /// 各功能句池扩容后均 ≤24 条，窗口取 24 可在池内完整轮转一圈
-  /// 才允许重复：固定句（无占位符模板）整章至多出现一次，从机制上
-  /// 钉住闸门的「整句重复率 >1%」硬指标。
-  static const int _poolDedupeWindow = 24;
+  /// 各功能句池扩容后最大 40 条（对白攻防），窗口取 48 覆盖全部句池：
+  /// 每条模板整章至多出现一次，从机制上钉死闸门的
+  /// 「整句重复率 >1%」硬指标（旧窗口 24 小于扩容后的对白池，
+  /// 同一攻防模板同章可复用，是重复率超标的主因）。
+  static const int _poolDedupeWindow = 48;
 
   /// 句池使用记录（按池名分桶的循环缓冲）。
   final Map<String, List<String>> _recentByPool = <String, List<String>>{};
@@ -202,19 +203,80 @@ class _TemplateEngineCore {
   final Set<String> _emitted = <String>{};
 
   /// 取一条节拍句并填充占位符；填充结果若与本章已有整句重复则换一条重试。
-  String _nextBeatSentence(String stage) {
-    // 重试 12 次：对话池（24 模板 × 22 内容）与各功能句池的组合空间
+  /// 取一条节拍句并登记查重。
+  ///
+  /// [forceDialogue] 为 true 时只从对白攻防池取样：用于首屏保底与
+  /// 对白占比保底（番茄硬指标：首段须有对白、引号内字数占比 ≥18%）。
+  /// [forceTension] 为 true 时只从首屏冲突池取样：用于首屏冲突信号保底
+  /// （闸门要求首屏 300 字内出现威胁/要求/损失类信号）。
+  String _nextBeatSentence(
+    String stage, {
+    bool forceDialogue = false,
+    bool forceTension = false,
+  }) {
+    // 重试 12 次：对话池（64 模板 × 71 内容）与各功能句池的组合空间
     // 很大，短距离撞句几乎总能通过重选绕开。
     for (int attempt = 0; attempt < 12; attempt++) {
-      final String filled = _fill(_pickBeat(stage));
+      final String filled =
+          _fill(_pickBeatByFlag(forceDialogue, forceTension, stage));
       if (_emitted.add(filled)) {
+        _countBeat(filled);
         return filled;
       }
     }
     // 兜底：句池组合已接近耗尽，接受一次重复，不阻塞生成。
-    final String last = _fill(_pickBeat(stage));
+    final String last =
+        _fill(_pickBeatByFlag(forceDialogue, forceTension, stage));
     _emitted.add(last);
+    _countBeat(last);
     return last;
+  }
+
+  /// 按强制标志选模板池：对白 > 首屏冲突 > 阶段加权。
+  String _pickBeatByFlag(bool forceDialogue, bool forceTension, String stage) {
+    if (forceDialogue) {
+      return _pickFromPool('beat:dialoguePairs', _dialoguePairPool);
+    }
+    if (forceTension) {
+      return _pickFromPool('beat:openingConflict', openingConflictSentences);
+    }
+    return _pickBeat(stage);
+  }
+
+  /// 统计对白/旁白句数（用于对白占比保底）。
+  void _countBeat(String filled) {
+    _totalBeats++;
+    if (filled.contains('「')) _dialogueBeats++;
+  }
+
+  /// 当前对白句占比是否偏低（低于 1/3 就该在下一句补一次对白）。
+  ///
+  /// 番茄闸门按「引号内字数 / 总字数」量对白占比，下限 18%、建议 25~45%；
+  /// 纯靠阶段权重随机取样时，实测约两成章次会掉到 17% 以下被闸门判重写。
+  bool get _needsDialogue => _dialogueBeats * 3 < _totalBeats;
+
+  /// 对白攻防池（强制对白取样用；与 beatCorpus.dialoguePairs 同源）。
+  List<String> get _dialoguePairPool => corpus.beatCorpus.dialoguePairs;
+
+  /// 用上一章结尾文本预置已用句集合（跨章查重种子）。
+  ///
+  /// 来源有三：`continuation`（上一章末尾 300 字）、`ctx.plotSummary`
+  /// （前情提要：最近 2~3 章的章名 + 结尾片段）、`ctx.foreshadowing`
+  /// （伏笔账本）。只收长度 ≥10 的完整句：短句（「他顿了顿。」）是节奏
+  /// 手段，跨章复用不算事故，全部禁掉反而会压缩可用句式。
+  void _seedEmittedFromContinuation() {
+    final List<String> sources = <String>[
+      config.continuation ?? '',
+      ctx.plotSummary,
+      ctx.foreshadowing,
+    ];
+    for (final String src in sources) {
+      if (src.trim().isEmpty) continue;
+      for (final String raw in src.split(RegExp(r'[。！？…\n]+'))) {
+        final String s = raw.trim();
+        if (s.length >= 10) _emitted.add(s);
+      }
+    }
   }
 
   // ---- 章节级场景状态（整章锚定，保证场景与人物一致） ----
@@ -230,6 +292,19 @@ class _TemplateEngineCore {
 
   /// 本章主场景地名。
   late String _scenePlace;
+
+  /// 本章已写段落数（首段对白保底用）。
+  int _paragraphsWritten = 0;
+
+  /// 本章已写句数中属对白的句数（对白占比保底用）。
+  int _dialogueBeats = 0;
+
+  /// 本章已写句数（对白占比保底用）。
+  int _totalBeats = 0;
+
+  /// 正文是否已开始（章节第一句已落笔）。用于章首避雷判断，
+  /// 不能用 `_emitted.isEmpty`——续写章的 `_emitted` 会预置上一章末尾句。
+  bool _chapterStarted = false;
 
   /// 本章关联势力。
   late String _sceneFaction;
@@ -256,12 +331,45 @@ class _TemplateEngineCore {
   /// 注意：不得包含 [FanqieGateChecker._leak]（及 scripts/fanqie_review.py
   /// PROMPT_LEAK）里的短语——引导语会大量出现在正文里，撞上泄漏黑名单
   /// 会被整章判「提示词残留」。
+  ///
+  /// 2026-09 写手优化：旧版仅 5 条，平均每 2~3 段就复用一次同一引导语，
+  /// 是成书「机械感」的第一来源。扩到 25 条并覆盖五种句法形态
+  /// （时间锚点 / 场所动作 / 声音先至 / 心理预期 / 承接转折），
+  /// 且一律不含「雨雪霜雾风」五字（避开闸门的「以天气起手」首屏红线），
+  /// 取样经 [_pickFromPool] 分池去重：窗口 24 内不重复。
   static const List<String> _hintLeadIns = <String>[
+    // —— 时间锚点 ——
     '这一日，',
     '说来也巧，',
+    '晌午刚过，',
+    '天刚擦黑，',
+    '夜色渐深，',
+    '第二遍钟响时，',
+    '半炷香后，',
+    '出事的那天，',
+    // —— 场所 / 动作切入 ——
+    '门帘一掀，',
+    '转过影壁，',
+    '人还没坐稳，',
+    '出了这道门，',
+    '酒过三巡，',
+    '看热闹的人还没散，',
+    // —— 声音 / 动静先至 ——
+    '话音未落，',
+    '靴声由远及近，',
+    '没人应声，',
+    '没人敢先开口，',
+    // —— 心理 / 预期 ——
     '谁都没料到，',
+    '不出所料，',
+    '谁都看得出，',
+    '到了这个地步，',
+    // —— 承接 / 转折 ——
     '变故来得毫无征兆——',
     '一切要从那件事说起：',
+    '事情坏就坏在，',
+    '偏巧这时候，',
+    '消息比人先到——',
   ];
 
   // 通用填充词（题材无关的物件/动作/情绪/对话）。
@@ -277,15 +385,26 @@ class _TemplateEngineCore {
     '心中一紧', '暗自忖度', '不胜唏嘘', '隐隐不安', '豁然开朗', '怅然若失',
     '肃然起敬', '五味杂陈', '如释重负', '波澜暗生',
   ];
+
+  /// 情绪名词池（供 `{emotionN}` 占位符）：只收可作「把…压下去 / 咽了回去」
+  /// 宾语的名词性情绪词。旧版复用谓词式情绪词（如「心中一紧」）会产出
+  /// 「把心中一紧咽了回去」这类病句。
+  static const List<String> _emotionNouns = <String>[
+    '杀意', '火气', '悔意', '怯意', '酸楚', '怨气', '惊疑', '戾气',
+    '暖意', '杀气', '疑虑', '不甘', '怒火', '委屈', '兴奋', '忌惮',
+  ];
+
+  /// 对话内容池：不含引号与人名槽（被称呼者用 {addr}，由引擎按
+  /// 「说话人之外的在场者」解析，杜绝「陆沉对陆沉说话」式自指）。
   static const List<String> _dialogues = <String>[
-    '「{name}，你当真要走？」',
+    '「{addr}，你当真要走？」',
     '「此事，绝非表面那般简单。」',
     '「你可知自己惹了多大的麻烦？」',
     '「放心，有我在。」',
     '「若你执意如此，便别怪我不念旧情。」',
     '「有些话，我藏了很久。」',
     '「这世间，值得你守护的，还剩什么？」',
-    '「{name}，你可想清楚了？」',
+    '「{addr}，你可想清楚了？」',
     '「哼，就凭你？」',
     '「这一次，我不会再让了。」',
     '「账，总要有人来算。」',
@@ -300,7 +419,7 @@ class _TemplateEngineCore {
     '「三日之内，我要一个答案。」',
     '「你我之间，还没完。」',
     '「话我放这儿，你最好记住。」',
-    '「{name}，你我之间的恩怨，今日一并了断。」',
+    '「{addr}，你我之间的恩怨，今日一并了断。」',
     '「我劝你三思，这不是你能插手的事。」',
     '「这盘棋下到今天，该到落子的时候了。」',
     '「话已至此，你我从此桥归桥，路归路。」',
@@ -310,6 +429,43 @@ class _TemplateEngineCore {
     '「你走吧，趁我还没改变主意。」',
     '「记住今天这个日子，也记住你欠我什么。」',
     '「若还有再见之日，我希望你是站着的。」',
+    // —— 2026-09 写手优化：扩容 + 口语化/信息增量 ——
+    '「这个价钱，我不还价。」',
+    '「今晚子时，后山见。」',
+    '「我数到三，把手里的东西放下。」',
+    '「你这一身伤，怎么来的？」',
+    '「这一趟，值了。」',
+    '「门外的脚步声，你听见了吗？」',
+    '「明人不说暗话，我要见你们主事的人。」',
+    '「一半是真，一半是假，你自己品。」',
+    '「这么大的事，你怎么不早说？」',
+    '「他给的价，我翻倍。」',
+    '「这笔账，我替你记着。」',
+    '「退一步是海阔天空——可退了，就再没有站回去的机会。」',
+    '「{addr}的手艺，我信不过第二个人。」',
+    '「我等这一天，等了三年。」',
+    // —— 2026-09 写手优化：中长台词（抬高引号内字数占比，逼近番茄 25~45%）——
+    '「你进门的时候我就在看了。脚步比上次稳，心态也比上次沉，这不像是来求人的。」',
+    '「东西我可以给，但你要想清楚——拿了它，往后就没有回头路了。」',
+    '「我不管你和他们之间有过什么。我只认一件事：你答应过的事，什么时候兑现。」',
+    '「这世上的便宜没有白占的。你要么现在把话说明白，要么今晚就走。」',
+    '「我不问你从哪来，也不问你为什么。你只要告诉我，这趟走完，还会不会回来。」',
+    '「他们都以为你死在那一年。我替你把名字从名册上抹了。这笔账，你打算怎么还。」',
+    '「天色不早，你再不定主意，门外那些人可就要进来替你定了。」',
+    '「我劝你少打听。有些事知道得越多，活着的日子就越短。」',
+    // —— 原对白攻防模板的硬编码尾句移入本池轮转（压整句重复率）——
+    '别让我说第二遍。',
+    '装，接着装。',
+    '信我一次。',
+    '这话，你留着骗别人吧。',
+    '你要是有个三长两短，我怎么交代？',
+    '你，听明白了？',
+    '你自己掂量吧。',
+    '可惜，你猜错了。',
+    '再说一遍试试。',
+    '我数三声。',
+    '东西你收好。',
+    '就凭你们？',
   ];
 
   /// 主角名：优先使用指定名 -> 复用设定首角色 -> 随机姓名。
@@ -368,10 +524,32 @@ class _TemplateEngineCore {
     return rng.chance(0.5) ? _rival : _ally;
   }
 
-  String _valueFor(String key) {
+  String _valueFor(String key, Set<String> usedNames) {
     switch (key) {
       case 'name':
-        return _sentenceName();
+        // 第一个 {name} 槽按权重取（75% 主角）；同一模板内出现第二个
+        // {name} 时换人，避免「A 塞给 A」式自指。
+        if (usedNames.isEmpty) {
+          final String first = _sentenceName();
+          usedNames.add(first);
+          return first;
+        }
+        final List<String> remaining = <String>[_hero, _rival, _ally]
+            .where((String p) => !usedNames.contains(p))
+            .toList();
+        final String next = remaining.isNotEmpty
+            ? rng.pick(remaining)
+            : _hero;
+        usedNames.add(next);
+        return next;
+      case 'addr':
+        // 被称呼者：优先主角（对手喊主角最常见），排除本句已出现的姓名。
+        final List<String> candidates = <String>[_hero, _rival, _ally]
+            .where((String n) => !usedNames.contains(n))
+            .toList();
+        final String addr = candidates.isNotEmpty ? candidates.first : _hero;
+        usedNames.add(addr);
+        return addr;
       case 'rival':
         return _rival;
       case 'ally':
@@ -387,16 +565,18 @@ class _TemplateEngineCore {
         return rng.pick(_actions);
       case 'emotion':
         return rng.pick(_emotions);
+      case 'emotionN':
+        return rng.pick(_emotionNouns);
       case 'dialogue':
         // 契约（见 beat_corpus 文档）：{dialogue} 应为「不含引号」的对话内容。
         // 语料 _dialogues 历史上自带「」，直接替换会与句式模板的外层引号
         // 叠成「「…」。」嵌套；这里统一剥掉内层引号与句尾终结标点，
         // 由模板自己决定追加的标点（避免「…？。」「…。。」连标）。
-        // 对话内容也走句池去重：22 条内容若每次独立抽取，同一句台词会
-        // 在不同句式模板里反复出现，直接推高整句重复率。
+        // 对话内容也走句池去重：同一句台词不在不同句式模板里反复出现，
+        // 直接压低整句重复率。被称呼者 {addr} 排除本句已用姓名。
         final String line =
             _pickFromPool('dialogue-content', _dialogues)
-                .replaceAll('{name}', _hero);
+                .replaceAll('{addr}', _pickAddr(usedNames));
         return line
             .replaceAll('「', '')
             .replaceAll('」', '')
@@ -406,11 +586,64 @@ class _TemplateEngineCore {
     }
   }
 
-  /// 用语料填充句式模板中的占位符。
-  String _fill(String template) {
-    return template.replaceAllMapped(RegExp(r'\{(\w+)\}'), (Match m) {
-      return _valueFor(m.group(1)!);
+  /// 取被称呼者：偏好主角（对手对主角喊话是最常见的对话形态），
+  /// 但排除本句已用的姓名，杜绝「说话人喊自己」。
+  String _pickAddr(Set<String> usedNames) {
+    for (final String candidate in <String>[_hero, _rival, _ally]) {
+      if (!usedNames.contains(candidate)) return candidate;
+    }
+    return _hero;
+  }
+
+  /// 修正「说话人自指」：句首主语与对白引号内的人名相同
+  /// （「陆沉摇头：『陆沉，你可想清楚了？』」），把引号内的名字换成另一人。
+  ///
+  /// 只认句首主语形态，避免误伤合法的第三方称呼——例如
+  /// 「钟离盯着陆沉看了许久：『陆沉，你当真要走？』」中引号内的
+  /// 「陆沉」是对手喊主角，属正常对话，不得替换。
+  /// （说话人与被称呼者互斥的主逻辑在 `_fill` 的 usedNames 追踪里，
+  /// 本方法是针对句首主语形态的兜底。）
+  String _fixSelfAddress(String text) {
+    if (!text.contains('「')) return text;
+    final RegExp quoteRe = RegExp(r'「([^」]*)」');
+    final List<String> cast = <String>[_hero, _rival, _ally];
+    return text.replaceAllMapped(quoteRe, (Match m) {
+      final String quoted = m.group(1)!;
+      // 引号之前的文本（句首主语所在处）。
+      final String before = text.substring(0, m.start);
+      String inner = quoted;
+      for (final String who in cast) {
+        if (who.isEmpty || !quoted.contains(who)) continue;
+        // 仅当该名出现在引号之前、且是句首主语时才算自指。
+        if (!before.contains(who)) continue;
+        final int pos = before.indexOf(who);
+        if (pos > 2) continue; // 不是句首（前面还有别的字），跳过
+        String? other;
+        for (final String n in cast) {
+          if (n.isNotEmpty && n != who && !quoted.contains(n)) {
+            other = n;
+            break;
+          }
+        }
+        if (other == null) continue;
+        inner = inner.replaceAll(who, other);
+      }
+      return '「$inner」';
     });
+  }
+
+  /// 用语料填充句式模板中的占位符。
+  ///
+  /// 同一次填充内追踪已用姓名：多个 `{name}` 槽互不重名（修「A 塞给 A」）；
+  /// 填充后再跑一遍自指修正（对白内说话人名字 → 换人）。
+  String _fill(String template) {
+    final Set<String> usedNames = <String>{};
+    final String filled = template.replaceAllMapped(RegExp(r'\{(\w+)\}'), (
+      Match m,
+    ) {
+      return _valueFor(m.group(1)!, usedNames);
+    });
+    return _fixSelfAddress(filled);
   }
 
   /// 从指定句池取一条模板：优先避开最近使用过的（分池去重窗口）。
@@ -462,7 +695,7 @@ class _TemplateEngineCore {
   /// 把节拍提示织入正文：引导语 + 事件化提示 + 一条匹配阶段的功能句。
   /// 仅用于**用户自写的大纲要点**（点题句有真实信息量）。
   String _weaveHint(String hint, String stage) {
-    final String lead = rng.pick(_hintLeadIns);
+    final String lead = _pickFromPool('leadin', _hintLeadIns);
     return '$lead$hint。${_nextBeatSentence(stage)}';
   }
 
@@ -474,15 +707,16 @@ class _TemplateEngineCore {
   String _weaveBeat(String stage) {
     // 章首避雷：第一段若以天气词开头会被闸门判「以天气起手」，
     // 此处重选引导语与首句，直到避开（有限次，保底不阻塞）。
-    final bool atChapterStart = _emitted.isEmpty;
-    String lead = rng.pick(_hintLeadIns);
+    final bool atChapterStart = !_chapterStarted;
+    _chapterStarted = true;
+    String lead = _pickFromPool('leadin', _hintLeadIns);
     String tail = _nextBeatSentence(stage);
     for (int attempt = 0;
         atChapterStart &&
             attempt < 5 &&
             _weatherOpenRe.hasMatch('$lead$tail');
         attempt++) {
-      lead = rng.pick(_hintLeadIns);
+      lead = _pickFromPool('leadin', _hintLeadIns);
       tail = _nextBeatSentence(stage);
     }
     return '$lead$tail';
@@ -494,13 +728,16 @@ class _TemplateEngineCore {
     if (cont == null || cont.trim().isEmpty) return;
     // 章首避雷：开头 16 字内出现雨/雪/霜/雾/风会被闸门判「以天气起手」
     // （首屏硬指标）。过渡段紧跟正文第一行，优先选非天气起手的模板。
-    String tpl = rng.pick(_continuationOpeners);
+    // 取样走 [_pickFromPool]：过渡段模板也不得在窗口内复用（旧版裸 rng.pick
+    // 会让同一过渡句反复出现在多章开头）。
+    String filled = _fill(_pickFromPool('continuation', _continuationOpeners));
     for (int attempt = 0;
-        attempt < 5 && _weatherOpenRe.hasMatch(_fill(tpl));
+        attempt < 5 && _weatherOpenRe.hasMatch(filled);
         attempt++) {
-      tpl = rng.pick(_continuationOpeners);
+      filled = _fill(_pickFromPool('continuation', _continuationOpeners));
     }
-    buffer.write(_fill(tpl));
+    _emitted.add(filled);
+    buffer.write(filled);
     buffer.writeln();
     buffer.writeln();
   }
@@ -528,6 +765,17 @@ class _TemplateEngineCore {
     buffer.write(_weaveBeat(stage));
     current = AppConstants.countWords(buffer.toString());
     if (current >= target || isCancelled()) return current;
+
+    // 首屏保底（番茄硬指标）：首段必须同时具备①冲突信号②对白，且必须
+    // 落在闸门判定的前 300 字内。续写章的过渡段会占掉一部分字窗口，
+    // 因此紧跟在点题句之后写入，而不是等到段尾再补（旧版段尾补，实测
+    // 常把冲突信号挤出 300 字窗口，被判「无冲突信号」）。
+    if (_paragraphsWritten == 0) {
+      buffer.write(_nextBeatSentence('转', forceTension: true));
+      buffer.write(_nextBeatSentence('承', forceDialogue: true));
+      current = AppConstants.countWords(buffer.toString());
+      if (current >= target || isCancelled()) return current;
+    }
     await Future<dynamic>.delayed(Duration.zero);
 
     // 节拍句：按阶段加权取样叙事功能句组。
@@ -538,7 +786,10 @@ class _TemplateEngineCore {
     };
     for (int i = 0; i < sentences; i++) {
       if (isCancelled()) return current;
-      buffer.write(_nextBeatSentence(stage));
+      // 对白占比保底：低于 1/3 时本句强制取对白攻防模板，
+      // 使章内对白占比稳定落在番茄达标区间（避免运气差掉到 17%）。
+      buffer.write(_nextBeatSentence(stage, forceDialogue: _needsDialogue));
+      _chapterStarted = true;
       current = AppConstants.countWords(buffer.toString());
       resultPort.send(GenerationProgress(
         charsWritten: current,
@@ -550,6 +801,7 @@ class _TemplateEngineCore {
       await Future<dynamic>.delayed(Duration.zero);
     }
 
+    _paragraphsWritten++;
     buffer
       ..writeln()
       ..writeln();
@@ -597,11 +849,23 @@ class _TemplateEngineCore {
       ));
       if (current >= target) break;
 
-      // 展开：与该要点阶段匹配的节拍句。
+      // 首屏保底（番茄硬指标）：首段必须同时具备①冲突信号②对白，
+    // 且落在前 300 字内。续写章的过渡段占掉部分字窗口，故紧跟在
+    // 点题句之后写入。与 _writeStageParagraph 同口径。
+    if (_paragraphsWritten == 0) {
+      buffer.write(_nextBeatSentence('转', forceTension: true));
+      buffer.write(_nextBeatSentence('承', forceDialogue: true));
+      current = AppConstants.countWords(buffer.toString());
+      if (current >= target) break;
+    }
+
+    // 展开：与该要点阶段匹配的节拍句。
       final int extra = rng.range(2, 5);
       for (int i = 0; i < extra; i++) {
         if (isCancelled()) return current;
-        buffer.write(_nextBeatSentence(beat.stage));
+        // 对白占比保底（与 _writeStageParagraph 同口径）。
+        buffer.write(_nextBeatSentence(beat.stage, forceDialogue: _needsDialogue));
+        _chapterStarted = true;
         current = AppConstants.countWords(buffer.toString());
         resultPort.send(GenerationProgress(
           charsWritten: current,
@@ -612,6 +876,7 @@ class _TemplateEngineCore {
         await Future<dynamic>.delayed(Duration.zero);
       }
 
+      _paragraphsWritten++;
       buffer
         ..writeln()
         ..writeln();
@@ -639,6 +904,12 @@ class _TemplateEngineCore {
 
     // 锚定整章场景与人物，保证叙事一致性。
     _setupChapterScene();
+
+    // 跨章查重种子：把上一章结尾（continuation，通常 300 字）的句子
+    // 预置进已用句集合。番茄闸门会量「与上一章 8-gram 重合率」，
+    // 而语料是共享句池——不预置种子时，同一批固定句会在相邻两章各出现
+    // 一次，直接把重合率推到 8%~10%。预置后这些句子在本章会被重选绕开。
+    _seedEmittedFromContinuation();
 
     final StringBuffer buffer = StringBuffer();
     int current = 0;
@@ -704,7 +975,14 @@ class _TemplateEngineCore {
       }
       if (current >= target || isCancelled()) break;
       if (config.style == WritingStyle.detailed && rng.chance(0.5)) {
-        buffer.write(_fill(_pickAmbient()));
+        // 氛围段也进查重：细腻文风下穿插频繁，旧版不查重会与正文撞句。
+        String ambient = _fill(_pickAmbient());
+        for (int attempt = 0; attempt < 5 && _emitted.contains(ambient);
+            attempt++) {
+          ambient = _fill(_pickAmbient());
+        }
+        _emitted.add(ambient);
+        buffer.write(ambient);
         buffer
           ..writeln()
           ..writeln();
@@ -732,8 +1010,13 @@ class _TemplateEngineCore {
     }
 
     // 章末钩子：以悬念句收尾，牵引下一章；仅在字数余量充足时追加。
+    // 钩子同样进查重：钩子与正文句子撞车会被闸门算作整句重复。
     if (!isCancelled()) {
-      final String hook = _fill(corpus.beatCorpus.hook(rng));
+      String hook = _fill(corpus.beatCorpus.hook(rng));
+      for (int attempt = 0; attempt < 5 && _emitted.contains(hook); attempt++) {
+        hook = _fill(corpus.beatCorpus.hook(rng));
+      }
+      _emitted.add(hook);
       final String merged = '${buffer.toString().trim()}$hook';
       if (AppConstants.countWords(merged) <= target + 60) {
         buffer

@@ -83,6 +83,7 @@ class _StubBuilder implements SceneBuilder {
     required String genre,
     required String tone,
     String? prevSceneSummary,
+    String storyContext = '',
   }) async =>
       _scenes;
 }

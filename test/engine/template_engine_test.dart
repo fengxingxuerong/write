@@ -117,6 +117,132 @@ void main() {
       }
     });
 
+    test('同一句内不会出现「A 塞给 A」式自指（槽位互斥回归护栏）', () async {
+      const engine = TemplateEngine();
+      final StringBuffer all = StringBuffer();
+      for (int i = 0; i < 3; i++) {
+        final result = await engine.generate(
+          _buildConfig(targetWords: 1200, randomLevel: 0.2 + i * 0.3),
+          _buildContext(),
+        );
+        all.write(result.content);
+      }
+      final RegExp selfGive = RegExp(r'(\S{2,4})塞给\1|(\S{2,4})递给\1');
+      expect(selfGive.allMatches(all.toString()), isEmpty);
+    });
+
+    test('说话人不会在引号里喊自己（句首主语自指回归护栏）', () async {
+      const engine = TemplateEngine();
+      final StringBuffer all = StringBuffer();
+      for (int i = 0; i < 3; i++) {
+        final result = await engine.generate(
+          _buildConfig(targetWords: 1200, randomLevel: 0.2 + i * 0.3),
+          _buildContext(),
+        );
+        all.write(result.content);
+      }
+      // 「陆沉摇头：「陆沉…」」式自指：句首主语名 + 引号内同名。
+      final RegExp selfTalk = RegExp(r'陆沉[^。\n「」]{0,6}「[^」]*陆沉');
+      expect(selfTalk.allMatches(all.toString()), isEmpty);
+    });
+
+    test('首屏保底：首段含对白且含冲突信号（番茄闸门口径）', () async {
+      const engine = TemplateEngine();
+      // 闸门冲突标记词表（fanqie_gate_checker._conflict 的子集）。
+      const List<String> conflictMarks = <String>[
+        '吼', '骂', '砸', '押', '欠', '逐', '抢', '抓', '审', '封门', '退婚',
+        '断', '碎', '伤', '血', '死', '遗物', '最后', '偿命', '让位', '除名',
+        '罚', '跪', '赔', '欠条', '警告', '期限', '当场', '拉走', '抬走',
+      ];
+      for (final double level in <double>[0.1, 0.4, 0.7, 0.95]) {
+        final result = await engine.generate(
+          _buildConfig(targetWords: 1500, randomLevel: level),
+          _buildContext(),
+        );
+        final String head = result.content.substring(
+          0,
+          result.content.length < 300 ? result.content.length : 300,
+        );
+        expect(head, contains('「'), reason: 'randomLevel=$level：首屏缺对白');
+        expect(
+          conflictMarks.any(head.contains),
+          isTrue,
+          reason: 'randomLevel=$level：首屏无冲突信号 -> $head',
+        );
+      }
+    });
+
+    test('对白占比保底：引号内字数占比达标（≥18%）', () async {
+      const engine = TemplateEngine();
+      for (final double level in <double>[0.2, 0.5, 0.8]) {
+        final result = await engine.generate(
+          _buildConfig(targetWords: 2000, randomLevel: level),
+          _buildContext(),
+        );
+        final String text = result.content;
+        final RegExp quote = RegExp(r'[“"「『]([^”"」』]{1,200})[”"」』]');
+        final StringBuffer inner = StringBuffer();
+        for (final RegExpMatch m in quote.allMatches(text)) {
+          inner.write(m.group(1));
+        }
+        int han(String s) => RegExp(r'[\u4e00-\u9fff]').allMatches(s).length;
+        final int total = han(text);
+        final double ratio = total == 0 ? 0 : han(inner.toString()) / total;
+        expect(ratio, greaterThanOrEqualTo(0.18),
+            reason: 'randomLevel=$level：对白字数占比 ${ratio.toStringAsFixed(3)}');
+      }
+    });
+
+    test('跨章查重种子：续写章不复用上一章结尾的原句', () async {
+      const engine = TemplateEngine();
+      final GenerationResult first = await engine.generate(
+        _buildConfig(targetWords: 1500, randomLevel: 0.35),
+        _buildContext(),
+      );
+      final String tail = first.content.length > 300
+          ? first.content.substring(first.content.length - 300)
+          : first.content;
+      final GenerationResult second = await engine.generate(
+        _buildConfig(targetWords: 1500, randomLevel: 0.35)
+            .copyWith(continuation: tail),
+        _buildContext(),
+      );
+      final Iterable<String> tailSentences = tail
+          .split(RegExp(r'[。！？…\n]+'))
+          .map((String s) => s.trim())
+          .where((String s) => s.length >= 10);
+      for (final String s in tailSentences) {
+        expect(second.content.contains(s), isFalse,
+            reason: '续写章复用了上一章结尾句：$s');
+      }
+    });
+
+    test('段落引导语高度分散（单一开头占比受控）', () async {
+      const engine = TemplateEngine();
+      final result = await engine.generate(
+        _buildConfig(targetWords: 2000, randomLevel: 0.5),
+        _buildContext(),
+      );
+      final List<String> paragraphs = result.content
+          .split(RegExp(r'\n+'))
+          .map((String s) => s.trim())
+          .where((String s) => s.isNotEmpty)
+          .toList();
+      expect(paragraphs.length, greaterThanOrEqualTo(5));
+      // 统计段落开头 4 字前缀的出现频率：25 条引导语 + 分池去重，
+      // 不允许单一开头吃掉超过 1/3 的段落。
+      final Map<String, int> prefixCount = <String, int>{};
+      for (final String p in paragraphs) {
+        final String prefix =
+            p.length >= 4 ? p.substring(0, 4) : p.padRight(4);
+        prefixCount[prefix] = (prefixCount[prefix] ?? 0) + 1;
+      }
+      final int maxFreq =
+          prefixCount.values.reduce((int a, int b) => a > b ? a : b);
+      expect(maxFreq * 3, lessThanOrEqualTo(paragraphs.length + 2),
+          reason: '单一开头频率过高：$prefixCount');
+    });
+
     test('小型目标产出为正且不超限（引擎容量内的稳健断言）', () async {
       const engine = TemplateEngine();
       final result = await engine.generate(
