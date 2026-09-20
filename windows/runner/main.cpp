@@ -27,7 +27,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"墨匠 InkSmith", origin, size)) {
+  // Title uses \u escapes instead of a raw non-ASCII literal: this source file
+  // is UTF-8 without BOM, so MSVC would otherwise decode the literal with the
+  // system code page and show a mojibake title bar (real bug: it rendered as
+  // garbage instead of the brand name). \u58A8\u5320 is the two-character
+  // Chinese brand name; keep this line ASCII-only.
+  if (!window.Create(L"\u58A8\u5320 InkSmith", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
