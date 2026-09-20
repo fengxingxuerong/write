@@ -28,8 +28,8 @@ class SearchHit {
 
 /// 全文搜索服务。
 ///
-/// 零依赖本地搜索：在全部章节正文 + 大纲中查找关键词，
-/// 返回按章节顺序排列的命中项，每个命中带上下文片段。
+/// 零依赖本地搜索：在全部章节**正文**中查找关键词（大纲不参与检索），
+/// 返回按章节顺序排列的命中项，每章取首个命中并附上下文片段。
 class SearchService {
   /// 在整本 [Novel] 中搜索 [query]，返回命中列表。
   List<SearchHit> search(Novel novel, String query) {

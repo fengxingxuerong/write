@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:novel_writer/core/theme/app_tokens.dart';
@@ -24,12 +26,26 @@ class _SearchDialogState extends State<SearchDialog> {
   final SearchService _service = SearchService();
   List<SearchHit> _hits = <SearchHit>[];
 
+  /// 输入防抖句柄：全书扫描是同步 O(正文总长)，逐键直搜在大书上会拖慢输入。
+  Timer? _debounce;
+
   void _search(String query) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 180), () {
+      if (!mounted) return;
+      setState(() => _hits = _service.search(widget.novel, query));
+    });
+  }
+
+  /// 立即搜索（清空按钮等需要即时反馈的场景）。
+  void _searchNow(String query) {
+    _debounce?.cancel();
     setState(() => _hits = _service.search(widget.novel, query));
   }
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -60,7 +76,7 @@ class _SearchDialogState extends State<SearchDialog> {
                         tooltip: '清空',
                         onPressed: () {
                           _controller.clear();
-                          _search('');
+                          _searchNow('');
                         },
                       ),
               ),
