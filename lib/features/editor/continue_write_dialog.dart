@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/models/character.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
@@ -268,7 +269,7 @@ class _ContinueWriteDialogState extends ConsumerState<ContinueWriteDialog> {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 560, maxHeight: 620),
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(AppTokens.s4 + 4),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -290,7 +291,7 @@ class _ContinueWriteDialogState extends ConsumerState<ContinueWriteDialog> {
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               // 目标字数选择（运行中禁用）。
               Wrap(
                 spacing: 8,
@@ -305,32 +306,30 @@ class _ContinueWriteDialogState extends ConsumerState<ContinueWriteDialog> {
                     ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               // 状态区。
               if (_running && _streamText.isEmpty && _error == null)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 8),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: AppTokens.s2),
                   child: Row(
                     children: <Widget>[
-                      SizedBox(
+                      const SizedBox(
                         width: 16,
                         height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       ),
-                      SizedBox(width: 8),
-                      Text('AI 思考中…', style: TextStyle(fontSize: 13)),
+                      const SizedBox(width: 8),
+                      Text('AI 思考中…',
+                          style: AppFonts.text(AppInk.of(context).inkSoft, size: 13)),
                     ],
                   ),
                 ),
               if (_error != null)
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.only(bottom: AppTokens.s2),
                   child: Text(
                     _error!,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Theme.of(context).colorScheme.error,
-                    ),
+                    style: AppFonts.text(Theme.of(context).colorScheme.error, size: 13),
                   ),
                 ),
               // 流式/结果预览区。
@@ -341,18 +340,18 @@ class _ContinueWriteDialogState extends ConsumerState<ContinueWriteDialog> {
                     border: Border.all(
                       color: Theme.of(context).colorScheme.outlineVariant,
                     ),
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(AppTokens.r2),
                   ),
-                  padding: const EdgeInsets.all(10),
+                  padding: const EdgeInsets.all(AppTokens.s2 + 2),
                   child: SingleChildScrollView(
                     controller: _scrollCtrl,
                     child: SelectableText(
                       _streamText,
-                      style: const TextStyle(fontSize: 14, height: 1.5),
+                      style: AppFonts.text(AppInk.of(context).ink, size: 14, height: 1.5),
                     ),
                   ),
                 ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               // 操作按钮。
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,

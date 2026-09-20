@@ -11,6 +11,7 @@ import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/character.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/storage/chapter_repository.dart';
+import 'package:novel_writer/widgets/app_feedback.dart';
 
 /// 编辑器 AI 相关动作与辅助方法（续写 / 修改 / 校对 / 存稿箱）。
 ///
@@ -105,12 +106,8 @@ mixin EditorAiMixin<T extends ConsumerStatefulWidget>
     );
     markDirty();
     onApplyEdit(replaced);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('✅ 已替换选中内容（${AppConstants.countWords(result)} 字）'),
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    AppToast.success(
+        context, '已替换选中内容（${AppConstants.countWords(result)} 字）');
   }
 
   /// 全文 AI 校对：检查错别字/病句，逐条勾选应用修正。
@@ -213,16 +210,12 @@ mixin EditorAiMixin<T extends ConsumerStatefulWidget>
     );
     markDirty();
     onApplyEdit(result);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('✅ 已应用（${AppConstants.countWords(result)} 字）'),
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    AppToast.success(
+        context, '已应用（${AppConstants.countWords(result)} 字）');
   }
 
   void _showSnack(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    AppToast.info(context, msg);
   }
 }

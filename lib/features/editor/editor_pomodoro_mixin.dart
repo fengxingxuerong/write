@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:novel_writer/widgets/app_feedback.dart';
+
 /// 编辑器番茄钟（25 分钟专注计时）。
 ///
 /// 混入 [ConsumerState]，提供番茄钟状态与操作。
@@ -51,9 +53,7 @@ mixin EditorPomodoroMixin<T extends ConsumerStatefulWidget>
         // 使用 addPostFrameCallback 避免在 build 期间触发 SnackBar
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('🍅 番茄钟结束，休息一下吧！')),
-            );
+            AppToast.info(context, '🍅 番茄钟结束，休息一下吧！');
           }
         });
         return;

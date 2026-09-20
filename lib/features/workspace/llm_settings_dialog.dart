@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:novel_writer/core/di/providers.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/engine/llm_chat_client.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
@@ -203,7 +204,7 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
                   });
                 },
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               TextField(
                 controller: _modelCtrl,
                 decoration: InputDecoration(
@@ -215,7 +216,7 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
                 ),
                 enabled: !_testing,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               if (_provider == LlmProvider.openaiCompatible) ...<Widget>[
                 TextField(
                   controller: _apiKeyCtrl,
@@ -227,7 +228,7 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
                   obscureText: true,
                   enabled: !_testing,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: AppTokens.s3),
               ],
               TextField(
                 controller: _baseUrlCtrl,
@@ -237,7 +238,7 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
                 ),
                 enabled: !_testing,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               Text('温度：${_temperature.toStringAsFixed(1)}（越低越稳定）'),
               Slider(
                 value: _temperature,
@@ -247,7 +248,7 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
                 label: _temperature.toStringAsFixed(1),
                 onChanged: _testing ? null : (v) => setState(() => _temperature = v),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               Text('单次最大 Token：$_maxTokens（长文生成建议调高）'),
               Slider(
                 value: _maxTokens.toDouble(),
@@ -273,16 +274,19 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
                 value: _autoMemory,
                 onChanged: (bool v) => setState(() => _autoMemory = v),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               if (_testResult != null) ...<Widget>[
                 Text(
                   _testResult!,
-                  style: TextStyle(
-                    color: _testResult!.startsWith('✅') ? Colors.green : Colors.red,
-                    fontSize: 13,
+                  style: AppFonts.text(
+                    _testResult!.startsWith('✅')
+                        ? AppInk.of(context).success
+                        : AppInk.of(context).danger,
+                    size: 13,
+                    height: 1.4,
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: AppTokens.s2),
               ],
             ],
           ),

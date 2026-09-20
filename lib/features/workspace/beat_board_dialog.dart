@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/engine/corpus/plot_skeleton.dart';
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/novel.dart';
+import 'package:novel_writer/widgets/app_feedback.dart';
 
 /// 节拍板弹窗：可视化章节场景结构，可切换骨架、重写单节拍。
 class BeatBoardDialog extends ConsumerStatefulWidget {
@@ -20,7 +22,7 @@ class BeatBoardDialog extends ConsumerStatefulWidget {
     return showDialog<void>(
       context: context,
       builder: (_) => Dialog(
-        insetPadding: const EdgeInsets.all(24),
+        insetPadding: const EdgeInsets.all(AppTokens.s6),
         child: SizedBox(
           width: 700,
           height: MediaQuery.of(context).size.height * 0.8,
@@ -95,10 +97,11 @@ class _BeatBoardDialogState extends ConsumerState<BeatBoardDialog> {
                 ),
               ),
               Text('骨架 ${_skeletonIdx + 1}/${skeleton.skeletons.length}',
-                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  style: AppFonts.text(AppInk.of(context).inkFaint, size: 12)),
               const SizedBox(width: 8),
               IconButton(
                 icon: const Icon(Icons.close),
+                tooltip: '关闭',
                 onPressed: () => Navigator.of(context).pop(),
               ),
             ],
@@ -110,7 +113,9 @@ class _BeatBoardDialogState extends ConsumerState<BeatBoardDialog> {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Row(
             children: [
-              const Text('切换骨架：', style: TextStyle(fontSize: 12)),
+              Text('切换骨架：',
+                  style:
+                      AppFonts.text(AppInk.of(context).inkSoft, size: 12, height: 1.3)),
               Expanded(
                 child: SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
@@ -118,9 +123,11 @@ class _BeatBoardDialogState extends ConsumerState<BeatBoardDialog> {
                     children: List.generate(skeleton.skeletons.length, (i) {
                       final selected = i == _skeletonIdx;
                       return Padding(
-                        padding: const EdgeInsets.only(right: 6),
+                        padding: const EdgeInsets.only(right: AppTokens.s1 + 2),
                         child: ChoiceChip(
-                          label: Text('${i + 1}', style: const TextStyle(fontSize: 11)),
+                          label: Text('${i + 1}',
+                              style: AppFonts.text(AppInk.of(context).ink,
+                                  size: 11, height: 1.3)),
                           selected: selected,
                           onSelected: (_) => _switchSkeleton(i),
                           visualDensity: VisualDensity.compact,
@@ -134,10 +141,10 @@ class _BeatBoardDialogState extends ConsumerState<BeatBoardDialog> {
           ),
         ),
         // 节拍卡片列表（可拖拽重排序）
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 4, 16, 0),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
           child: Text('长按卡片可拖动排序',
-              style: TextStyle(fontSize: 11, color: Colors.grey)),
+              style: AppFonts.text(AppInk.of(context).inkFaint, size: 11)),
         ),
         Expanded(
           child: ReorderableListView.builder(
@@ -164,7 +171,7 @@ class _BeatBoardDialogState extends ConsumerState<BeatBoardDialog> {
                   return Material(
                     elevation: elevation,
                     color: Colors.transparent,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppTokens.r3),
                     child: child,
                   );
                 },
@@ -178,8 +185,8 @@ class _BeatBoardDialogState extends ConsumerState<BeatBoardDialog> {
                 direction: DismissDirection.endToStart,
                 background: Container(
                   alignment: Alignment.centerRight,
-                  padding: const EdgeInsets.only(right: 20),
-                  color: Colors.red,
+                  padding: const EdgeInsets.only(right: AppTokens.s6),
+                  color: AppInk.of(context).danger,
                   child: const Icon(Icons.delete, color: Colors.white),
                 ),
                 onDismissed: (_) {
@@ -192,7 +199,7 @@ class _BeatBoardDialogState extends ConsumerState<BeatBoardDialog> {
         ),
         // 底部操作
         Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(AppTokens.s3),
           child: Row(
             children: [
               TextButton.icon(
@@ -224,45 +231,51 @@ class _BeatBoardDialogState extends ConsumerState<BeatBoardDialog> {
   }
 
   Widget _beatCard(int index, PlotBeat beat) {
-    final colors = [
-      Colors.lightBlue.shade100,
-      Colors.lightGreen.shade100,
-      Colors.amber.shade100,
-      Colors.pink.shade100,
+    final AppInk ink = AppInk.of(context);
+    // 起承转合 → 语义色循环（主色/成功/警告/强调），深浅两套自动适配。
+    final List<Color> stageColors = <Color>[
+      ink.primary,
+      ink.success,
+      ink.warn,
+      ink.accent,
     ];
-    final icons = [
+    const List<IconData> icons = <IconData>[
       Icons.play_circle_outline,
       Icons.trending_up,
       Icons.sync_alt,
       Icons.flag_outlined,
     ];
-    final color = colors[index % colors.length];
-    final icon = icons[index % icons.length];
+    final Color stageColor = stageColors[index % stageColors.length];
+    final IconData icon = icons[index % icons.length];
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      color: color,
+      margin: const EdgeInsets.only(bottom: AppTokens.s3),
+      color: stageColor.withValues(alpha: ink.dark ? 0.14 : 0.10),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+        padding: const EdgeInsets.fromLTRB(
+            AppTokens.s4, AppTokens.s3, AppTokens.s3, AppTokens.s3),
         child: Row(
           children: [
             ReorderableDragStartListener(
               index: index,
-              child: const Padding(
-                padding: EdgeInsets.only(right: 8),
-                child: Icon(Icons.drag_handle, size: 18, color: Colors.grey),
+              child: Padding(
+                padding: const EdgeInsets.only(right: AppTokens.s2),
+                child: Icon(Icons.drag_handle, size: 18, color: ink.inkFaint),
               ),
             ),
             Container(
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.7),
-                borderRadius: BorderRadius.circular(8),
+                color: ink.surface,
+                borderRadius: BorderRadius.circular(AppTokens.r2),
+                border: Border.all(
+                    color: stageColor.withValues(alpha: 0.35),
+                    width: AppTokens.hairline),
               ),
-              child: Icon(icon, color: Colors.black54),
+              child: Icon(icon, color: stageColor),
             ),
-            const SizedBox(width: 16),
+            const SizedBox(width: AppTokens.s4),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -270,26 +283,29 @@ class _BeatBoardDialogState extends ConsumerState<BeatBoardDialog> {
                   Row(
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: AppTokens.s2,
+                            vertical: AppTokens.s1 - 2),
                         decoration: BoxDecoration(
-                          color: Colors.black87,
-                          borderRadius: BorderRadius.circular(4),
+                          color: stageColor,
+                          borderRadius: BorderRadius.circular(AppTokens.r1),
                         ),
                         child: Text(
                           '第${index + 1}拍 · ${beat.stage}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
+                          style: AppFonts.text(
+                            ink.dark ? ink.paper : ink.onPrimary,
+                            size: 12,
+                            weight: FontWeight.w600,
+                            height: 1.3,
                           ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: AppTokens.s1 + 2),
                   Text(
                     beat.hint,
-                    style: const TextStyle(fontSize: 14),
+                    style: AppFonts.text(ink.ink, size: 14, height: 1.5),
                   ),
                 ],
               ),
@@ -344,9 +360,7 @@ class _BeatBoardDialogState extends ConsumerState<BeatBoardDialog> {
     try {
       final outline = _beats.map((b) => '${b.stage}：${b.hint}').join(' → ');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('请前往一键生成页使用以下骨架：$outline')),
-        );
+        AppToast.info(context, '请前往一键生成页使用以下骨架：$outline');
         Navigator.of(context).pop(outline);
       }
     } finally {

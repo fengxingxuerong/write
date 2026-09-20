@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:novel_writer/core/theme/app_tokens.dart';
+
 /// 分支节点：一个抉择点对后续情节的影响。
 class BranchNode {
   final String label;
@@ -24,42 +26,46 @@ class BranchTreeDialog {
   }) {
     return showDialog<BranchNode>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Row(
-          children: [
-            const Icon(Icons.account_tree, size: 22),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text('分支抉择：$chapterTitle',
-                  style: const TextStyle(fontSize: 16)),
-            ),
-          ],
-        ),
+      builder: (BuildContext ctx) {
+        final AppInk ink = AppInk.of(ctx);
+        return AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.account_tree, size: 22, color: ink.primary),
+              const SizedBox(width: AppTokens.s2),
+              Expanded(
+                child: Text('分支抉择：$chapterTitle',
+                    style: AppFonts.text(ink.ink,
+                        size: 16, weight: FontWeight.w600, height: 1.4)),
+              ),
+            ],
+          ),
         content: SizedBox(
           width: 500,
           height: 350,
           child: ListView.builder(
             itemCount: options.length,
-            itemBuilder: (context, index) {
-              final opt = options[index];
-              final isSelected = opt.isSelected;
+            itemBuilder: (BuildContext context, int index) {
+              final BranchNode opt = options[index];
+              final bool isSelected = opt.isSelected;
               return Card(
-                margin: const EdgeInsets.only(bottom: 10),
+                margin: const EdgeInsets.only(bottom: AppTokens.s3),
                 color: isSelected
-                    ? Theme.of(context).colorScheme.primaryContainer
+                    ? ink.primary.withValues(alpha: ink.dark ? 0.20 : 0.10)
                     : null,
                 child: InkWell(
                   onTap: () {
                     // 单选
-                    for (final o in options) {
+                    for (final BranchNode o in options) {
                       o.isSelected = false;
                     }
                     opt.isSelected = true;
                     // 触发重建（简化版：使用 StatefulBuilder 不足以跨 widget，这里直接关闭）
                     Navigator.pop(ctx, opt);
                   },
+                  borderRadius: AppTokens.radiusCard,
                   child: Padding(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(AppTokens.s3),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -70,38 +76,41 @@ class BranchTreeDialog {
                                   ? Icons.radio_button_checked
                                   : Icons.radio_button_unchecked,
                               size: 18,
-                              color: isSelected
-                                  ? Theme.of(context).colorScheme.primary
-                                  : null,
+                              color: isSelected ? ink.primary : ink.inkFaint,
                             ),
-                            const SizedBox(width: 8),
+                            const SizedBox(width: AppTokens.s2),
                             Text(
                               opt.label,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 15),
+                              style: AppFonts.text(ink.ink,
+                                  size: 15,
+                                  weight: FontWeight.w600,
+                                  height: 1.4),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: AppTokens.s1),
                         Text(opt.description,
-                            style: const TextStyle(fontSize: 13)),
-                        const SizedBox(height: 6),
+                            style: AppFonts.text(ink.inkSoft,
+                                size: 13, height: 1.5)),
+                        const SizedBox(height: AppTokens.s1 + 2),
                         Container(
-                          padding: const EdgeInsets.all(6),
+                          padding: const EdgeInsets.all(AppTokens.s1 + 2),
                           decoration: BoxDecoration(
-                            color: Colors.amber.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(4),
+                            color: ink.warn
+                                .withValues(alpha: ink.dark ? 0.16 : 0.10),
+                            borderRadius:
+                                BorderRadius.circular(AppTokens.r1),
                           ),
                           child: Row(
                             children: [
-                              const Icon(Icons.trending_up,
-                                  size: 14, color: Colors.amber),
-                              const SizedBox(width: 4),
+                              Icon(Icons.trending_up,
+                                  size: 14, color: ink.warn),
+                              const SizedBox(width: AppTokens.s1),
                               Expanded(
                                 child: Text(
                                   '后续影响：${opt.impact}',
-                                  style: const TextStyle(
-                                      fontSize: 11, color: Colors.black87),
+                                  style: AppFonts.text(ink.ink,
+                                      size: 11, height: 1.4),
                                 ),
                               ),
                             ],
@@ -121,7 +130,8 @@ class BranchTreeDialog {
             child: const Text('取消'),
           ),
         ],
-      ),
+        );
+      },
     );
   }
 }

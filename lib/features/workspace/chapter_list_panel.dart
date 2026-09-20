@@ -450,7 +450,9 @@ class _Mini extends StatelessWidget {
         message: tooltip,
         child: ReorderableDragStartListener(
           index: index,
-          child: Padding(padding: const EdgeInsets.all(5), child: iconWidget),
+          child: Padding(
+              padding: const EdgeInsets.all(AppTokens.s1 + 1),
+              child: iconWidget),
         ),
       );
     }
@@ -459,7 +461,9 @@ class _Mini extends StatelessWidget {
       child: InkWell(
         onTap: onPressed,
         borderRadius: BorderRadius.circular(AppTokens.r1),
-        child: Padding(padding: const EdgeInsets.all(5), child: iconWidget),
+        child: Padding(
+            padding: const EdgeInsets.all(AppTokens.s1 + 1),
+            child: iconWidget),
       ),
     );
   }

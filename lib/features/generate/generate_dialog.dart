@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/constants/genre_presets.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/engine/corpus/plot_skeleton.dart';
 import 'package:novel_writer/engine/generation_engine.dart';
@@ -235,7 +236,7 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(AppTokens.r2),
                 ),
                 child: Text(
                   llm.useLlm
@@ -253,7 +254,7 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
                     color: Theme.of(context).colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(AppTokens.r2),
                   ),
                   child: Row(
                     children: <Widget>[
@@ -275,7 +276,7 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                   ),
                 ),
               ],
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               DropdownButtonFormField<String>(
                 initialValue: _genre,
                 decoration: const InputDecoration(labelText: '题材'),
@@ -293,7 +294,7 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                         });
                       },
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               DropdownButtonFormField<String>(
                 initialValue: _tone,
                 decoration: const InputDecoration(labelText: '基调'),
@@ -303,7 +304,7 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                     .toList(),
                 onChanged: vm.isGenerating ? null : (v) => setState(() => _tone = v ?? _tone),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               Text('目标字数：$_targetWords'),
               Slider(
                 value: _targetWords.toDouble(),
@@ -327,7 +328,7 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                     ? null
                     : (v) => setState(() => _randomLevel = v),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               DropdownButtonFormField<WritingStyle>(
                 initialValue: _style,
                 decoration: const InputDecoration(labelText: '写作风格'),
@@ -339,7 +340,7 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                     ? null
                     : (v) => setState(() => _style = v ?? WritingStyle.standard),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               DropdownButtonFormField<ProseStyle>(
                 initialValue: _proseStyle,
                 decoration: const InputDecoration(labelText: '文风'),
@@ -435,7 +436,7 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                     : (v) => setState(() => _expandOutline = v),
               ),
               if (vm.isGenerating) ...<Widget>[
-                const SizedBox(height: 12),
+                const SizedBox(height: AppTokens.s3),
                 LinearProgressIndicator(value: vm.progress),
                 const SizedBox(height: 6),
                 Text(vm.stage ?? '生成中…'),
@@ -446,12 +447,12 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                   Container(
                     width: double.infinity,
                     constraints: const BoxConstraints(maxHeight: 160),
-                    padding: const EdgeInsets.all(10),
+                    padding: const EdgeInsets.all(AppTokens.s2 + 2),
                     decoration: BoxDecoration(
                       color: Theme.of(context)
                           .colorScheme
                           .surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(AppTokens.r2),
                       border: Border.all(
                         color: Theme.of(context).dividerColor,
                       ),
@@ -472,19 +473,19 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                 ],
               ] else if (vm.memoryPending) ...<Widget>[
                 // 正文已生成，AI 正在后台提取角色/设定。
-                const SizedBox(height: 12),
+                const SizedBox(height: AppTokens.s3),
                 const LinearProgressIndicator(),
                 const SizedBox(height: 6),
                 const Text('✨ 正文已生成，正在记忆新角色与设定…'),
               ] else if (vm.memoryNote != null) ...<Widget>[
-                const SizedBox(height: 12),
+                const SizedBox(height: AppTokens.s3),
                 Container(
                   width: double.infinity,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
                     color: Theme.of(context).colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(AppTokens.r2),
                   ),
                   child: Text(
                     '🧠 ${vm.memoryNote}',
@@ -506,12 +507,12 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                   Container(
                     width: double.infinity,
                     constraints: const BoxConstraints(maxHeight: 160),
-                    padding: const EdgeInsets.all(10),
+                    padding: const EdgeInsets.all(AppTokens.s2 + 2),
                     decoration: BoxDecoration(
                       color: Theme.of(context)
                           .colorScheme
                           .surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(AppTokens.r2),
                       border: Border.all(
                         color: Theme.of(context).dividerColor,
                       ),
@@ -530,8 +531,9 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                   ),
                 ],
               ] else if (vm.error != null) ...<Widget>[
-                const SizedBox(height: 12),
-                Text(vm.error!, style: const TextStyle(color: Colors.red)),
+                const SizedBox(height: AppTokens.s3),
+                Text(vm.error!,
+                    style: TextStyle(color: AppInk.of(context).danger)),
                 if (vm.previewText != null &&
                     vm.previewText!.trim().isNotEmpty) ...<Widget>[
                   const SizedBox(height: 8),
@@ -543,12 +545,12 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                   Container(
                     width: double.infinity,
                     constraints: const BoxConstraints(maxHeight: 160),
-                    padding: const EdgeInsets.all(10),
+                    padding: const EdgeInsets.all(AppTokens.s2 + 2),
                     decoration: BoxDecoration(
                       color: Theme.of(context)
                           .colorScheme
                           .surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(AppTokens.r2),
                       border: Border.all(
                         color: Theme.of(context).dividerColor,
                       ),

@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:novel_writer/core/errors/app_exceptions.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/features/export/export_service.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/core/di/providers.dart';
+import 'package:novel_writer/widgets/app_feedback.dart';
 
 /// 打开导出对话框（TXT / Markdown / Word / EPUB / JSON 备份）。
 Future<void> showExportDialog(BuildContext context, Novel novel) {
@@ -87,7 +89,7 @@ class _ExportDialogState extends ConsumerState<_ExportDialog> {
               '选择导出格式，将打开系统路径选择器保存文件。',
               style: Theme.of(context).textTheme.bodySmall,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppTokens.s3),
             Flexible(
               child: ListView.separated(
                 shrinkWrap: true,
@@ -99,7 +101,7 @@ class _ExportDialogState extends ConsumerState<_ExportDialog> {
                   return ListTile(
                     dense: true,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(AppTokens.r3),
                       side: BorderSide(
                         color: Theme.of(context).dividerColor,
                       ),
@@ -170,9 +172,7 @@ class _ExportDialogState extends ConsumerState<_ExportDialog> {
         // 用户取消某一项：跳过继续。
       } catch (e) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('${format.label} 导出失败：$e')),
-          );
+          AppToast.error(context, '${format.label} 导出失败：$e');
         }
       }
     }
@@ -180,9 +180,7 @@ class _ExportDialogState extends ConsumerState<_ExportDialog> {
     setState(() => _exporting = false);
     final int doneCount = done;
     Navigator.of(context).pop();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已导出 $doneCount 种格式（跳过取消项）')),
-    );
+    AppToast.success(context, '已导出 $doneCount 种格式（跳过取消项）');
     unawaited(_savePrefs());
   }
 
@@ -203,25 +201,19 @@ class _ExportDialogState extends ConsumerState<_ExportDialog> {
       if (context.mounted) {
         setState(() => _exporting = false);
         Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已导出：$path')),
-        );
+        AppToast.success(context, '已导出：$path');
       }
     } on ExportException catch (e) {
       final String msg = e.message;
       if (context.mounted) {
         setState(() => _exporting = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg)),
-        );
+        AppToast.error(context, msg);
       }
     } catch (e) {
       final String msg = '导出失败：$e';
       if (context.mounted) {
         setState(() => _exporting = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg)),
-        );
+        AppToast.error(context, msg);
       }
     }
   }

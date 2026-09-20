@@ -3,9 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:math' as math;
 
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/models/character.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/models/world_setting.dart';
+import 'package:novel_writer/widgets/app_feedback.dart';
 import 'package:novel_writer/widgets/common.dart';
 
 /// 世界书弹窗：可视化展示角色关系网与世界观设定，支持一键注入上下文。
@@ -23,7 +25,7 @@ class WorldBookDialog extends ConsumerStatefulWidget {
       barrierColor: Colors.black54,
       transitionDuration: const Duration(milliseconds: 250),
       pageBuilder: (_, __, ___) => Dialog(
-        insetPadding: const EdgeInsets.all(24),
+        insetPadding: const EdgeInsets.all(AppTokens.s6),
         child: SizedBox(
           width: 900,
           height: MediaQuery.of(context).size.height * 0.85,
@@ -112,14 +114,19 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
               const Spacer(),
               if (_injectedContext.isNotEmpty)
                 Chip(
-                  label: const Text('已生成上下文', style: TextStyle(fontSize: 11)),
-                  backgroundColor: Colors.green.withValues(alpha: 0.15),
+                  label: Text(
+                    '已生成上下文',
+                    style: AppFonts.text(AppInk.of(context).success, size: 11),
+                  ),
+                  backgroundColor:
+                      AppInk.of(context).success.withValues(alpha: 0.15),
                   side: BorderSide.none,
                   visualDensity: VisualDensity.compact,
                 ),
               const SizedBox(width: 4),
               IconButton(
                 icon: const Icon(Icons.close),
+                tooltip: '关闭',
                 onPressed: () => Navigator.of(context).pop(),
               ),
             ],
@@ -157,16 +164,16 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
       return const EmptyState(message: '暂无角色，请在右侧栏「+」添加');
     }
     return ListView(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(AppTokens.s3),
       children: novel.characters.map((c) => _characterCard(c)).toList(),
     );
   }
 
   Widget _characterCard(Character c) {
     return Card(
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(bottom: AppTokens.s2 + 2),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(AppTokens.s3),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -175,10 +182,10 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
               radius: 22,
               child: Text(
                 c.name.isNotEmpty ? c.name[0] : '?',
-                style: const TextStyle(fontSize: 18),
+                style: AppFonts.text(AppInk.of(context).ink, size: 18),
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: AppTokens.s3),
             // 角色信息
             Expanded(
               child: Column(
@@ -188,12 +195,12 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
                     children: [
                       Text(
                         c.name.isEmpty ? '未命名' : c.name,
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                        style: AppFonts.text(AppInk.of(context).ink, size: 15, weight: FontWeight.bold),
                       ),
                       if (c.role.isNotEmpty) ...[
                         const SizedBox(width: 8),
                         Chip(
-                          label: Text(c.role, style: const TextStyle(fontSize: 11)),
+                          label: Text(c.role, style: AppFonts.text(AppInk.of(context).ink, size: 11)),
                           visualDensity: VisualDensity.compact,
                           padding: EdgeInsets.zero,
                           side: BorderSide.none,
@@ -204,19 +211,19 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
                   ),
                   if (c.traits.isNotEmpty) ...[
                     const SizedBox(height: 4),
-                    Text(c.traits, style: const TextStyle(fontSize: 13)),
+                    Text(c.traits, style: AppFonts.text(AppInk.of(context).inkSoft, size: 13)),
                   ],
                   if (c.background.isNotEmpty) ...[
                     const SizedBox(height: 4),
-                    _infoRow(Icons.history, c.background, Colors.grey),
+                    _infoRow(Icons.history, c.background, AppInk.of(context).inkFaint),
                   ],
                   if (c.relationships.isNotEmpty) ...[
                     const SizedBox(height: 4),
-                    _infoRow(Icons.link, c.relationships, Colors.blueGrey),
+                    _infoRow(Icons.link, c.relationships, AppInk.of(context).inkSoft),
                   ],
                   if (c.dialogueStyle.isNotEmpty) ...[
                     const SizedBox(height: 4),
-                    _infoRow(Icons.record_voice_over, c.dialogueStyle, Colors.deepPurple),
+                    _infoRow(Icons.record_voice_over, c.dialogueStyle, AppInk.of(context).accent),
                   ],
                 ],
               ),
@@ -229,10 +236,11 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
 
   Color _roleColor(String role) {
     final r = role.toLowerCase();
-    if (r.contains('主') || r.contains('hero')) return Colors.amber;
-    if (r.contains('反') || r.contains('邪恶') || r.contains('villain')) return Colors.red;
-    if (r.contains('师') || r.contains('长') || r.contains('mentor')) return Colors.teal;
-    return Colors.blueGrey;
+    final AppInk ink = AppInk.of(context);
+    if (r.contains('主') || r.contains('hero')) return ink.warn;
+    if (r.contains('反') || r.contains('邪恶') || r.contains('villain')) return ink.danger;
+    if (r.contains('师') || r.contains('长') || r.contains('mentor')) return ink.primary;
+    return ink.inkSoft;
   }
 
   Widget _infoRow(IconData icon, String text, Color color) {
@@ -244,7 +252,7 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
         Expanded(
           child: Text(
             text,
-            style: TextStyle(fontSize: 12, color: color.withValues(alpha: 0.9)),
+            style: AppFonts.text(color.withValues(alpha: 0.9), size: 12),
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),
@@ -263,21 +271,21 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(AppTokens.s3),
           child: Row(
             children: [
               const Icon(Icons.hub_outlined, size: 18),
               const SizedBox(width: 8),
               Text('${characters.length} 个角色，${edges.length} 条关系',
-                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  style: AppFonts.text(AppInk.of(context).inkFaint, size: 12)),
               const Spacer(),
-              _legendDot(Colors.blue, '主角'),
-              const SizedBox(width: 12),
-              _legendDot(Colors.red, '反派'),
-              const SizedBox(width: 12),
-              _legendDot(Colors.teal, '师长'),
-              const SizedBox(width: 12),
-              _legendDot(Colors.grey, '其他'),
+              _legendDot(AppInk.of(context).warn, '主角'),
+              const SizedBox(width: AppTokens.s3),
+              _legendDot(AppInk.of(context).danger, '反派'),
+              const SizedBox(width: AppTokens.s3),
+              _legendDot(AppInk.of(context).primary, '师长'),
+              const SizedBox(width: AppTokens.s3),
+              _legendDot(AppInk.of(context).inkSoft, '其他'),
             ],
           ),
         ),
@@ -306,7 +314,7 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 2),
-        Text(label, style: const TextStyle(fontSize: 10)),
+        Text(label, style: AppFonts.text(AppInk.of(context).inkFaint, size: 10)),
       ],
     );
   }
@@ -355,32 +363,29 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
       grouped.putIfAbsent(w.category.isNotEmpty ? w.category : '其他', () => []).add(w);
     }
     return ListView(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(AppTokens.s3),
       children: grouped.entries.map((entry) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.only(bottom: 6, top: 4),
+              padding: const EdgeInsets.only(bottom: AppTokens.s1 + 2, top: 4),
               child: Text(
                 entry.key,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.blueGrey.shade700,
-                ),
+                style: AppFonts.text(AppInk.of(context).inkSoft,
+                    size: 13, weight: FontWeight.bold),
               ),
             ),
             ...entry.value.map((w) => Card(
-                  margin: const EdgeInsets.only(bottom: 8),
+                  margin: const EdgeInsets.only(bottom: AppTokens.s2),
                   child: ListTile(
                     dense: true,
-                    title: Text(w.title, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    title: Text(w.title, style: AppFonts.text(AppInk.of(context).ink, weight: FontWeight.w600)),
                     subtitle: Text(
                       w.content,
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12),
+                      style: AppFonts.text(AppInk.of(context).inkSoft, size: 12),
                     ),
                   ),
                 )),
@@ -398,7 +403,7 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(AppTokens.s3),
           child: Row(
             children: [
               const Icon(Icons.content_paste, size: 18),
@@ -411,9 +416,7 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
                 onPressed: () async {
                   await Clipboard.setData(ClipboardData(text: ctx));
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('已复制到剪贴板')),
-                    );
+                    AppToast.success(context, '已复制到剪贴板');
                   }
                 },
               ),
@@ -423,16 +426,16 @@ class _WorldBookDialogState extends ConsumerState<WorldBookDialog>
         Expanded(
           child: Container(
             margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(AppTokens.s3),
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(AppTokens.r2),
               border: Border.all(color: Theme.of(context).dividerColor),
             ),
             child: SingleChildScrollView(
               child: SelectableText(
                 ctx,
-                style: const TextStyle(fontSize: 13, height: 1.6),
+                style: AppFonts.text(AppInk.of(context).ink, size: 13, height: 1.6),
               ),
             ),
           ),
@@ -500,9 +503,8 @@ class _RelationshipGraphCanvasState extends State<_RelationshipGraphCanvas> {
             setState(() {
               _tapCount[edge.label] = (_tapCount[edge.label] ?? 0) + 1;
             });
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('${edge.from.name} ↔ ${edge.to.name}：${edge.label}')),
-            );
+            AppToast.info(context,
+                '${edge.from.name} ↔ ${edge.to.name}：${edge.label}');
             break;
           }
         }
@@ -516,7 +518,7 @@ class _RelationshipGraphCanvasState extends State<_RelationshipGraphCanvas> {
               edges: widget.edges,
               positions: positions,
               lineColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
-              labelColor: Theme.of(context).textTheme.bodySmall?.color ?? Colors.grey,
+              labelColor: Theme.of(context).textTheme.bodySmall?.color ?? AppInk.of(context).inkFaint,
             ),
           ),
           // 节点层 (角色头像)
@@ -528,9 +530,8 @@ class _RelationshipGraphCanvasState extends State<_RelationshipGraphCanvas> {
               child: _NodeChip(
                 name: c.name,
                 role: c.role,
-                onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('${c.name}（${c.role}）')),
-                ),
+                onTap: () => AppToast.info(
+                    context, '${c.name}（${c.role}）'),
               ),
             );
           }),
@@ -586,7 +587,7 @@ class _RelationshipPainter extends CustomPainter {
       final textPainter = TextPainter(
         text: TextSpan(
           text: edge.label,
-          style: TextStyle(fontSize: 9, color: labelColor),
+          style: AppFonts.text(labelColor, size: 9),
         ),
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: 60);
@@ -627,10 +628,11 @@ class _NodeChipState extends State<_NodeChip> {
 
   Color _colorForRole(String role) {
     final r = role.toLowerCase();
-    if (r.contains('主') || r.contains('hero')) return Colors.amber;
-    if (r.contains('反') || r.contains('邪恶') || r.contains('villain')) return Colors.red;
-    if (r.contains('师') || r.contains('长') || r.contains('mentor')) return Colors.teal;
-    return Colors.blueGrey;
+    final AppInk ink = AppInk.of(context);
+    if (r.contains('主') || r.contains('hero')) return ink.warn;
+    if (r.contains('反') || r.contains('邪恶') || r.contains('villain')) return ink.danger;
+    if (r.contains('师') || r.contains('长') || r.contains('mentor')) return ink.primary;
+    return ink.inkSoft;
   }
 
   @override
@@ -663,7 +665,7 @@ class _NodeChipState extends State<_NodeChip> {
             child: Center(
               child: Text(
                 widget.name.isNotEmpty ? widget.name[0] : '?',
-                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                style: AppFonts.text(Colors.white, size: 11, weight: FontWeight.bold),
               ),
             ),
           ),

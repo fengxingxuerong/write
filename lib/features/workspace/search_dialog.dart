@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/services/search_service.dart';
 
@@ -56,6 +57,7 @@ class _SearchDialogState extends State<SearchDialog> {
                     ? null
                     : IconButton(
                         icon: const Icon(Icons.clear),
+                        tooltip: '清空',
                         onPressed: () {
                           _controller.clear();
                           _search('');
@@ -64,7 +66,7 @@ class _SearchDialogState extends State<SearchDialog> {
               ),
               onChanged: _search,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppTokens.s3),
             Expanded(
               child: _hits.isEmpty
                   ? Center(
@@ -83,13 +85,13 @@ class _SearchDialogState extends State<SearchDialog> {
                       itemBuilder: (context, i) {
                         final SearchHit h = _hits[i];
                         return InkWell(
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(AppTokens.r2),
                           onTap: () {
                             Navigator.of(context).pop();
                             widget.onSelect(h.chapter.id, h.index);
                           },
                           child: Padding(
-                            padding: const EdgeInsets.all(8),
+                            padding: const EdgeInsets.all(AppTokens.s2),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: <Widget>[

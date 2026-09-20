@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/models/character.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
@@ -277,7 +278,7 @@ class _RewriteDialogState extends ConsumerState<RewriteDialog> {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 640, maxHeight: 680),
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(AppTokens.s4 + 4),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -302,13 +303,13 @@ class _RewriteDialogState extends ConsumerState<RewriteDialog> {
               const SizedBox(height: 10),
               // 原文本摘要。
               Container(
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(AppTokens.s2),
                 decoration: BoxDecoration(
                   color: Theme.of(context)
                       .colorScheme
                       .surfaceContainerHighest
                       .withValues(alpha: 0.5),
-                  borderRadius: BorderRadius.circular(6),
+                  borderRadius: BorderRadius.circular(AppTokens.r2),
                 ),
                 child: Text(
                   '已选中 ${widget.selectedText.length} 字',
@@ -331,7 +332,7 @@ class _RewriteDialogState extends ConsumerState<RewriteDialog> {
               const SizedBox(height: 10),
               if (_error != null)
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.only(bottom: AppTokens.s1 + 2),
                   child: Text(
                     _error!,
                     style: TextStyle(
@@ -348,9 +349,9 @@ class _RewriteDialogState extends ConsumerState<RewriteDialog> {
                     border: Border.all(
                       color: Theme.of(context).colorScheme.outlineVariant,
                     ),
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(AppTokens.r2),
                   ),
-                  padding: const EdgeInsets.all(10),
+                  padding: const EdgeInsets.all(AppTokens.s2 + 2),
                   child: SingleChildScrollView(
                     child: SelectableText(
                       _streamText,
@@ -358,7 +359,7 @@ class _RewriteDialogState extends ConsumerState<RewriteDialog> {
                     ),
                   ),
                 ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: <Widget>[

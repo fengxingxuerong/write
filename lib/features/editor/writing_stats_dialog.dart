@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:novel_writer/core/constants/app_constants.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 
 /// 写作统计数据。
 class WritingStats {
@@ -78,23 +79,24 @@ Future<void> showWritingStatsDialog(
                     : '字数：${stats.wordCount} 字',
                 style: theme.textTheme.titleSmall,
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: AppTokens.s2),
               ClipRRect(
-                borderRadius: BorderRadius.circular(4),
+                borderRadius: BorderRadius.circular(AppTokens.r1),
                 child: LinearProgressIndicator(
                   value: (progress / 100).clamp(0.0, 1.0),
                   minHeight: 8,
-                  color: reached ? Colors.green : null,
+                  color: reached ? AppInk.of(ctx).success : null,
                 ),
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: AppTokens.s1 + 2),
               Text(
                 reached
                     ? '🎉 已达成本章字数目标！'
                     : '还差 ${targetWords - stats.wordCount} 字达标',
                 style: TextStyle(
                   fontSize: 12,
-                  color: reached ? Colors.green : theme.colorScheme.outline,
+                  color:
+                      reached ? AppInk.of(ctx).success : theme.colorScheme.outline,
                 ),
               ),
               const Divider(height: 24),

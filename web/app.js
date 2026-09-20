@@ -353,6 +353,26 @@
   };
   $('append-ai').onclick = () => applyAI(false);
   $('replace-ai').onclick = () => applyAI(true);
+  /* 主题切换：浅色 / 深色 / 跟随系统，偏好持久化到独立 key（不入作品存储）。 */
+  const THEME_KEY = 'inksmith.theme';
+  const systemDark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+  const renderThemeButton = () => {
+    const t = document.documentElement.dataset.theme;
+    const dark = t ? t === 'dark' : systemDark();
+    $('theme-toggle').textContent = dark ? '☀️ 浅色' : '🌙 深色';
+  };
+  try {
+    const savedTheme = localStorage.getItem(THEME_KEY);
+    if (savedTheme === 'light' || savedTheme === 'dark') document.documentElement.dataset.theme = savedTheme;
+  } catch {}
+  renderThemeButton();
+  $('theme-toggle').onclick = () => {
+    const current = document.documentElement.dataset.theme || (systemDark() ? 'dark' : 'light');
+    const next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem(THEME_KEY, next); } catch {}
+    renderThemeButton();
+  };
   load(); renderLibrary();
   if (book()) { if (!chapter()) state.chapterId = book().chapters[0]?.id ?? null; renderWorkspace(); }
   showPanel(state.panel);

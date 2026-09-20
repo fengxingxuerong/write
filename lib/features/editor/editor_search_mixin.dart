@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:novel_writer/core/theme/app_tokens.dart';
+
 /// 编辑器查找替换逻辑（Ctrl+F 搜索条）。
 ///
 /// 作为 mixin 混入 [ConsumerState]：提供查找/替换状态与全部操作，
@@ -128,13 +130,15 @@ mixin EditorSearchMixin<T extends ConsumerStatefulWidget>
                     ? null
                     : IconButton(
                         icon: const Icon(Icons.clear, size: 16),
+                        tooltip: '清空搜索',
                         onPressed: () {
                           searchCtrl.clear();
                           doSearch('');
                         },
                       ),
               ),
-              style: const TextStyle(fontSize: 13),
+              style: AppFonts.text(Theme.of(context).colorScheme.onSurface,
+                  size: 13),
               onChanged: (v) {
                 setState(() => matchIndex = 0);
                 doSearch(v);
@@ -151,7 +155,9 @@ mixin EditorSearchMixin<T extends ConsumerStatefulWidget>
                   ? '${matchIndex + 1} / ${matches.length}'
                   : (searchCtrl.text.isEmpty ? '' : '0 / 0'),
               textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12),
+              style: AppFonts.text(
+                  Theme.of(context).colorScheme.onSurfaceVariant,
+                  size: 12),
             ),
           ),
           IconButton(

@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:novel_writer/ai_pipeline/services/book_qa_service.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/models/novel.dart';
+import 'package:novel_writer/widgets/app_feedback.dart';
 import 'package:novel_writer/widgets/page_shell.dart';
 
 /// 打开全书体检弹窗（书架入口）。
@@ -78,9 +80,7 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
     try {
       await r.exportText(path);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已导出：$path')),
-      );
+      AppToast.success(context, '已导出：$path');
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
@@ -88,13 +88,12 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
 
   void _copyFixPrompt(BookChapterQa row) {
     Clipboard.setData(ClipboardData(text: row.fixPrompt));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('定点修指令已复制，可粘贴给编辑器 AI')),
-    );
+    AppToast.success(context, '定点修指令已复制，可粘贴给编辑器 AI');
   }
 
   @override
   Widget build(BuildContext context) {
+    final AppInk ink = AppInk.of(context);
     final BookQaReport? r = _report;
     return Column(
       children: <Widget>[
@@ -112,6 +111,7 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
               ),
               IconButton(
                 icon: const Icon(Icons.close),
+                tooltip: '关闭',
                 onPressed: () => Navigator.of(context).pop(),
               ),
             ],
@@ -129,14 +129,14 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
                   CircularProgressIndicator(strokeWidth: 2.2),
-                  SizedBox(height: 12),
+                  SizedBox(height: AppTokens.s3),
                   Text('正在逐章体检（本地规则，不调 API）…'),
                 ],
               ),
             ),
           )
         else if (r != null)
-          Expanded(child: _buildReport(r)),
+          Expanded(child: _buildReport(r, ink)),
         // 底部操作。
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -164,9 +164,9 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
     );
   }
 
-  Widget _buildReport(BookQaReport r) {
+  Widget _buildReport(BookQaReport r, AppInk ink) {
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppTokens.s4),
       children: <Widget>[
         // ---- 总分卡 ----
         Row(
@@ -175,21 +175,21 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
               '全书平均分',
               r.avgScore.toStringAsFixed(0),
               sub: r.allPass ? '全部达线' : '${r.failing.length} 章需处理',
-              color: _scoreColor(r.avgScore),
+              color: _scoreColor(r.avgScore, ink),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: AppTokens.s3),
             _scoreCard(
               '达线章节',
               '${r.passCount}/${r.totalChapters}',
               sub: '阈值 ${BookQaService.passThreshold.toStringAsFixed(0)} 分',
-              color: r.allPass ? Colors.green : Colors.orange,
+              color: r.allPass ? ink.success : ink.warn,
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: AppTokens.s3),
             _scoreCard(
               '合规红线',
               '${r.vetoCount} 章',
               sub: r.vetoCount == 0 ? '未命中' : '需人工复核',
-              color: r.vetoCount == 0 ? Colors.green : Colors.red,
+              color: r.vetoCount == 0 ? ink.success : ink.danger,
             ),
           ],
         ),
@@ -204,21 +204,21 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
         if (r.rows.isEmpty)
           const Center(child: Text('没有可体检的章节'))
         else
-          ...r.rows.map(_buildChapterTile),
+          ...r.rows.map((BookChapterQa row) => _buildChapterTile(row, ink)),
       ],
     );
   }
 
-  Widget _buildChapterTile(BookChapterQa row) {
+  Widget _buildChapterTile(BookChapterQa row, AppInk ink) {
     final int order = row.chapter.order;
     final bool expanded = _expanded.contains(order);
     final Color statusColor = row.hasVeto
-        ? Colors.red
-        : (row.pass ? Colors.green : Colors.orange);
+        ? ink.danger
+        : (row.pass ? ink.success : ink.warn);
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: AppTokens.s2),
       child: InkWell(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppTokens.r2),
         onTap: () => setState(() {
           if (!expanded) {
             _expanded.add(order);
@@ -238,16 +238,17 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
                         const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(
                       color: statusColor.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(AppTokens.r3),
                       border:
                           Border.all(color: statusColor.withValues(alpha: 0.5)),
                     ),
                     child: Text(
                       row.statusLabel,
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: statusColor,
-                        fontWeight: FontWeight.w600,
+                      style: AppFonts.text(
+                        statusColor,
+                        size: 11,
+                        weight: FontWeight.w600,
+                        height: 1.3,
                       ),
                     ),
                   ),
@@ -256,7 +257,8 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
                     child: Text(
                       '第 $order 章 ${row.chapter.title}',
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+                      style: AppFonts.text(ink.ink,
+                          weight: FontWeight.w600, height: 1.3),
                     ),
                   ),
                   Text(
@@ -296,8 +298,8 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
                     child: TextButton.icon(
                       onPressed: () => _copyFixPrompt(row),
                       icon: const Icon(Icons.copy, size: 15),
-                      label: const Text('复制定点修指令',
-                          style: TextStyle(fontSize: 12)),
+                      label: Text('复制定点修指令',
+                          style: AppFonts.text(ink.ink, size: 12, height: 1.3)),
                     ),
                   ),
                 ],
@@ -317,10 +319,10 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
   }) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(AppTokens.s3),
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(AppTokens.r3),
           border: Border.all(color: color.withValues(alpha: 0.35)),
         ),
         child: Column(
@@ -330,10 +332,11 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
             const SizedBox(height: 2),
             Text(
               value,
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
-                color: color,
+              style: AppFonts.text(
+                color,
+                size: 22,
+                weight: FontWeight.w700,
+                height: 1.2,
               ),
             ),
             Text(sub, style: Theme.of(context).textTheme.bodySmall),
@@ -343,9 +346,9 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
     );
   }
 
-  Color _scoreColor(double score) {
-    if (score >= 80) return Colors.green;
-    if (score >= 60) return Colors.orange;
-    return Colors.red;
+  Color _scoreColor(double score, AppInk ink) {
+    if (score >= 80) return ink.success;
+    if (score >= 60) return ink.warn;
+    return ink.danger;
   }
 }

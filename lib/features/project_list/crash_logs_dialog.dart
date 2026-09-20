@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:novel_writer/core/crash_reporter.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
+import 'package:novel_writer/widgets/app_feedback.dart';
 
 /// 崩溃日志查看器。
 ///
@@ -130,11 +132,11 @@ class _CrashLogsDialogState extends State<CrashLogsDialog> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            const Text(
+            Text(
               '配置崩溃日志上报服务器地址。留空 = 不上报，仅本地保存。',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+              style: AppFonts.text(AppInk.of(ctx).inkFaint, size: 12),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppTokens.s3),
             TextField(
               controller: urlCtrl,
               decoration: const InputDecoration(
@@ -167,13 +169,9 @@ class _CrashLogsDialogState extends State<CrashLogsDialog> {
           _config = next;
           _reportStatus = null;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              next.enabled ? '已保存，崩溃后自动上报' : '已关闭远程上报（仅本地日志）',
-            ),
-            duration: const Duration(seconds: 2),
-          ),
+        AppToast.success(
+          context,
+          next.enabled ? '已保存，崩溃后自动上报' : '已关闭远程上报（仅本地日志）',
         );
       }
     }
@@ -229,12 +227,7 @@ class _CrashLogsDialogState extends State<CrashLogsDialog> {
   Future<void> _copySelected(String content) async {
     await Clipboard.setData(ClipboardData(text: content));
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('已复制到剪贴板'),
-          duration: Duration(seconds: 1),
-        ),
-      );
+      AppToast.success(context, '已复制到剪贴板');
     }
   }
 
@@ -251,7 +244,7 @@ class _CrashLogsDialogState extends State<CrashLogsDialog> {
             // 顶部：上报状态条。
             if (_reporting)
               const Padding(
-                padding: EdgeInsets.only(bottom: 8),
+                padding: EdgeInsets.only(bottom: AppTokens.s2),
                 child: Row(
                   children: <Widget>[
                     SizedBox(
@@ -266,7 +259,7 @@ class _CrashLogsDialogState extends State<CrashLogsDialog> {
               )
             else if (_reportStatus != null)
               Padding(
-                padding: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.only(bottom: AppTokens.s2),
                 child: Row(
                   children: <Widget>[
                     Expanded(
@@ -326,7 +319,7 @@ class _CrashLogsDialogState extends State<CrashLogsDialog> {
                               child: Text('点击左侧日志查看内容'),
                             )
                           : SingleChildScrollView(
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(AppTokens.s2),
                               child: SelectableText(
                                 _selectedContent!,
                                 style: const TextStyle(
@@ -365,12 +358,7 @@ class _CrashLogsDialogState extends State<CrashLogsDialog> {
           TextButton(
             onPressed: () async {
               if (!_config.enabled) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('请先点击「上报设置」配置上报 URL'),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
+                AppToast.warn(context, '请先点击「上报设置」配置上报 URL');
                 return;
               }
               // 上报当前选中文件（列表第一个？不——取当前选中）。

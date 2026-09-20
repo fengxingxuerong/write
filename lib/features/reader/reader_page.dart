@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:novel_writer/core/di/providers.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/models/reader_settings.dart';
@@ -134,7 +135,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
           ? Center(
               child: Text(
                 '暂无章节',
-                style: TextStyle(color: fg),
+                style: AppFonts.text(fg),
               ),
             )
           : SafeArea(
@@ -151,28 +152,25 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                         children: <Widget>[
                           Text(
                             current.title,
-                            style: TextStyle(
-                              fontSize: _settings.fontSize + 8,
-                              fontWeight: FontWeight.bold,
-                              color: fg,
+                            style: AppFonts.text(
+                              fg,
+                              size: _settings.fontSize + 8,
+                              weight: FontWeight.bold,
                               height: 1.5,
-                              fontFamily: _settings.serif
-                                  ? 'serif'
-                                  : null,
+                              serifFace: _settings.serif,
                             ),
                           ),
-                          const SizedBox(height: 24),
+                          const SizedBox(height: AppTokens.s6),
                           Text(
                             current.content.isEmpty
                                 ? '（本章暂无内容）'
                                 : current.content,
-                            style: TextStyle(
-                              fontSize: _settings.fontSize,
-                              color: fg,
+                            style: AppFonts.text(
+                              fg,
+                              size: _settings.fontSize,
                               height: _settings.lineHeight,
                               letterSpacing: 0.5,
-                              fontFamily:
-                                  _settings.serif ? 'serif' : null,
+                              serifFace: _settings.serif,
                             ),
                           ),
                         ],
@@ -193,7 +191,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                         ),
                         Text(
                           '${_chapterIndex + 1} / ${_chapters.length} 章',
-                          style: TextStyle(color: fg),
+                          style: AppFonts.text(fg),
                         ),
                         IconButton(
                           tooltip: '下一章',

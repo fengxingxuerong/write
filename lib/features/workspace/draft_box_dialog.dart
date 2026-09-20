@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/models/chapter_draft.dart';
 import 'package:novel_writer/models/novel.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/storage/chapter_repository.dart';
+import 'package:novel_writer/widgets/app_feedback.dart';
 
 /// 存稿箱弹窗：查看暂存的草稿，可预览、转正为正式章节或删除。
 class DraftBoxDialog extends ConsumerStatefulWidget {
@@ -66,15 +68,11 @@ class _DraftBoxDialogState extends ConsumerState<DraftBoxDialog> {
     try {
       await _repo.promoteDraft(widget.novel.id, draftId);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('✅ 已转为正式章节')),
-      );
+      AppToast.success(context, '已转为正式章节');
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('转正失败：$e')),
-      );
+      AppToast.error(context, '转正失败：$e');
     }
   }
 
@@ -102,9 +100,7 @@ class _DraftBoxDialogState extends ConsumerState<DraftBoxDialog> {
     if (confirm != true) return;
     await _repo.deleteDraft(widget.novel.id, draftId);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已删除存稿')),
-    );
+    AppToast.success(context, '已删除存稿');
     await _load();
   }
 
@@ -142,11 +138,12 @@ class _DraftBoxDialogState extends ConsumerState<DraftBoxDialog> {
         child: _loading
             ? const Center(child: CircularProgressIndicator())
             : _drafts.isEmpty
-                ? const Center(
+                ? Center(
                     child: Text(
                       '暂无存稿\n\n不满意的 AI 生成结果可先存入这里，\n之后决定保留或删除',
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
+                      style:
+                          AppFonts.text(AppInk.of(context).inkFaint, size: 14),
                     ),
                   )
                 : ListView.separated(

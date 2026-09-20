@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:novel_writer/core/theme/app_tokens.dart';
+import 'package:novel_writer/widgets/app_feedback.dart';
+
 /// 隐私与合规页面：声明数据归属、不出域、不用于模型训练。
 class PrivacyPage extends ConsumerWidget {
   const PrivacyPage({super.key});
@@ -13,22 +16,23 @@ class PrivacyPage extends ConsumerWidget {
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
+          tooltip: '返回',
           onPressed: () => context.pop(),
         ),
         title: const Text('隐私与合规'),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppTokens.s4),
         children: [
           _heroCard(theme),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppTokens.s4),
           _principleCard(
             theme,
             icon: Icons.shield_outlined,
             title: '文稿归作者所有',
             content:
                 '您创建的一切内容（包括角色设定、章节正文、大纲等）完全属于您本人。墨匠不会以任何形式获取您的作品权利，也不会用于分发、展示或授权第三方使用。',
-            color: Colors.blue,
+            color: AppInk.of(context).primary,
           ),
           _principleCard(
             theme,
@@ -37,7 +41,7 @@ class PrivacyPage extends ConsumerWidget {
             content:
                 '调用 AI 生成时，发送给开源兼容 API（如 OpenAI、DeepSeek、通义千问等）的数据仅用于完成本次生成返回结果，墨匠本身不搭建内容中转服务器，不会留存您发送或返回的内容。'
                 '\n\n您可以选择在设置中完全关闭 AI 功能，使用纯本地模板引擎（零网络）。',
-            color: Colors.green,
+            color: AppInk.of(context).success,
           ),
           _principleCard(
             theme,
@@ -45,7 +49,7 @@ class PrivacyPage extends ConsumerWidget {
             title: '不用于模型训练',
             content:
                 '墨匠作者郑重承诺：在您使用本应用期间产生的任何文本、角色、大纲内容，不会被收集用于 LLM 微调、RLHA、DPO 或任何形式的模型训练。您写的东西就是您写的。',
-            color: Colors.deepPurple,
+            color: AppInk.of(context).accent,
           ),
           _principleCard(
             theme,
@@ -53,7 +57,7 @@ class PrivacyPage extends ConsumerWidget {
             title: '本地数据自主',
             content:
                 '所有项目以单项目 JSON 文件形式保存在您本机的应用支持目录中。您可随时通过资源管理器自行备份、迁移或销毁数据。清除应用缓存将彻底删除所有项目，请提前备份。',
-            color: Colors.orange,
+            color: AppInk.of(context).warn,
           ),
           _principleCard(
             theme,
@@ -64,12 +68,12 @@ class PrivacyPage extends ConsumerWidget {
                 '• 内容过滤：内置敏感词库 + 上下文白名单，避免生成违规内容。\n'
                 '• 用户删除权：全程支持删除章节、角色、世界观设定。\n'
                 '• 透明度：所有 AI 生成内容均可追溯原始提示词与模型。',
-            color: Colors.teal,
+            color: AppInk.of(context).primary,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppTokens.s4),
           Card(
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppTokens.s4),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -90,14 +94,15 @@ class PrivacyPage extends ConsumerWidget {
               ),
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: AppTokens.s6),
           FilledButton.icon(
             icon: const Icon(Icons.delete_forever),
             label: const Text('清除所有本地数据'),
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(
+                backgroundColor: AppInk.of(context).danger),
             onPressed: () => _confirmWipe(context, ref),
           ),
-          const SizedBox(height: 32),
+          const SizedBox(height: AppTokens.s8),
         ],
       ),
     );
@@ -107,7 +112,7 @@ class PrivacyPage extends ConsumerWidget {
     return Card(
       color: theme.colorScheme.primaryContainer,
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppTokens.s4),
         child: Column(
           children: [
             Icon(Icons.verified_user, size: 40, color: theme.colorScheme.primary),
@@ -135,9 +140,9 @@ class PrivacyPage extends ConsumerWidget {
     required Color color,
   }) {
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: AppTokens.s3),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppTokens.s4),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -172,7 +177,8 @@ class PrivacyPage extends ConsumerWidget {
             child: const Text('取消'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(
+                backgroundColor: AppInk.of(ctx).danger),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('确认清除'),
           ),
@@ -181,9 +187,7 @@ class PrivacyPage extends ConsumerWidget {
     );
       if (ok == true && context.mounted) {
       // 这里触发数据库全清（简化：仅导航到项目列表由用户手动删除）。
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请前往项目列表手动删除各项目。')),
-      );
+      AppToast.info(context, '请前往项目列表手动删除各项目。');
     }
   }
 }

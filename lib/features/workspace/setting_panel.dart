@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:novel_writer/core/di/providers.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/features/workspace/llm_settings_dialog.dart';
 import 'package:novel_writer/features/workspace/statistics_panel.dart';
 import 'package:novel_writer/models/character.dart';
@@ -32,7 +33,7 @@ class SettingPanel extends ConsumerWidget {
     return SizedBox(
       width: 320,
       child: ListView(
-        padding: const EdgeInsets.all(8),
+        padding: const EdgeInsets.all(AppTokens.s2),
         children: <Widget>[
           StatisticsPanel(novel: novel),
           _llmCard(context, ref),
@@ -122,7 +123,8 @@ class SettingPanel extends ConsumerWidget {
     return ExpansionTile(
       dense: true,
       tilePadding: EdgeInsets.zero,
-      childrenPadding: const EdgeInsets.only(left: 16, bottom: 8),
+      childrenPadding:
+          const EdgeInsets.only(left: AppTokens.s4, bottom: AppTokens.s2),
       title: Text(c.name.isEmpty ? '未命名角色' : c.name),
       subtitle: Text(
         '${c.role}${c.role.isNotEmpty && c.traits.isNotEmpty ? ' · ' : ''}${c.traits}',
@@ -134,10 +136,12 @@ class SettingPanel extends ConsumerWidget {
         children: <Widget>[
           IconButton(
             icon: const Icon(Icons.edit, size: 18),
+            tooltip: '编辑角色',
             onPressed: () => _editCharacter(context, ref, repo, c),
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline, size: 18),
+            tooltip: '删除角色',
             onPressed: () async {
               await repo.deleteCharacter(novel.id, c.id);
               onChanged();
@@ -153,7 +157,7 @@ class SettingPanel extends ConsumerWidget {
         if (c.background.isEmpty && c.relationships.isEmpty)
           const Text(
             '（无更多信息，点击编辑补充背景与关系）',
-            style: TextStyle(fontSize: 12, color: Colors.grey),
+            style: TextStyle(fontSize: 12),
           ),
       ],
     );
@@ -161,17 +165,14 @@ class SettingPanel extends ConsumerWidget {
 
   Widget _detailLine(BuildContext context, String label, String value) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.only(bottom: AppTokens.s1),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text(
             '$label：',
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey,
-            ),
+            style: AppFonts.text(AppInk.of(context).inkFaint,
+                size: 12, weight: FontWeight.w600),
           ),
           Expanded(
             child: Text(
@@ -205,10 +206,12 @@ class SettingPanel extends ConsumerWidget {
         children: <Widget>[
           IconButton(
             icon: const Icon(Icons.edit, size: 18),
+            tooltip: '编辑设定',
             onPressed: () => _editWorld(context, ref, repo, w),
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline, size: 18),
+            tooltip: '删除设定',
             onPressed: () async {
               await repo.deleteWorldSetting(novel.id, w.id);
               onChanged();
@@ -323,7 +326,7 @@ class SettingPanel extends ConsumerWidget {
             children: <Widget>[
               for (final entry in controllers.entries)
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.only(bottom: AppTokens.s2),
                   child: TextField(
                     controller: entry.value,
                     decoration: InputDecoration(labelText: entry.key),

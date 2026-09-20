@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/constants/genre_presets.dart';
 import 'package:novel_writer/models/novel.dart';
+import 'package:novel_writer/widgets/app_feedback.dart';
 
 /// 封面生成器：用 Flutter 绘制一张竖版封面（书名 + 题材 + 装饰渐变），
 /// 并保存为 PNG。纯本地，零网络。
@@ -158,9 +159,7 @@ class CoverGenerator {
               if (ctx.mounted) {
                 Navigator.of(ctx).pop();
                 if (path != null && context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('封面已保存：$path')),
-                  );
+                  AppToast.success(context, '封面已保存：$path');
                 }
               }
             },

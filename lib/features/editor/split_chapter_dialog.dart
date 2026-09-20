@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:novel_writer/core/theme/app_tokens.dart';
+
 /// 自动章节分割弹窗：确认分割方案。
 ///
 /// 按「空行分隔的段落块」将当前章节拆成多章，每块 >= [minChars] 才独立成章，
@@ -40,7 +42,7 @@ Future<List<String>?> showSplitChapterDialog(
               '「$chapterTitle」将拆分为 ${finalParts.length} 章：',
               style: Theme.of(ctx).textTheme.bodyMedium,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppTokens.s3),
             Flexible(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxHeight: 240),

@@ -49,57 +49,72 @@ class EmptyState extends StatelessWidget {
         constraints: const BoxConstraints(maxWidth: 380),
         child: Padding(
           padding: const EdgeInsets.all(AppTokens.s6),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Container(
-                width: 68,
-                height: 68,
-                decoration: BoxDecoration(
-                  color: ink.primary.withValues(alpha: ink.dark ? 0.14 : 0.08),
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: ink.primary.withValues(alpha: 0.18),
-                  ),
-                ),
-                child: Icon(icon, size: 28, color: ink.primary),
+          // 进场动画：淡入 + 轻微上移，让空态显得被设计过而不是「没加载出来」。
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(begin: 0, end: 1),
+            duration: AppTokens.normal,
+            curve: AppTokens.curve,
+            builder: (BuildContext context, double t, Widget? child) =>
+                Opacity(
+              opacity: t,
+              child: Transform.translate(
+                offset: Offset(0, 8 * (1 - t)),
+                child: child,
               ),
-              const SizedBox(height: AppTokens.s4),
-              Text(
-                message,
-                textAlign: TextAlign.center,
-                style: AppFonts.text(ink.ink,
-                    size: 15.5, weight: FontWeight.w600, height: 1.5),
-              ),
-              if (hint != null) ...<Widget>[
-                const SizedBox(height: AppTokens.s2),
-                Text(
-                  hint!,
-                  textAlign: TextAlign.center,
-                  style: AppFonts.text(ink.inkSoft, size: 13, height: 1.7),
-                ),
-              ],
-              if (actionLabel != null && onAction != null) ...<Widget>[
-                const SizedBox(height: AppTokens.s4),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    FilledButton.icon(
-                      onPressed: onAction,
-                      icon: const Icon(Icons.add, size: 16),
-                      label: Text(actionLabel!),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Container(
+                  width: 68,
+                  height: 68,
+                  decoration: BoxDecoration(
+                    color:
+                        ink.primary.withValues(alpha: ink.dark ? 0.14 : 0.08),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: ink.primary.withValues(alpha: 0.18),
                     ),
-                    if (secondaryLabel != null && onSecondary != null)
-                      Padding(
-                        padding: const EdgeInsets.only(left: AppTokens.s2),
-                        child: TextButton(
-                            onPressed: onSecondary,
-                            child: Text(secondaryLabel!)),
-                      ),
-                  ],
+                  ),
+                  child: Icon(icon, size: 28, color: ink.primary),
                 ),
+                const SizedBox(height: AppTokens.s4),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: AppFonts.text(ink.ink,
+                      size: 15.5, weight: FontWeight.w600, height: 1.5),
+                ),
+                if (hint != null) ...<Widget>[
+                  const SizedBox(height: AppTokens.s2),
+                  Text(
+                    hint!,
+                    textAlign: TextAlign.center,
+                    style: AppFonts.text(ink.inkSoft, size: 13, height: 1.7),
+                  ),
+                ],
+                if (actionLabel != null && onAction != null) ...<Widget>[
+                  const SizedBox(height: AppTokens.s4),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      FilledButton.icon(
+                        onPressed: onAction,
+                        icon: const Icon(Icons.add, size: 16),
+                        label: Text(actionLabel!),
+                      ),
+                      if (secondaryLabel != null && onSecondary != null)
+                        Padding(
+                          padding: const EdgeInsets.only(left: AppTokens.s2),
+                          child: TextButton(
+                              onPressed: onSecondary,
+                              child: Text(secondaryLabel!)),
+                        ),
+                    ],
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

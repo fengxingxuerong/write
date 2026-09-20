@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:novel_writer/core/di/providers.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/storage/goal_repository.dart';
@@ -32,7 +33,7 @@ class StatisticsPanel extends ConsumerWidget {
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(AppTokens.s3),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
@@ -228,7 +229,7 @@ class _GoalCardState extends ConsumerState<_GoalCard> {
     if (_loading) {
       return const Center(
         child: Padding(
-          padding: EdgeInsets.all(8),
+          padding: EdgeInsets.all(AppTokens.s2),
           child: SizedBox(
             width: 20,
             height: 20,
@@ -253,7 +254,10 @@ class _GoalCardState extends ConsumerState<_GoalCard> {
         Row(
           children: <Widget>[
             Icon(Icons.local_fire_department,
-                size: 18, color: done ? Colors.deepOrange : theme.colorScheme.primary),
+                size: 18,
+                color: done
+                    ? AppInk.of(context).accent
+                    : theme.colorScheme.primary),
             const SizedBox(width: 6),
             Text('写作目标', style: theme.textTheme.titleSmall),
             const Spacer(),
@@ -294,7 +298,7 @@ class _GoalCardState extends ConsumerState<_GoalCard> {
               Text(
                 done ? '🎉 今日目标已完成！' : '还差 ${daily - today} 字',
                 style: theme.textTheme.bodySmall?.copyWith(
-                  color: done ? Colors.deepOrange : null,
+                  color: done ? AppInk.of(context).accent : null,
                 ),
               ),
               const Spacer(),
@@ -319,7 +323,7 @@ class _GoalCardState extends ConsumerState<_GoalCard> {
             value,
             style: theme.textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.bold,
-              color: highlight ? Colors.deepOrange : null,
+              color: highlight ? AppInk.of(context).accent : null,
             ),
           ),
           Text(label, style: theme.textTheme.bodySmall),

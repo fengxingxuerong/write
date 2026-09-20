@@ -468,7 +468,7 @@ class _WorkspaceHeader extends ConsumerWidget {
             height: 26,
             decoration: BoxDecoration(
               color: GenreColors.of(novel.genre),
-              borderRadius: BorderRadius.circular(2),
+              borderRadius: BorderRadius.circular(AppTokens.r1),
             ),
           ),
           const SizedBox(width: AppTokens.s2 + 2),

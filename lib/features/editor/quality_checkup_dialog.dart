@@ -222,8 +222,9 @@ class QualityCheckupDialog extends StatelessWidget {
   final List<CheckupMetric> metrics;
 
   Color _scoreColor(BuildContext context) {
-    if (score >= 85) return Colors.green;
-    if (score >= 65) return Colors.orange;
+    final AppInk ink = AppInk.of(context);
+    if (score >= 85) return ink.success;
+    if (score >= 65) return ink.warn;
     return Theme.of(context).colorScheme.error;
   }
 
@@ -291,12 +292,12 @@ class QualityCheckupDialog extends StatelessWidget {
                   padding: const EdgeInsets.all(AppTokens.s2),
                   decoration: BoxDecoration(
                     color: m.ok
-                        ? Colors.green.withValues(alpha: 0.06)
+                        ? ink.success.withValues(alpha: ink.dark ? 0.10 : 0.06)
                         : sc.withValues(alpha: 0.06),
                     borderRadius: BorderRadius.circular(AppTokens.r2),
                     border: Border.all(
                       color:
-                          (m.ok ? Colors.green : sc).withValues(alpha: 0.35),
+                          (m.ok ? ink.success : sc).withValues(alpha: 0.35),
                     ),
                   ),
                   child: Column(
@@ -309,7 +310,7 @@ class QualityCheckupDialog extends StatelessWidget {
                                 ? Icons.check_circle_outline
                                 : Icons.warning_amber_rounded,
                             size: 15,
-                            color: m.ok ? Colors.green : sc,
+                            color: m.ok ? ink.success : sc,
                           ),
                           const SizedBox(width: 6),
                           Text(m.label,

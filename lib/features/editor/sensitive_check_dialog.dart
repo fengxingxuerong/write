@@ -1,6 +1,7 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/services/sensitive_words.dart';
 
 /// 敏感词状态徽标。
@@ -18,15 +19,15 @@ class SensitiveBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final bool clean = check.clean;
     final Color color =
-        clean ? Colors.green : Theme.of(context).colorScheme.error;
+        clean ? AppInk.of(context).success : Theme.of(context).colorScheme.error;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(AppTokens.r4),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(AppTokens.r4),
           border: Border.all(color: color.withValues(alpha: 0.5)),
         ),
         child: Row(
@@ -97,7 +98,7 @@ class _SensitiveCheckDialogState extends ConsumerState<SensitiveCheckDialog> {
     final List<MapEntry<String, int>> top5 = top.take(5).toList();
     final int total = top.fold<int>(0, (int sum, e) => sum + e.value);
     return Padding(
-      padding: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.only(top: AppTokens.s2),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -155,7 +156,7 @@ class _SensitiveCheckDialogState extends ConsumerState<SensitiveCheckDialog> {
                     .toList(),
               ),
             if (widget.service.hitStats.isNotEmpty) _buildStatsSection(context),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppTokens.s3),
             if (r.hits.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
@@ -180,7 +181,7 @@ class _SensitiveCheckDialogState extends ConsumerState<SensitiveCheckDialog> {
                                 .colorScheme
                                 .error
                                 .withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(AppTokens.r1),
                           ),
                           child: Text(
                             h.word,

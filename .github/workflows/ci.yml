@@ -1,6 +1,6 @@
 # 墨匠 InkSmith — CI 流水线
 # 触发: push / PR 到 main、master；也可手动 workflow_dispatch
-# 步骤: flutter analyze → flutter test → (Windows) Release 构建
+# 步骤: flutter analyze → flutter test → web 工作台浏览器回归 → (Windows) Release 构建
 
 name: CI
 
@@ -82,6 +82,29 @@ jobs:
           name: coverage
           path: coverage/lcov.info
           retention-days: 7
+
+  verify-web:
+    name: Web workbench verify
+    # 网页工作台（web/index.html + app.js + ai.js）的真实浏览器回归：
+    # 书架 CRUD / 章节编辑 / AI 守卫 / 导入原子性 / 无运行时异常等。
+    # 与 Flutter 任务无依赖，可并行；Chrome 由 ubuntu-latest 镜像预装。
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Browser regression (3 suites)
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: |
+          node scripts/verify_web.cjs
+          node scripts/verify_ai_failure.cjs
+          node scripts/verify_web_ai.cjs
 
   build-windows:
     name: Build Windows Release

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:novel_writer/core/di/providers.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/engine/editor_ai.dart';
 import 'package:novel_writer/models/character.dart';
 
@@ -123,7 +124,7 @@ class _ProofreadDialogState extends ConsumerState<ProofreadDialog> {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 640, maxHeight: 680),
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(AppTokens.s4 + 4),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -145,29 +146,26 @@ class _ProofreadDialogState extends ConsumerState<ProofreadDialog> {
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s3),
               // 状态区。
               if (_loading)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 24),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
                   child: Column(
                     children: <Widget>[
-                      CircularProgressIndicator(strokeWidth: 2),
-                      SizedBox(height: 12),
+                      const CircularProgressIndicator(strokeWidth: 2),
+                      const SizedBox(height: AppTokens.s3),
                       Text('AI 正在通读全文，检查错别字 / 病句 / 逻辑矛盾…',
-                          style: TextStyle(fontSize: 13)),
+                          style: AppFonts.text(AppInk.of(context).inkSoft, size: 13)),
                     ],
                   ),
                 ),
               if (_error != null)
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.only(bottom: AppTokens.s2),
                   child: Text(
                     _error!,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Theme.of(context).colorScheme.error,
-                    ),
+                    style: AppFonts.text(Theme.of(context).colorScheme.error, size: 13),
                   ),
                 ),
               // 结果区。
@@ -177,12 +175,12 @@ class _ProofreadDialogState extends ConsumerState<ProofreadDialog> {
                     padding: const EdgeInsets.symmetric(vertical: 24),
                     child: Column(
                       children: <Widget>[
-                        const Icon(Icons.verified_outlined,
-                            size: 40, color: Colors.green),
+                        Icon(Icons.verified_outlined,
+                            size: 40, color: AppInk.of(context).success),
                         const SizedBox(height: 8),
-                        const Text('未发现问题，全文流畅。',
-                            style: TextStyle(fontSize: 14)),
-                        const SizedBox(height: 12),
+                        Text('未发现问题，全文流畅。',
+                            style: AppFonts.text(AppInk.of(context).ink, size: 14)),
+                        const SizedBox(height: AppTokens.s3),
                         FilledButton.tonal(
                           onPressed: () => Navigator.of(context).pop(
                             ProofreadDialogResult(
@@ -210,7 +208,7 @@ class _ProofreadDialogState extends ConsumerState<ProofreadDialog> {
                         final ProofreadIssue issue = _result!.issues[index];
                         final bool enabled = issue.applicable;
                         return Card(
-                          margin: const EdgeInsets.only(bottom: 8),
+                          margin: const EdgeInsets.only(bottom: AppTokens.s2),
                           child: ListTile(
                             dense: true,
                             leading: Checkbox(
@@ -227,10 +225,12 @@ class _ProofreadDialogState extends ConsumerState<ProofreadDialog> {
                             ),
                             title: Text(
                               issue.original,
-                              style: const TextStyle(
-                                fontSize: 13,
+                              style: AppFonts.text(
+                                AppInk.of(context).ink,
+                                size: 13,
+                              ).copyWith(
                                 decoration: TextDecoration.lineThrough,
-                                decorationColor: Colors.redAccent,
+                                decorationColor: AppInk.of(context).danger,
                               ),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
@@ -243,10 +243,8 @@ class _ProofreadDialogState extends ConsumerState<ProofreadDialog> {
                                     padding: const EdgeInsets.only(top: 2),
                                     child: Text(
                                       '→ ${issue.suggestion}',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.green,
-                                      ),
+                                      style: AppFonts.text(
+                                          AppInk.of(context).success, size: 12),
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
                                     ),
@@ -255,7 +253,8 @@ class _ProofreadDialogState extends ConsumerState<ProofreadDialog> {
                                   padding: const EdgeInsets.only(top: 2),
                                   child: Text(
                                     '【${issue.type}】${issue.reason}',
-                                    style: const TextStyle(fontSize: 11),
+                                    style: AppFonts.text(
+                                        AppInk.of(context).inkFaint, size: 11),
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
                                   ),
@@ -267,7 +266,7 @@ class _ProofreadDialogState extends ConsumerState<ProofreadDialog> {
                       },
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppTokens.s3),
                   // 操作按钮。
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
@@ -290,7 +289,7 @@ class _ProofreadDialogState extends ConsumerState<ProofreadDialog> {
                   child: Text(
                     '将通读当前章节全文，找出错别字、病句、逻辑矛盾与重复啰嗦，'
                     '并逐条给出修正建议。\n\n可勾选要应用的问题，一键替换回正文。',
-                    style: TextStyle(fontSize: 13, height: 1.5),
+                    style: AppFonts.text(AppInk.of(context).inkSoft, size: 13, height: 1.5),
                   ),
                 ),
                 Align(

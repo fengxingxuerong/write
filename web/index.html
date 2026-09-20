@@ -2,11 +2,101 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>墨匠 InkSmith · 创作工作台</title>
 <style>
-:root{color-scheme:dark;--bg:#101017;--panel:#191922;--line:#ffffff14;--muted:#aaa9bb;--ink:#efedf8;--accent:#b6a1f8}*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 80% 0%,#49307735,transparent 45%),var(--bg);color:var(--ink);font:15px/1.6 system-ui,"Microsoft YaHei",sans-serif}button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer;padding:9px 14px;border:1px solid var(--line);border-radius:9px;background:#ffffff06}button:hover{background:#b6a1f818;border-color:#b6a1f866}button:disabled{opacity:.4;cursor:not-allowed}.primary{background:#ac91ec;color:#1a122b;font-weight:700}.danger{color:#ffa9b6}a{color:inherit;text-decoration:none}input,textarea,select{display:block;width:100%;background:#101018;border:1px solid #ffffff20;border-radius:9px;padding:11px 13px}textarea{resize:vertical}label{display:block;color:var(--muted);font-size:13px}label input,label textarea,label select{margin-top:6px}.topbar{padding:20px 4vw;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:16px}.brand{font-weight:700;font-size:20px}.brand span{background:var(--accent);color:#211536;padding:7px;border-radius:10px;margin-right:8px}.brand small{font-size:11px;letter-spacing:2px;color:var(--muted)}.actions,.library-tools,.workspace-header,.rail-heading,.editor-footer{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.local-badge{color:#a2d7b7;font-size:12px}.hero{display:flex;justify-content:space-between;align-items:center;gap:24px;padding:55px 0 30px}.eyebrow{letter-spacing:3px;font-size:10px;color:var(--accent);margin:0}h1{font-size:clamp(25px,3vw,40px);letter-spacing:-1px;margin:8px 0}h2{font-size:18px;margin:8px 0}.muted,.footnote{color:var(--muted)}.footnote{font-size:12px;line-height:1.9;margin-top:30px}main{padding:0 4vw 40px;max-width:1680px;margin:auto}#notice{font-size:13px;padding:10px 4vw;border-bottom:1px solid var(--line);min-height:42px;color:#b4d3bb}#notice[data-error="true"]{color:#ffbcc6;background:#631f2833}.library-tools{align-items:end;margin:8px 0 28px}.search{flex:1;min-width:180px}.book-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:20px}.book-card{padding:24px;background:linear-gradient(145deg,#232030,#17171f);border:1px solid var(--line);border-radius:16px;overflow-wrap:anywhere}.book-card h2{font-size:23px;margin:16px 0}.book-card .actions{margin-top:24px}.book-card p{color:var(--muted);font-size:13px}.empty{padding:60px 20px;text-align:center;border:1px dashed #ffffff20;border-radius:15px;color:var(--muted)}.empty-icon{font-size:48px;color:var(--accent)}.workspace-header{justify-content:space-between;padding:26px 0}.workspace-header h1{font-size:24px;overflow-wrap:anywhere}.desk{display:grid;grid-template-columns:220px minmax(0,1fr);border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#15151e}.chapter-rail{padding:20px;background:#191821;border-right:1px solid var(--line)}.rail-heading{justify-content:space-between;margin-bottom:18px}.chapter-row{width:100%;text-align:left;margin-bottom:8px;overflow-wrap:anywhere}.chapter-row[aria-current="true"]{background:#b6a1f818;color:var(--accent);border-color:#b6a1f844}.editor-pane{padding:28px;min-width:0}.title-input{font-size:26px;border:0;background:transparent;margin:18px 0;padding-left:0}.editor-tools{font-size:12px;margin:16px 0}.editor-tools button{padding:6px 10px}summary{cursor:pointer;color:var(--muted);font-size:13px}details textarea{margin:10px 0}#content{min-height:420px;border:0;background:transparent;padding:22px 0;font:18px/2.2 Georgia,"Microsoft YaHei",serif}.editor-footer{justify-content:space-between;color:var(--muted);border-top:1px solid var(--line);padding-top:18px;font-size:12px}.full{width:100%;margin-top:14px}.focus .desk{grid-template-columns:1fr}.focus .chapter-rail{display:none}dialog{width:min(92vw,520px);background:#1c1b27;color:var(--ink);border:1px solid #b6a1f83d;border-radius:18px;padding:28px;max-height:90vh}dialog::backdrop{background:#080710aa;backdrop-filter:blur(5px)}dialog label{margin:16px 0}.modal-actions{justify-content:flex-end;margin-top:26px}:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}[hidden]{display:none!important}@media(max-width:700px){.topbar,.hero{align-items:flex-start;flex-direction:column}.local-badge{display:none}.desk{grid-template-columns:1fr}.chapter-rail{border-right:0;border-bottom:1px solid var(--line)}#chapter-list{max-height:160px;overflow:auto}.editor-pane{padding:18px}.hero{padding-top:30px}main{padding:0 16px 30px}.workspace-header .actions{gap:8px}#content{min-height:320px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
-.desk{grid-template-columns:200px minmax(0,1fr) 300px}.inspector{padding:20px;border-left:1px solid var(--line);min-width:0;background:#191821}.inspector-tabs{display:flex;gap:5px;margin-bottom:22px}.inspector-tabs button[aria-pressed="true"]{color:var(--accent);background:#b6a1f818}.inspector label{margin:14px 0}.check{display:flex;gap:8px}.check input,input[type="checkbox"]{width:auto}.ai-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.entity-row{margin:12px 0;overflow-wrap:anywhere}.entity-row button{max-width:100%;overflow-wrap:anywhere}.find-panel{display:flex;flex-wrap:wrap;gap:8px}.find-panel label{min-width:0;flex:1}.focus .inspector{display:none}.focus .desk{grid-template-columns:1fr}#view-dialog{width:min(90vw,800px)}pre{overflow-wrap:anywhere}#save-state{overflow-wrap:anywhere}@media(max-width:1100px){.desk{grid-template-columns:180px minmax(0,1fr)}.inspector{grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}@media(max-width:700px){.desk{grid-template-columns:minmax(0,1fr)}.inspector{grid-column:auto}.inspector-tabs{flex-wrap:wrap}}
+:root{color-scheme:light dark;--paper:#f6f3ec;--panel:#fffdf8;--raised:#ffffff;--line:#e0dacc;--muted:#6a655c;--faint:#716b5b;--ink:#23211e;--primary:#2f5d62;--on-primary:#f6f3ec;--accent:#b23a2c;--success:#2f6b49;--warn:#8f5f0e;--danger:#b0342e;--tint:#142f5d62;--hover:#0a23211e;--shadow:0 1px 2px #23211e0d,0 8px 24px #23211e0f}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--paper:#17191c;--panel:#1e2126;--raised:#252a30;--line:#343a44;--muted:#a9a49a;--faint:#8c877e;--ink:#e8e4db;--primary:#7fb7b2;--on-primary:#12171a;--accent:#e0705c;--success:#6fb189;--warn:#d1a24c;--danger:#e0776f;--tint:#1f7fb7b2;--hover:#0fe8e4db;--shadow:none}}
+:root[data-theme="dark"]{--paper:#17191c;--panel:#1e2126;--raised:#252a30;--line:#343a44;--muted:#a9a49a;--faint:#8c877e;--ink:#e8e4db;--primary:#7fb7b2;--on-primary:#12171a;--accent:#e0705c;--success:#6fb189;--warn:#d1a24c;--danger:#e0776f;--tint:#1f7fb7b2;--hover:#0fe8e4db;--shadow:none}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.65 "Segoe UI",system-ui,"Microsoft YaHei",sans-serif}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;padding:9px 14px;border:1px solid var(--line);border-radius:9px;background:var(--panel);transition:background .15s ease,border-color .15s ease,transform .12s ease,box-shadow .15s ease}
+button:hover{background:var(--tint);border-color:var(--primary)}
+button:active{transform:translateY(1px)}
+button:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
+.primary{background:var(--primary);color:var(--on-primary);font-weight:700;border-color:var(--primary)}
+.primary:hover{background:var(--primary);box-shadow:0 2px 12px #2f5d6240}
+.danger{color:var(--danger)}
+a{color:inherit;text-decoration:none}
+input,textarea,select{display:block;width:100%;background:var(--raised);border:1px solid var(--line);border-radius:9px;padding:11px 13px;transition:border-color .15s ease,box-shadow .15s ease}
+input:focus,textarea:focus,select:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--tint);outline:none}
+textarea{resize:vertical}
+label{display:block;color:var(--muted);font-size:13px}
+label input,label textarea,label select{margin-top:6px}
+.topbar{padding:20px 4vw;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--panel)}
+.brand{font-weight:700;font-size:20px}
+.brand span{background:var(--primary);color:var(--on-primary);padding:7px 9px;border-radius:10px;margin-right:8px}
+.brand small{font-size:11px;letter-spacing:2px;color:var(--muted)}
+.actions,.library-tools,.workspace-header,.rail-heading,.editor-footer{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.local-badge{color:var(--success);font-size:12px}
+.hero{display:flex;justify-content:space-between;align-items:center;gap:24px;padding:55px 0 30px}
+.eyebrow{letter-spacing:3px;font-size:10px;color:var(--accent);margin:0;font-weight:600}
+h1{font-size:clamp(25px,3vw,40px);margin:8px 0}
+h2{font-size:18px;margin:8px 0}
+.muted,.footnote{color:var(--muted)}
+.footnote{font-size:12px;line-height:1.9;margin-top:30px}
+main{padding:0 4vw 40px;max-width:1680px;margin:auto}
+#notice{font-size:13px;padding:10px 4vw;border-bottom:1px solid var(--line);min-height:42px;color:var(--success);background:var(--panel)}
+#notice[data-error="true"]{color:var(--danger);background:#b0342e14}
+.library-tools{align-items:end;margin:8px 0 28px}
+.search{flex:1;min-width:180px}
+.book-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:20px}
+.book-card{padding:24px;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow-wrap:anywhere;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}
+.book-card:hover{transform:translateY(-3px);border-color:var(--primary);box-shadow:var(--shadow)}
+.book-card h2{font-size:23px;margin:16px 0}
+.book-card .actions{margin-top:24px}
+.book-card p{color:var(--muted);font-size:13px}
+.empty{padding:60px 20px;text-align:center;border:1px dashed var(--line);border-radius:15px;color:var(--muted)}
+.empty-icon{font-size:48px;color:var(--accent)}
+.workspace-header{justify-content:space-between;padding:26px 0}
+.workspace-header h1{font-size:24px;overflow-wrap:anywhere}
+.desk{display:grid;grid-template-columns:200px minmax(0,1fr) 300px;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:var(--panel);box-shadow:var(--shadow)}
+.chapter-rail{padding:20px;border-right:1px solid var(--line);background:var(--paper)}
+.rail-heading{justify-content:space-between;margin-bottom:18px}
+.chapter-row{width:100%;text-align:left;margin-bottom:8px;overflow-wrap:anywhere}
+.chapter-row:hover{background:var(--hover)}
+.chapter-row[aria-current="true"]{background:var(--tint);color:var(--primary);border-color:var(--primary)}
+.editor-pane{padding:28px;min-width:0}
+.title-input{font-size:26px;border:0;background:transparent;margin:18px 0;padding-left:0}
+.title-input:focus{box-shadow:none}
+.editor-tools{font-size:12px;margin:16px 0}
+.editor-tools button{padding:6px 10px}
+summary{cursor:pointer;color:var(--muted);font-size:13px}
+details textarea{margin:10px 0}
+#content{min-height:420px;border:0;background:transparent;padding:22px 0;font:18px/2.2 Georgia,"Noto Serif SC","Source Han Serif SC","Microsoft YaHei",serif}
+.editor-footer{justify-content:space-between;color:var(--muted);border-top:1px solid var(--line);padding-top:18px;font-size:12px}
+.full{width:100%;margin-top:14px}
+.focus .desk{grid-template-columns:1fr}
+.focus .chapter-rail{display:none}
+dialog{width:min(92vw,520px);background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:18px;padding:28px;max-height:90vh;box-shadow:var(--shadow)}
+dialog::backdrop{background:#23211e66;backdrop-filter:blur(4px)}
+dialog label{margin:16px 0}
+.modal-actions{justify-content:flex-end;margin-top:26px}
+:focus-visible{outline:2px solid var(--primary);outline-offset:3px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+[hidden]{display:none!important}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:5px;border:2px solid var(--paper)}
+::-webkit-scrollbar-thumb:hover{background:var(--faint)}
+.inspector{padding:20px;border-left:1px solid var(--line);min-width:0;background:var(--paper)}
+.inspector-tabs{display:flex;gap:5px;margin-bottom:22px}
+.inspector-tabs button[aria-pressed="true"]{color:var(--primary);background:var(--tint);border-color:var(--primary)}
+.inspector label{margin:14px 0}
+.check{display:flex;gap:8px}
+.check input,input[type="checkbox"]{width:auto}
+.ai-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.entity-row{margin:12px 0;overflow-wrap:anywhere}
+.entity-row button{max-width:100%;overflow-wrap:anywhere}
+.find-panel{display:flex;flex-wrap:wrap;gap:8px}
+.find-panel label{min-width:0;flex:1}
+.focus .inspector{display:none}
+#view-dialog{width:min(90vw,800px)}
+pre{overflow-wrap:anywhere}
+#save-state{overflow-wrap:anywhere}
+@media(max-width:1100px){.desk{grid-template-columns:180px minmax(0,1fr)}.inspector{grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}
+@media(max-width:700px){.topbar,.hero{align-items:flex-start;flex-direction:column}.local-badge{display:none}.desk{grid-template-columns:1fr}.chapter-rail{border-right:0;border-bottom:1px solid var(--line)}#chapter-list{max-height:160px;overflow:auto}.editor-pane{padding:18px}.hero{padding-top:30px}main{padding:0 16px 30px}.workspace-header .actions{gap:8px}#content{min-height:320px}.inspector-tabs{flex-wrap:wrap}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 </style></head>
 <body>
-<header class="topbar"><a class="brand" href="../landing.html"><span>墨</span> 墨匠 <small>INKSMITH</small></a><div class="actions"><span class="local-badge">● 本机创作空间</span><button id="open-ai">模型设置</button><button id="backup-all">备份书架</button></div></header>
+<header class="topbar"><a class="brand" href="../landing.html"><span>墨</span> 墨匠 <small>INKSMITH</small></a><div class="actions"><button id="theme-toggle" title="切换浅色 / 深色主题">🌓 主题</button><span class="local-badge">● 本机创作空间</span><button id="open-ai">模型设置</button><button id="backup-all">备份书架</button></div></header>
 <div id="notice" role="status" aria-live="polite">准备就绪</div>
 <main><section id="library">
 <div class="hero"><div><p class="eyebrow">YOUR STORIES, YOUR UNIVERSE</p><h1>故事，从这里生长。</h1><p class="muted">管理每一份灵感，写下属于你的万千世界。</p></div><button class="primary" id="new-book">＋ 新建作品</button></div>
@@ -28,9 +118,9 @@
 <div id="entity-panel"><div class="rail-heading"><h2 id="entity-heading">角色档案</h2><button id="new-entity">＋ 新增</button></div><div id="entity-list"></div></div>
 <div id="ai-panel" hidden><p class="eyebrow">AI COPILOT</p><h2>让灵感延伸</h2><p class="muted">真实调用你配置的模型。结果先预览，不会自动覆盖正文。</p><label>写作要求<textarea id="ai-instruction" rows="4" placeholder="例如：推进矛盾，用对话表现人物动机。"></textarea></label><label class="check"><input id="ai-consent" type="checkbox">允许将当前章节、大纲、角色与世界观发送到所配置的端点</label><div class="ai-actions"><button data-ai="generate">生成本章</button><button data-ai="continue">续写正文</button><button data-ai="rewrite">修改全文</button><button data-ai="proofread">校对建议</button></div><button id="cancel-ai" class="danger full" disabled>取消请求</button><p id="ai-status" role="status" class="muted">尚未调用模型</p><label>模型结果<textarea id="ai-result" rows="12" readonly></textarea></label><div class="actions"><button id="append-ai" disabled>追加正文</button><button id="replace-ai" disabled>替换正文</button></div><p class="footnote">校对结果只提供建议，不直接应用。生成质量与费用取决于模型服务；不承诺字数或平台审核结果。</p></div>
 </aside></div></section></main>
-<dialog id="form-dialog"><form id="modal-form"><div class="rail-heading"><h2 id="modal-title"></h2><button type="button" id="modal-close" aria-label="关闭">✕</button></div><div id="modal-fields"></div><div class="actions modal-actions"><button type="button" id="modal-cancel">取消</button><button class="primary" type="submit">保存</button></div></form></dialog>
-<dialog id="view-dialog"><div class="rail-heading"><h2 id="view-title"></h2><button id="view-close" aria-label="关闭">✕</button></div><div id="view-body"></div></dialog>
-<dialog id="ai-dialog"><form id="ai-config-form"><div class="rail-heading"><h2>模型连接</h2><button id="ai-close" type="button" aria-label="关闭">✕</button></div><p class="muted">密钥只保留在本页内存，刷新后需重填。浏览器直连需服务允许 CORS，本页不做绕过。仅允许 HTTPS 或本机 HTTP。</p>
+<dialog id="form-dialog" aria-labelledby="modal-title"><form id="modal-form"><div class="rail-heading"><h2 id="modal-title"></h2><button type="button" id="modal-close" aria-label="关闭">✕</button></div><div id="modal-fields"></div><div class="actions modal-actions"><button type="button" id="modal-cancel">取消</button><button class="primary" type="submit">保存</button></div></form></dialog>
+<dialog id="view-dialog" aria-labelledby="view-title"><div class="rail-heading"><h2 id="view-title"></h2><button id="view-close" aria-label="关闭">✕</button></div><div id="view-body"></div></dialog>
+<dialog id="ai-dialog" aria-labelledby="ai-dialog-title"><form id="ai-config-form"><div class="rail-heading"><h2 id="ai-dialog-title">模型连接</h2><button id="ai-close" type="button" aria-label="关闭">✕</button></div><p class="muted">密钥只保留在本页内存，刷新后需重填。浏览器直连需服务允许 CORS，本页不做绕过。仅允许 HTTPS 或本机 HTTP。</p>
 <label>协议<select id="ai-provider"><option value="openai">OpenAI 兼容</option><option value="ollama">Ollama</option></select></label>
 <label>Base URL 或完整端点<input id="ai-url" type="url" required placeholder="https://api.example.com/v1 或 http://localhost:11434"></label>
 <label>模型名<input id="ai-model" required maxlength="200" placeholder="模型 ID"></label>

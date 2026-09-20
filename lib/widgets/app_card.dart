@@ -19,6 +19,7 @@ class Hoverable extends StatefulWidget {
     this.hoverColor,
     this.selectedColor,
     this.tooltip,
+    this.lift = false,
   });
 
   /// 子内容。
@@ -48,6 +49,9 @@ class Hoverable extends StatefulWidget {
   /// 悬浮提示（包一层 Tooltip，省得调用方到处套）。
   final String? tooltip;
 
+  /// 是否在悬浮时轻微上浮并抬升投影（卡片类内容用；工具条按钮不要开）。
+  final bool lift;
+
   @override
   State<Hoverable> createState() => _HoverableState();
 }
@@ -70,13 +74,16 @@ class _HoverableState extends State<Hoverable> {
                 : null;
     final bool tappable = widget.onTap != null || widget.onSecondaryTap != null;
 
+    final bool lifted = widget.lift && tappable && _hover && !_pressed;
     Widget body = AnimatedContainer(
       duration: AppTokens.fast,
       curve: AppTokens.curve,
       padding: widget.padding,
+      transform: lifted ? Matrix4.translationValues(0, -2, 0) : null,
       decoration: BoxDecoration(
         color: bg,
         borderRadius: radius,
+        boxShadow: lifted ? ink.shadow(raised: true) : null,
       ),
       child: widget.child,
     );
@@ -340,6 +347,8 @@ class AppCard extends StatelessWidget {
     return Hoverable(
       onTap: onTap,
       borderRadius: radius,
+      // 可点卡片悬浮时轻微抬升（与 web 端书卡 hover 一致）。
+      lift: true,
       child: card,
     );
   }

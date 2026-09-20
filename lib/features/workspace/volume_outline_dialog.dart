@@ -1,7 +1,9 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/models/chapter.dart';
+import 'package:novel_writer/widgets/app_feedback.dart';
 
 /// 卷纲总览弹窗：汇总全书各章大纲，支持查看 / 复制卷纲文本。
 ///
@@ -93,14 +95,16 @@ class _VolumeOutlineDialogState extends State<_VolumeOutlineDialog> {
                           dense: true,
                           leading: Text(
                             '${i + 1}',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Theme.of(c).colorScheme.primary,
+                            style: AppFonts.text(
+                              Theme.of(c).colorScheme.primary,
+                              weight: FontWeight.bold,
+                              height: 1.3,
                             ),
                           ),
                           title: Text(
                             ch.title,
-                            style: const TextStyle(fontSize: 14),
+                            style: AppFonts.text(AppInk.of(context).ink,
+                                size: 14, height: 1.4),
                             overflow: TextOverflow.ellipsis,
                           ),
                           subtitle: hasOutline
@@ -110,15 +114,16 @@ class _VolumeOutlineDialogState extends State<_VolumeOutlineDialog> {
                                   overflow: _showAll
                                       ? TextOverflow.visible
                                       : TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 12),
+                                  style: AppFonts.text(AppInk.of(c).inkSoft,
+                                      size: 12, height: 1.4),
                                 )
                               : Text(
                                   '未设置大纲',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontStyle: FontStyle.italic,
-                                    color: Theme.of(c).colorScheme.outline,
-                                  ),
+                                  style: AppFonts.text(
+                                    Theme.of(c).colorScheme.outline,
+                                    size: 12,
+                                    height: 1.4,
+                                  ).copyWith(fontStyle: FontStyle.italic),
                                 ),
                           trailing: IconButton(
                             icon: const Icon(Icons.edit_note, size: 18),
@@ -146,11 +151,8 @@ class _VolumeOutlineDialogState extends State<_VolumeOutlineDialog> {
                       ClipboardData(text: _volumeText),
                     );
                     if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('✅ 卷纲已复制，可直接粘贴到「多章连写」卷纲输入框'),
-                        ),
-                      );
+                      AppToast.success(
+                          context, '卷纲已复制，可直接粘贴到「多章连写」卷纲输入框');
                     }
                   },
                   icon: const Icon(Icons.copy, size: 16),

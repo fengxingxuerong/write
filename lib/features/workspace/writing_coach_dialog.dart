@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:novel_writer/core/constants/app_constants.dart';
+import 'package:novel_writer/core/theme/app_tokens.dart';
 
 /// 写作教练分析结果。
 class WritingAnalysis {
@@ -20,7 +21,8 @@ class WritingAnalysis {
 /// 写作教练弹窗：分析正文给出"展示非陈述/AI回声/节奏"等建议。
 class WritingCoachDialog {
   static Future<void> show(BuildContext context, String content) async {
-    final analyses = _analyze(content);
+    final AppInk ink = AppInk.of(context);
+    final analyses = _analyze(content, ink);
     return showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -35,7 +37,7 @@ class WritingCoachDialog {
           width: 500,
           height: 400,
           child: ListView(
-            children: analyses.map((a) => _analysisCard(a)).toList(),
+            children: analyses.map((a) => _analysisCard(a, ink)).toList(),
           ),
         ),
         actions: [
@@ -48,11 +50,11 @@ class WritingCoachDialog {
     );
   }
 
-  static Widget _analysisCard(WritingAnalysis a) {
+  static Widget _analysisCard(WritingAnalysis a, AppInk ink) {
     return Card(
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(bottom: AppTokens.s2 + 2),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(AppTokens.s3),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -62,29 +64,30 @@ class WritingCoachDialog {
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: a.color.withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: BorderRadius.circular(AppTokens.r1),
                   ),
                   child: Text(a.label,
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: a.color)),
+                      style: AppFonts.text(a.color,
+                          size: 12,
+                          weight: FontWeight.bold,
+                          height: 1.3)),
                 ),
                 const Spacer(),
                 Text(a.value,
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold, color: a.color)),
+                    style: AppFonts.text(a.color,
+                        weight: FontWeight.bold, height: 1.3)),
               ],
             ),
             const SizedBox(height: 6),
-            Text(a.suggestion, style: const TextStyle(fontSize: 13)),
+            Text(a.suggestion,
+                style: AppFonts.text(ink.ink, size: 13, height: 1.4)),
           ],
         ),
       ),
     );
   }
 
-  static List<WritingAnalysis> _analyze(String text) {
+  static List<WritingAnalysis> _analyze(String text, AppInk ink) {
     final words = AppConstants.countWords(text);
     final results = <WritingAnalysis>[];
 
@@ -99,7 +102,7 @@ class WritingCoachDialog {
           : echoRate < 5
               ? '尚可，但可减少"仿佛/似乎/微微一笑"等套话。'
               : '套话密度偏高，建议改写 AI 味重的段落。',
-      color: echoRate < 2 ? Colors.green : echoRate < 5 ? Colors.orange : Colors.red,
+      color: echoRate < 2 ? ink.success : echoRate < 5 ? ink.warn : ink.danger,
     ));
 
     // 2. 展示非陈述
@@ -111,7 +114,7 @@ class WritingCoachDialog {
       suggestion: showRatio > 60
           ? '良好，多数描写通过动作/细节外化情绪。'
           : '建议减少"他很愤怒/她很难过"式陈述，改为动作和表情。',
-      color: showRatio > 60 ? Colors.green : Colors.orange,
+      color: showRatio > 60 ? ink.success : ink.warn,
     ));
 
     // 3. 对话密度
@@ -125,7 +128,7 @@ class WritingCoachDialog {
           : dialRatio > 5
               ? '对话适中，可酌情增加对话推进情节。'
               : '对话偏少，考虑用对话替代部分旁白推进。',
-      color: dialRatio > 15 ? Colors.green : dialRatio > 5 ? Colors.blue : Colors.orange,
+      color: dialRatio > 15 ? ink.success : dialRatio > 5 ? ink.primary : ink.warn,
     ));
 
     // 4. 句式节奏
@@ -136,7 +139,7 @@ class WritingCoachDialog {
       suggestion: rhythm['score'] == 'good'
           ? '长短句交替良好，阅读节奏舒适。'
           : '句式趋于单一，建议增加短句营造紧张感或长句铺陈描写。',
-      color: rhythm['score'] == 'good' ? Colors.green : Colors.orange,
+      color: rhythm['score'] == 'good' ? ink.success : ink.warn,
     ));
 
     // 5. 词汇多样性
@@ -149,7 +152,7 @@ class WritingCoachDialog {
           : diversity > 0.4
               ? '可接受，部分高频词可替换为同义表达。'
               : '词汇重复偏高，注意替换高频动词和形容词。',
-      color: diversity > 0.6 ? Colors.green : diversity > 0.4 ? Colors.orange : Colors.red,
+      color: diversity > 0.6 ? ink.success : diversity > 0.4 ? ink.warn : ink.danger,
     ));
 
     return results;

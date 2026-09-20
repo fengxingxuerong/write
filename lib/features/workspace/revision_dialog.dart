@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:novel_writer/core/theme/app_tokens.dart';
 /// 修订模式弹窗：对比原文与AI修订版，接受或拒绝修订。
 class RevisionDialog {
   /// 打开修订弹窗。[original] 为选中的片段，[revised] 为 AI 修订版。
@@ -29,11 +30,14 @@ class RevisionDialog {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      color: Colors.red.withValues(alpha: 0.1),
-                      child: const Text('原文',
-                          style: TextStyle(
-                              fontSize: 12, fontWeight: FontWeight.bold)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: AppTokens.s2, vertical: AppTokens.s1),
+                      color: AppInk.of(context)
+                          .danger
+                          .withValues(alpha: 0.1),
+                      child: Text('原文',
+                          style: AppFonts.text(AppInk.of(context).ink,
+                              size: 12, weight: FontWeight.w600)),
                     ),
                     Expanded(
                       child: SingleChildScrollView(
@@ -51,11 +55,14 @@ class RevisionDialog {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      color: Colors.green.withValues(alpha: 0.1),
-                      child: const Text('AI 修订版',
-                          style: TextStyle(
-                              fontSize: 12, fontWeight: FontWeight.bold)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: AppTokens.s2, vertical: AppTokens.s1),
+                      color: AppInk.of(context)
+                          .success
+                          .withValues(alpha: 0.1),
+                      child: Text('AI 修订版',
+                          style: AppFonts.text(AppInk.of(context).ink,
+                              size: 12, weight: FontWeight.w600)),
                     ),
                     Expanded(
                       child: SingleChildScrollView(
