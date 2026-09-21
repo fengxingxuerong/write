@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:novel_writer/features/editor/writing_stats_dialog.dart';
 
@@ -110,6 +111,7 @@ void main() {
     });
   });
 
+
   group('WritingStats 不可变性', () {
     test('所有字段为 final', () {
       const stats = WritingStats(
@@ -126,4 +128,84 @@ void main() {
       expect(stats.avgSentenceLength, 10.0);
     });
   });
+
+
+  group('showWritingStatsDialog 弹窗', () {
+    const WritingStats stats = WritingStats(
+      wordCount: 500,
+      paragraphCount: 3,
+      sentenceCount: 10,
+      sessionAdded: 120,
+      avgSentenceLength: 50.0,
+    );
+
+    Future<void> openDialog(
+      WidgetTester tester, {
+      WritingStats s = stats,
+      required int targetWords,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (BuildContext ctx) => TextButton(
+                onPressed: () => showWritingStatsDialog(
+                  ctx,
+                  stats: s,
+                  targetWords: targetWords,
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('未达标：显示目标进度与差值，关闭按钮退出弹窗', (tester) async {
+      await openDialog(tester, targetWords: 2000);
+      expect(find.text('📊 写作统计'), findsOneWidget);
+      expect(find.text('字数目标：500 / 2000 字'), findsOneWidget);
+      expect(find.text('还差 1500 字达标'), findsOneWidget);
+      expect(find.byType(LinearProgressIndicator), findsOneWidget);
+      // 明细行
+      expect(find.text('当前字数'), findsOneWidget);
+      expect(find.text('500 字'), findsOneWidget);
+      expect(find.text('+120 字'), findsOneWidget);
+      expect(find.text('3 段'), findsOneWidget);
+      expect(find.text('10 句'), findsOneWidget);
+      expect(find.textContaining('字/句'), findsOneWidget);
+
+      await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle();
+      expect(find.text('📊 写作统计'), findsNothing);
+    });
+
+    testWidgets('已达标：显示庆祝文案', (tester) async {
+      const WritingStats done = WritingStats(
+        wordCount: 2000,
+        paragraphCount: 8,
+        sentenceCount: 40,
+        sessionAdded: 600,
+        avgSentenceLength: 50.0,
+      );
+      await openDialog(tester, s: done, targetWords: 2000);
+      expect(find.text('🎉 已达成本章字数目标！'), findsOneWidget);
+      expect(find.text('字数目标：2000 / 2000 字'), findsOneWidget);
+    });
+
+    testWidgets('无目标（targetWords<=0）：只显纯字数，不出进度条与差值',
+        (tester) async {
+      await openDialog(tester, targetWords: 0);
+      expect(find.text('字数：500 字'), findsOneWidget);
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(find.textContaining('还差'), findsNothing,
+          reason: '无目标时不应出现「还差 -N 字」这类错误文案');
+      // 明细行仍完整
+      expect(find.text('当前字数'), findsOneWidget);
+    });
+  });
 }
+
