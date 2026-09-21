@@ -268,7 +268,7 @@ test/
     └── export_service_test.dart      # txt/md/epub/docx/backup 结构（8 用例）
 ```
 
-**当前：177 个用例，覆盖率 64.9%**，CI 流水线设 50% 门槛。
+**当前：735 个用例，覆盖率 75.9%**，CI 流水线设 60% 门槛。
 
 ### ViewModel 测试要点
 

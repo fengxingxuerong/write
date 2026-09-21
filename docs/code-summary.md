@@ -2,6 +2,7 @@
 
 > 工程师：寇豆码（Kou）｜技术栈：Flutter / Dart 单代码库｜状态管理 Riverpod｜路由 go_router
 > 编写日期：2026-07-31｜对应架构：`docs/architecture-mvp.md`
+> **复核（2026-09-20）**：`flutter analyze --fatal-infos` 零告警；`flutter test` 全量 **735 用例通过**（5 skipped）、行覆盖率 **75.9%**（≥60% 门槛）。下述 102 用例 / 31 条 info 为 2026-07-31 当次时点数据，仅供历史对照。
 
 ## 一、IS_PASS 结论
 
