@@ -49,15 +49,26 @@ void main() {
     expect(Novel.fromJson(bakJson).title, equals('备份测试'));
   });
 
-  test('写两次后破坏主文件，从备份恢复为最近一次写入', () async {
-    // 第一次写入（主文件=v1，无备份）。
+  test('写两次后破坏主文件，从备份恢复为上一版本（回滚点）', () async {
+    // 第一次写入（主文件=v1，首写复制初始备份=v1）。
     await db.writeNovel(makeNovel('n2', '自愈v1'));
-    // 第二次写入后备份为当前主文件（=v2），主文件再损坏时恢复为 v2。
+    // 第二次写入：写前把主文件 rename 为备份（备份=v1），主文件=v2。
     await db.writeNovel(makeNovel('n2', '自愈v2'));
     final file = db.novelFile('n2');
     await file.writeAsString('{broken!!!');
     final novel = await db.readNovel('n2');
-    // 备份是最近一次成功写入的内容（v2）。
+    // 备份是最近一次写入前的完整版本（v1，回滚点语义）。
+    expect(novel.title, equals('自愈v1'));
+  });
+
+  test('第三次写入后备份为 v2（版本滚动）', () async {
+    await db.writeNovel(makeNovel('n2b', '自愈v1'));
+    await db.writeNovel(makeNovel('n2b', '自愈v2'));
+    await db.writeNovel(makeNovel('n2b', '自愈v3'));
+    final file = db.novelFile('n2b');
+    await file.writeAsString('{broken!!!');
+    final novel = await db.readNovel('n2b');
+    // rename 链：v2 在主文件损坏时从备份恢复（上一版 = 最近一次写入前）。
     expect(novel.title, equals('自愈v2'));
   });
 

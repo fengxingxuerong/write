@@ -158,17 +158,21 @@ void main() {
     final novel = await novelRepo.createNovel(
         title: '可靠性测试', genre: '都市', tone: '轻松');
 
-    // 写两次，备份应为最新
+    // 写两次：备份为上一版（回滚点 v1），主文件为最新（v2）。
     await novelRepo.saveNovel(novel.copyWith(title: '可靠性测试v2'));
     final bakFile = File('${db.directory.path}/${novel.id}.bak.json');
     expect(await bakFile.exists(), isTrue);
     final bakContent = await bakFile.readAsString();
-    expect(bakContent, contains('可靠性测试v2'));
+    expect(bakContent, contains('可靠性测试'));
+    expect(bakContent, isNot(contains('可靠性测试v2')));
+    final mainContent = await (File('${db.directory.path}/${novel.id}.json'))
+        .readAsString();
+    expect(mainContent, contains('可靠性测试v2'));
 
-    // 损坏主文件 → 自愈
+    // 损坏主文件 → 自愈（恢复到最近一次成功写入前的版本 v1）
     final mainFile = File('${db.directory.path}/${novel.id}.json');
     await mainFile.writeAsString('{{{corrupted json');
     final recovered = await novelRepo.getNovel(novel.id);
-    expect(recovered.title, '可靠性测试v2');
+    expect(recovered.title, '可靠性测试');
   });
 }

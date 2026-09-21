@@ -262,10 +262,20 @@ class AppDatabase {
     }
   }
 
-  /// 写入整本小说（原子写：先写临时文件再重命名）。
+/// 写入整本小说（原子写：先写临时文件再重命名）。
   ///
-  /// 写入成功后把新文件备份为 `<id>.bak.json`（备份永远是最新完好数据），
-  /// 供主文件损坏时自愈。JSON 序列化按体量自动分流（见 [encodeNovel]）。
+  /// 备份策略为「写前备份」：把当前主文件直接 rename 为 `<id>.bak.json`
+  /// （同卷 rename 是元数据操作、零字节拷贝），再用临时文件原子替换主文件。
+  /// 相比旧版「写后 copy 当前主文件为备份」，消除了每次保存的
+  /// 主文件 + .bak 全量双写（写放大 2× → 1×），大书体积下收益线性放大。
+  ///
+  /// 可靠性语义（与旧版对等的自愈保证，且崩溃窗口更窄）：
+  /// - 任意时刻至少存在一份完好的项目数据：rename 两步之间若崩溃，
+  ///   主文件缺失但 .bak 为上一完整版本，[readNovel] 会自动从备份自愈；
+  /// - 主文件损坏/缺失时，恢复到「最近一次成功写入前的版本」
+  ///   （回滚点，而非旧版的写后最新版镜像）；
+  /// - 首次写入（无旧主文件可转存）时，原子替换后复制一份初始备份，
+  ///   一次性成本保证「首写即备份」语义不因本改造而弱化。
   Future<void> writeNovel(Novel novel) async {
     final File file = novelFile(novel.id);
     final File tmp = File('${file.path}.tmp');
@@ -274,16 +284,24 @@ class AppDatabase {
         await encodeNovel(novel),
         flush: true,
       );
-      await tmp.rename(file.path);
-      // 原子替换成功后，把新文件复制为备份。
       final File bak = novelBackupFile(novel.id);
-      try {
+      if (await file.exists()) {
+        // 写前备份：旧主文件改名为备份（零拷贝）；Windows 上 rename
+        // 覆盖目标会失败，故先清理旧备份。若此时崩溃：主缺失、备份完好，
+        // 走自愈恢复上一版。
         if (await bak.exists()) {
           await bak.delete().ignore();
         }
-        await file.copy(bak.path);
-      } catch (_) {
-        // 备份失败不阻塞写入（主流程照常）。
+        await file.rename(bak.path);
+        await tmp.rename(file.path);
+      } else {
+        // 首写：无旧主文件可转存；替换后复制一次初始备份。
+        await tmp.rename(file.path);
+        try {
+          await file.copy(bak.path);
+        } catch (_) {
+          // 初始备份失败不阻塞写入（主流程照常）。
+        }
       }
     } catch (e) {
       // 清理可能残留的临时文件。
