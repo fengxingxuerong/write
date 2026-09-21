@@ -243,6 +243,124 @@ void main() {
       expect(AiPipelineService.missingRoles(config), isEmpty);
     });
   });
+  group('链式路由日志与健康池自愈', () {
+    test('链上无已配置端点 → 日志记录且不发起请求', () async {
+      final ChainLlmRouter router = ChainLlmRouter(retry: _singleTry);
+      final List<String> logs = <String>[];
+      final LlmRouteResult r = await router.call(
+        const <LlmConfig>[LlmConfig()], // 默认 Ollama 空 baseUrl → 未配置。
+        system: 's',
+        user: 'u',
+        onLog: logs.add,
+      );
+      expect(r.ok, isFalse);
+      expect(logs.join('\n'), contains('链上无已配置端点'));
+    });
+
+    test('端点空响应 → 日志提示并继续切下一个', () async {
+      final _Endpoint main = await _startFake(statusCode: 200, content: '');
+      final _Endpoint backup =
+          await _startFake(statusCode: 200, content: '备用正文');
+      final ChainLlmRouter router = ChainLlmRouter(retry: _singleTry);
+      final List<String> logs = <String>[];
+      final LlmRouteResult r = await router.call(
+        <LlmConfig>[_endpoint(main, 'main'), _endpoint(backup, 'backup')],
+        system: 's',
+        user: 'u',
+        onLog: logs.add,
+      );
+      expect(r.content, '备用正文');
+      expect(logs.join('\n'), contains('返回为空，尝试下一个'));
+      await main.close();
+      await backup.close();
+    });
+
+    test('失败达阈值 → 日志带冷却提示；冷却期跳过也有日志', () async {
+      final _Endpoint main = await _startFake(statusCode: 429, content: '');
+      final _Endpoint backup =
+          await _startFake(statusCode: 200, content: '备用正文');
+      final ChainLlmRouter router = ChainLlmRouter(
+        retry: _singleTry,
+        maxFailures: 1,
+        cooldown: const Duration(minutes: 5),
+      );
+      final List<String> logs = <String>[];
+      await router.call(
+        <LlmConfig>[_endpoint(main, 'main'), _endpoint(backup, 'backup')],
+        system: 's',
+        user: 'u',
+        onLog: logs.add,
+      );
+      expect(logs.join('\n'), contains('失败：'));
+      expect(logs.join('\n'), contains('进入冷却 5 分钟'));
+
+      // 第二次：主已冷却 → 跳过日志 + 只打备用。
+      logs.clear();
+      await router.call(
+        <LlmConfig>[_endpoint(main, 'main'), _endpoint(backup, 'backup')],
+        system: 's',
+        user: 'u',
+        onLog: logs.add,
+      );
+      expect(logs.join('\n'), contains('冷却中，跳过'));
+      await main.close();
+      await backup.close();
+    });
+
+    test('非传输异常 → 截断记录到日志，不中断整条链', () async {
+      final _Endpoint main = await _startFake(statusCode: 200, content: '正文');
+      // clientFactory 抛 StateError（非传输异常）→ 走「异常」兜底分支。
+      final ChainLlmRouter router = ChainLlmRouter(
+        retry: _singleTry,
+        clientFactory: () => throw StateError('假连接工厂故障${'x' * 200}'),
+      );
+      final List<String> logs = <String>[];
+      final LlmRouteResult r = await router.call(
+        <LlmConfig>[_endpoint(main, 'main')],
+        system: 's',
+        user: 'u',
+        onLog: logs.add,
+      );
+      expect(r.ok, isFalse);
+      expect(logs.join('\n'), contains('异常：'));
+      expect(logs.join('\n'), isNot(contains('x' * 200))); // 超长错误已截断
+      expect(main.count, 0); // 连接根本没建立起来
+      await main.close();
+    });
+
+    test('成功一次即清零失败计数（防误冷却自愈）', () async {
+      final _Endpoint main = _Endpoint.plan(
+        statusCode: 429,
+        content: '正文', // 非空正文才会触发「成功清零失败计数」
+        statuses: <int>[429, 200, 429],
+      );
+      final int port = await main.start();
+      final ChainLlmRouter router = ChainLlmRouter(
+        retry: _singleTry,
+        maxFailures: 2,
+        cooldown: const Duration(minutes: 5),
+      );
+      final List<String> logs = <String>[];
+      List<LlmConfig> chain() =>
+          <LlmConfig>[_endpoint(main, 'main', port: port)];
+
+      await router.call(chain(), system: 's', user: 'u', onLog: logs.add);
+      await router.call(chain(), system: 's', user: 'u', onLog: logs.add);
+      logs.clear();
+      // 若上一次成功没清零计数，这里就会凑满 2 次失败进入冷却。
+      await router.call(chain(), system: 's', user: 'u', onLog: logs.add);
+      expect(logs.join('\n'), isNot(contains('进入冷却')));
+
+      // 第 4 次仍应打到端点（未被冷却跳过）。
+      final int before = main.count;
+      logs.clear();
+      await router.call(chain(), system: 's', user: 'u', onLog: logs.add);
+      expect(main.count, before + 1);
+      expect(logs.join('\n'), isNot(contains('冷却中，跳过')));
+      await main.close();
+    });
+  });
+
 }
 
 // ============================================================

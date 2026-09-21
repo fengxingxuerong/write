@@ -122,4 +122,73 @@ void main() {
       expect(r.summary, isNotEmpty);
     });
   });
+
+  /// AI 腔样板文本：等长句 + 高「的」密度 + 叠词 + 连接词起句 + 比喻 +
+  /// 单句成段 + 身体反应（「发烫」属变强异动词，用于含蓄变强流分支）。
+  String aiHeavyText() {
+    final StringBuffer b = StringBuffer();
+    for (int i = 0; i < 6; i++) {
+      b.writeln('然而他的瞳的孔的神色在灯下微微的变了。'
+          '因此他的心的底的念头在这一刻轻轻的散了。'
+          '于是他的肩的线的轮廓在风里缓缓的暗了。');
+      b.writeln();
+      b.writeln(i.isEven ? '他的眼底的光淡淡的浮起。' : '他的掌心发烫的厉害。');
+      b.writeln();
+      b.writeln('仿佛那张网一样。');
+      b.writeln();
+    }
+    return b.toString();
+  }
+
+  /// 平淡超长章（无爽点/无变强异动/无钩子），末尾接三段相邻重复段。
+  String blandOverlongText() {
+    final String bland =
+        '他沿着长街走了一程，风从巷口吹过来，带着潮气。\n\n' * 220;
+    const String dup = '他站在长街的尽头，看着那盏灯，一动不动。';
+    return '$bland\n\n$dup\n\n$dup\n\n$dup';
+  }
+
+  group('CompositeQualityGate 商业与结构分支', () {
+    test('超长平淡章 → 结构建议走 note + 爽点过淡 + 缺钩 + 相邻段重复', () {
+      final QualityGateReport r = gate.check(blandOverlongText());
+      // 超长章（>3800 字）走 note 严重度分支：只建议、不算阻断项
+      expect(
+        r.issues.any((QualityGateIssue e) =>
+            e.message.contains('偏长') && e.severity == QualitySeverity.note),
+        isTrue,
+      );
+      // 相邻段高度重复 → 文笔卫生 repetition 违规
+      expect(
+        r.issues.any((QualityGateIssue e) =>
+            e.source == QualitySource.novelHygiene && e.type == '重复'),
+        isTrue,
+      );
+      // 无爽点（直白与异动双低）→ 爽点告警
+      expect(
+        r.issues.any((QualityGateIssue e) =>
+            e.type == '爽点' && e.severity == QualitySeverity.warn),
+        isTrue,
+      );
+      // 章末无钩子 → 钩子告警（且综合分按 -5 处理，不为负）
+      expect(r.issues.any((QualityGateIssue e) => e.type == '钩子'), isTrue);
+      expect(r.score, greaterThanOrEqualTo(0));
+      expect(r.metrics['thrillPerK'], lessThan(0.5));
+    });
+
+    test('含蓄变强流 + 统计层 AI 腔 → 爽点降为 note，并出 AI 腔告警', () {
+      final QualityGateReport r = gate.check(aiHeavyText() * 4);
+      expect(r.metrics['deepAiLevel']!, greaterThanOrEqualTo(3));
+      expect(r.metrics['surgePerK']!, greaterThanOrEqualTo(1.0));
+      expect(
+        r.issues.any((QualityGateIssue e) =>
+            e.type == '爽点' && e.severity == QualitySeverity.note),
+        isTrue,
+      );
+      expect(
+        r.issues.any((QualityGateIssue e) => e.type == 'AI腔'),
+        isTrue,
+      );
+    });
+  });
+
 }

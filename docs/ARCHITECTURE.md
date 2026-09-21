@@ -256,6 +256,7 @@ test/
 │   ├── template_engine_test.dart      # 生成质量/循环/clamp
 │   ├── generation_engine_test.dart    # ContextBundle.copyWith
 │   ├── story_memory_test.dart         # AI 记忆全链路（本地 HttpServer 假 LLM）
+│   ├── multipass/scene_builder_test.dart  # 章纲→场景规划（假端点 + 骨架兜底，4 用例）
 │   └── proofread_test.dart            # ProofreadResult.applyFixes 客户端修正
 ├── storage/
 │   ├── repository_test.dart           # Novel CRUD + setArchived + 存稿箱 CRUD
@@ -271,7 +272,7 @@ test/
     └── export_service_test.dart      # txt/md/epub/docx/backup 结构（8 用例）
 ```
 
-**当前：844 个用例，覆盖率 84.6%**，CI 流水线设 60% 门槛。最近一轮补测集中在多角色 AI 流水线的 `AiPipelineService.run` 编排（`test/ai_pipeline/ai_pipeline_service_run_test.dart`，18 用例、零网络替身），该文件行覆盖率 **94.5%**。
+**当前：864 个用例，覆盖率 85.6%**，CI 流水线设 60% 门槛。最近两轮补测：① 多角色 AI 流水线的 `AiPipelineService.run` 编排（`test/ai_pipeline/ai_pipeline_service_run_test.dart`，18 用例、零网络替身，该文件行覆盖率 94.5%）；② 本地质检链路洼地——`pipeline_qa` 99.5%、`llm_router`（链式路由日志 + 健康池自愈）100%、`composite_quality_gate` 98.4%、`scene_builder`（章纲→场景规划与骨架兜底）100%。
 
 ### ViewModel 测试要点
 

@@ -22,8 +22,16 @@ void main() {
   });
 
   tearDown(() async {
-    if (await tmpRoot.exists()) {
-      await tmpRoot.delete(recursive: true);
+    // Windows 下句柄/杀软可能延迟释放文件锁：重试几次，仍失败则放弃清理
+    //（临时目录位于 %TEMP%，残留不污染仓库、不影响断言与 CI）。
+    for (int attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (!await tmpRoot.exists()) return;
+        await tmpRoot.delete(recursive: true);
+        return;
+      } on FileSystemException {
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+      }
     }
   });
 
