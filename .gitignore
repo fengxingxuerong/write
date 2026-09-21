@@ -40,6 +40,10 @@ data/
 # Python 缓存
 __pycache__/
 *.py[cod]
+.ruff_cache/
+
+# 工具交付清单（AI 助手会话记录，不入库）
+.dumate/
 
 # 密钥与敏感文件（严禁入库，一律走环境变量注入）
 .env
