@@ -39,6 +39,9 @@ class LlmEngine implements GenerationEngine {
   /// 构造引擎。
   ///
   /// [maxRetries] / [baseBackoffMs] 控制限流退避；[sleep] 仅测试用。
+  /// [chatRetry] 仅作用于 [generateSingle] 内部复用的非流式客户端：
+  /// 多 pass 场景引擎自带退避重试，传 `maxAttempts: 1` 关闭此层，避免
+  /// 两层重试相乘（3×3=9 次加倍等待）；null 时用客户端默认（3 次）。
   LlmEngine({
     required this.config,
     this.timeout = const Duration(minutes: 5),
@@ -46,6 +49,7 @@ class LlmEngine implements GenerationEngine {
     this.baseBackoffMs = 2000,
     Sleeper? sleep,
     this.clientFactory,
+    this.chatRetry,
   })  : sleep = sleep ?? _delayed,
         assert(maxRetries >= 0, 'maxRetries 不能为负');
 
@@ -66,6 +70,9 @@ class LlmEngine implements GenerationEngine {
 
   /// HttpClient 工厂（测试可注入）。
   final HttpClient Function()? clientFactory;
+
+  /// [generateSingle] 内部客户端重试策略（null = 客户端默认 3 次）。
+  final RetryPolicy? chatRetry;
 
   static Future<void> _delayed(Duration d) => Future<void>.delayed(d);
 
@@ -88,88 +95,110 @@ class LlmEngine implements GenerationEngine {
     if (!this.config.isConfigured) {
       throw const EngineException('LLM 未配置：请先在设置页填写模型与地址');
     }
+    // 取消注册放在最前面：大纲扩写阶段（最长 30s）用户点取消也要立即生效，
+    // 而不是等扩写完成、进入正文生成后才注册。
+    cancelToken?.onCancel = _abortSharedClient;
+
     // 大纲扩写：把用户填的章节大纲扩写成结构化场景序列，
     // 让正文生成模型不必自己脑补结构（2B 模型尤其受益）。
-    // 失败/超时回退原始大纲，不阻塞生成。
+    // 失败/超时/已取消回退原始大纲，不阻塞生成。
     final String rawOutline = ctx.outline.trim();
     if (config.expandOutline &&
         rawOutline.isNotEmpty &&
         !(cancelToken?.isCancelled ?? false)) {
       final String expanded =
-          await _tryExpandOutline(config, ctx, rawOutline);
+          await _tryExpandOutline(config, ctx, rawOutline, cancelToken);
       if (expanded.isNotEmpty) {
         ctx = ctx.copyWith(outline: expanded);
       }
     }
-
-    // 取消时：强制断开底层连接（取消后连接不可复用，清空让下次重建）。
-    cancelToken?.onCancel = () {
-      try {
-        _sharedClient?.close(force: true);
-        _sharedClient = null;
-      } catch (_) {
-        // 连接已关闭。
-      }
-    };
+    // 扩写请求可能已发出但未返回时用户取消了：以取消为准，不再开始正文。
+    if (cancelToken?.isCancelled ?? false) {
+      throw const GenerationCancelledException();
+    }
 
     final Completer<GenerationResult> completer = Completer<GenerationResult>();
+    // 整体超时保护：SE 半途 stall 会导致「永远没结果但一直显示生成中」。
+    // 到期时强制断开底层连接让流终止，再向外部抛超时异常。
+    // 不直接用 Future.timeout：那只会结束外层 future，底层请求仍在挂起。
+    final Timer deadline = Timer(timeout, () {
+      _abortSharedClient();
+      if (!completer.isCompleted) {
+        completer.completeError(EngineException(
+          'AI 生成超时（超过 ${timeout.inMinutes} 分钟），'
+          '已中断底层请求，请检查网络或稍后重试',
+        ));
+      }
+    });
     String content = '';
     int total = 0;
     // thinking 链收集器：把 reasoning_content 透传到后续结果，
     // 便于 UI 调试展示思考过程；不参与正文拼接。
     final List<String> reasoningTokens = <String>[];
-
-    // 建连与状态校验（429/5xx 在这里退避重来）。
-    // 注意：一旦开始收流就不再重试——半章内容重发会变成两段重复正文。
-    final HttpClientResponse response =
-        await _openWithRetry(config, ctx, cancelToken, onProgress);
-
-    // 流式读取响应，逐 token 拼接并回报进度。
-    // 注意顺序：先按行切分（String），再逐行解析。
-    final Stream<String> lines =
-        response.transform(utf8.decoder).transform(const LineSplitter());
-    final StreamSubscription<String> sub = lines.listen(
-      (String line) {
-        if (line.trim().isEmpty) return;
-        final String? delta = _extractDelta(line, reasoningSink: reasoningTokens);
-        if (delta != null && delta.isNotEmpty) {
-          content += delta;
-          total += delta.length;
-          onProgress?.call(GenerationProgress(
-            charsWritten: total,
-            targetWords: config.targetWords,
-            stage: 'AI 写作中（${AppConstants.countWords(content)} 字）…',
-            previewText: content,
-          ));
-        }
-      },
-      onError: (Object e) {
-        if (cancelToken?.isCancelled ?? false) {
-          if (!completer.isCompleted) {
-            completer.completeError(const GenerationCancelledException());
-          }
-        } else if (!completer.isCompleted) {
-          completer.completeError(_classifyError(e));
-        }
-      },
-      onDone: () {
-        if (!completer.isCompleted) {
-          final String trimmed = content.trim();
-          completer.complete(GenerationResult(
-            content: trimmed,
-            actualWords: AppConstants.countWords(trimmed),
-            usedConfig: config,
-            reasoningTokens: reasoningTokens,
-          ));
-        }
-      },
-    );
-
+    StreamSubscription<String>? sub;
     try {
+      // 建连与状态校验（429/5xx 在这里退避重来）。
+      // 注意：一旦开始收流就不再重试——半章内容重发会变成两段重复正文。
+      final HttpClientResponse response =
+          await _openWithRetry(config, ctx, cancelToken, onProgress);
+
+      // 流式读取响应，逐 token 拼接并回报进度。
+      // 注意顺序：先按行切分（String），再逐行解析。
+      final Stream<String> lines =
+          response.transform(utf8.decoder).transform(const LineSplitter());
+      sub = lines.listen(
+        (String line) {
+          if (line.trim().isEmpty) return;
+          final String? delta =
+              _extractDelta(line, reasoningSink: reasoningTokens);
+          if (delta != null && delta.isNotEmpty) {
+            content += delta;
+            total += delta.length;
+            onProgress?.call(GenerationProgress(
+              charsWritten: total,
+              targetWords: config.targetWords,
+              stage: 'AI 写作中（${AppConstants.countWords(content)} 字）…',
+              previewText: content,
+            ));
+          }
+        },
+        onError: (Object e) {
+          if (cancelToken?.isCancelled ?? false) {
+            if (!completer.isCompleted) {
+              completer.completeError(const GenerationCancelledException());
+            }
+          } else if (!completer.isCompleted) {
+            completer.completeError(_classifyError(e));
+          }
+        },
+        onDone: () {
+          if (!completer.isCompleted) {
+            final String trimmed = content.trim();
+            completer.complete(GenerationResult(
+              content: trimmed,
+              actualWords: AppConstants.countWords(trimmed),
+              usedConfig: config,
+              reasoningTokens: reasoningTokens,
+            ));
+          }
+        },
+      );
+
       return await completer.future;
     } finally {
-      await sub.cancel();
+      deadline.cancel();
+      await sub?.cancel();
       // 不关闭共享 client：它会被下一次请求复用，由 dispose() 统一释放。
+    }
+  }
+
+  /// 强制关闭共享连接并清空引用（取消 / 整体超时 / 检测到损坏时调用）。
+  void _abortSharedClient() {
+    try {
+      _sharedClient?.close(force: true);
+      _sharedClient = null;
+    } catch (_) {
+      // 连接已关闭。
     }
   }
 
@@ -197,34 +226,37 @@ class LlmEngine implements GenerationEngine {
     );
     return policy.run(
       (int attempt) async {
-        final HttpClientRequest request;
         try {
           // 每次尝试都重新获取 client：非 2xx 时共享连接已被强制关闭并置空，
           // 复用闭包外的旧 client 会抛 "Client is closed"，导致重试必败。
-          request = await _createRequest(_obtainClient(), genConfig, ctx);
+          final HttpClientRequest request =
+              await _createRequest(_obtainClient(), genConfig, ctx);
+          // close() 失败（连接被服务端提前断开）也必须包装成可重试的
+          // 传输错误，并清空损坏的连接——之前它在 try 之外，错误既没分类
+          // 也不重试，共享连接还留在池里被下一次复用。
+          final HttpClientResponse response = await request.close();
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            final String body = await response.transform(utf8.decoder).join();
+            _abortSharedClient();
+            throw LlmHttpErrors.fromStatus(
+              response.statusCode,
+              body,
+              retryAfterHeader:
+                  response.headers.value(HttpHeaders.retryAfterHeader),
+            );
+          }
+          return response;
         } catch (e) {
-          // 请求创建失败时连接可能已损坏，清空让下次重建。
-          _sharedClient?.close(force: true);
-          _sharedClient = null;
+          if (e is LlmTransportException) rethrow;
+          if (e is GenerationCancelledException) rethrow;
+          _abortSharedClient();
           throw LlmHttpErrors.transport(e);
         }
-        final HttpClientResponse response = await request.close();
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          final String body = await response.transform(utf8.decoder).join();
-          // 非 2xx 时关闭共享 client：连接可能已损坏，下次会重新创建。
-          _sharedClient?.close(force: true);
-          _sharedClient = null;
-          throw LlmHttpErrors.fromStatus(
-            response.statusCode,
-            body,
-            retryAfterHeader:
-                response.headers.value(HttpHeaders.retryAfterHeader),
-          );
-        }
-        return response;
       },
       isRetryable: (Object e) =>
           !(cancelToken?.isCancelled ?? false) && LlmHttpErrors.retryable(e),
+      // 退避等待期间用户取消 → 立即中断，不再白等 2s/4s/8s。
+      isCancelled: () => cancelToken?.isCancelled ?? false,
       onRetry: (int attempt, Duration delay, Object error) {
         onProgress?.call(GenerationProgress(
           charsWritten: 0,
@@ -237,6 +269,11 @@ class LlmEngine implements GenerationEngine {
 
   /// 分类错误，返回对作者友好的错误描述。
   EngineException _classifyError(Object e) {
+    // 传输层已分类（状态码翻译/连接原因）：直接用现成文案与原始原因。
+    if (e is LlmTransportException) {
+      return EngineException(e.message, e.cause);
+    }
+    if (e is GenerationCancelledException) return e;
     final msg = e.toString().toLowerCase();
     if (msg.contains('timeout') || msg.contains('time out')) {
       return const EngineException('AI 请求超时，请稍后重试或检查网络连接');
@@ -261,8 +298,10 @@ class LlmEngine implements GenerationEngine {
 
   /// 释放共享 HTTP 连接（在引擎生命周期结束时调用）。
   void dispose() {
-    _sharedClient?.close(force: true);
-    _sharedClient = null;
+    _abortSharedClient();
+    // LlmChatClient 每次请求都自建并立即关闭 HttpClient，无持活连接；
+    // 只清引用，避免与配置变更后的旧实例纠缠。
+    _client = null;
   }
 
   /// 扩写结果最长字符数：超出会挤压正文 token 预算，回退原大纲。
@@ -276,7 +315,9 @@ class LlmEngine implements GenerationEngine {
     GenerationConfig genConfig,
     ContextBundle ctx,
     String rawOutline,
+    CancelToken? cancelToken,
   ) async {
+    if (cancelToken?.isCancelled ?? false) return '';
     try {
       final StringBuffer sys = StringBuffer();
       sys.writeln('你是一名资深小说编剧，擅长把大纲扩写成可执行的场景序列。');
@@ -325,6 +366,8 @@ class LlmEngine implements GenerationEngine {
           .timeout(const Duration(seconds: 30), onTimeout: () {
         throw const EngineException('大纲扩写超时');
       });
+      // 请求完成但用户已取消：不做无谓应用，直接回退。
+      if (cancelToken?.isCancelled ?? false) return '';
       final String expanded = res.content.trim();
       // 过长 → 回退：避免挤压正文 token 预算。
       if (expanded.length > kMaxOutlineExpandedChars) return '';
@@ -387,7 +430,8 @@ class LlmEngine implements GenerationEngine {
   /// 复用 [LlmChatClient] 单例（避免每场景重建 HTTP 连接）。
   LlmChatClient? _client;
 
-  LlmChatClient get _llmClient => _client ??= LlmChatClient(config: config);
+  LlmChatClient get _llmClient =>
+      _client ??= LlmChatClient(config: config, retry: chatRetry);
 
   /// 拼接完整请求体（system + user 双消息）。
   Map<String, dynamic> _payload(GenerationConfig genConfig, ContextBundle ctx) {

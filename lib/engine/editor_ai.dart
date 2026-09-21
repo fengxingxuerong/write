@@ -19,8 +19,14 @@ import 'package:novel_writer/models/llm_config.dart';
 /// - 内置请求去重：同一秒内完全相同的 system+user 不重复请求（缓存最近 1 次结果）。
 /// - 分级超时：轻操作（polish/rewrite）3 分钟，轻量查询 30 秒。
 class EditorAi {
-  /// 构造助手。
-  EditorAi({required this.config, this.timeout = const Duration(minutes: 3)});
+/// 构造助手。
+  ///
+  /// [chatClient] 可注入测试替身；为 null 时懒创建真实 [LlmChatClient]。
+  EditorAi({
+    required this.config,
+    this.timeout = const Duration(minutes: 3),
+    LlmChatClient? chatClient,
+  }) : _client = chatClient;
 
   /// LLM 配置。
   final LlmConfig config;

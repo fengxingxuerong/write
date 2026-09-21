@@ -4,6 +4,7 @@ import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/generation_engine.dart';
 import 'package:novel_writer/engine/llm_context_brief.dart';
 import 'package:novel_writer/engine/llm_engine.dart';
+import 'package:novel_writer/engine/llm_http_errors.dart';
 import 'package:novel_writer/engine/llm_retry.dart';
 import 'package:novel_writer/engine/multipass/scene_builder.dart';
 import 'package:novel_writer/engine/multipass/scene_plan.dart';
@@ -76,6 +77,7 @@ class MultiPassChapterEngine {
         ctx: ctx,
         prevSummary: prevSummary,
         sceneIndex: i,
+        cancelToken: cancelToken,
       );
       final String sceneText = sceneResult.text;
 
@@ -123,6 +125,7 @@ class MultiPassChapterEngine {
     required ContextBundle ctx,
     required String prevSummary,
     required int sceneIndex,
+    CancelToken? cancelToken,
   }) async {
     final String prompt = _buildScenePrompt(
       scene: scene,
@@ -131,8 +134,13 @@ class MultiPassChapterEngine {
       prevSummary: prevSummary,
       sceneIndex: sceneIndex,
     );
-    // 复用引擎实例（连接池化 + 重试时保持连接）
-    final LlmEngine engine = LlmEngine(config: config);
+    // 复用引擎实例（连接池化 + 重试时保持连接）。
+    // chatRetry 关闭客户端层重试：本层 RetryPolicy 已负责退避，
+    // 避免两层叠乘成 3×3=9 次加倍等待。
+    final LlmEngine engine = LlmEngine(
+      config: config,
+      chatRetry: const RetryPolicy(maxAttempts: 1),
+    );
 
     // 退避交给统一的 RetryPolicy：以前这里自己写了一套 2s/4s/8s，
     // 既不看 Retry-After，也不能注入 sleep 做测试。
@@ -156,6 +164,8 @@ class MultiPassChapterEngine {
           return out;
         },
         isRetryable: _isRetryableError,
+        // 退避等 2s/4s 期间用户取消 → 立即中断，不白等。
+        isCancelled: () => cancelToken?.isCancelled ?? false,
       );
       return (text: text, error: null);
     } catch (e) {
@@ -168,16 +178,13 @@ class MultiPassChapterEngine {
   /// 默认等待（真退避）。
   static Future<void> _delayed(Duration d) => Future<void>.delayed(d);
 
-  /// 判断错误是否可重试（网络超时 / 限流 / 服务端错误）。
+  /// 判断错误是否可重试：限流/5xx 传输错误，或模型返回空内容。
+  ///
+  /// 用异常类型而非字符串嗅探——之前 `msg.contains('500')` 会把
+  /// "第 500 章" 之类的正文误判成服务端错误。
   bool _isRetryableError(Object e) {
-    final msg = e.toString().toLowerCase();
-    return msg.contains('429') ||
-        msg.contains('500') ||
-        msg.contains('502') ||
-        msg.contains('503') ||
-        msg.contains('504') ||
-        msg.contains('timeout') ||
-        msg.contains('connection');
+    if (LlmHttpErrors.retryable(e)) return true;
+    return e is EngineException && e.message.contains('空内容');
   }
 
 

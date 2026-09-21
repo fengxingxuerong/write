@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:novel_writer/models/llm_config.dart';
 
 /// LLM 推理等级（决定 token 预算策略与 thinking 参数）。
@@ -80,7 +82,9 @@ class TokenBudget {
     double base = targetWords * 1.5 * 1.15;
     // 推理等级倍率
     base *= tier.thinkingMultiplier;
-    return base.round().clamp(256, maxTokens);
+    // clamp(min, max) 要求 min <= max：maxTokens < 256 时会抛 ArgumentError，
+    // 用 math.max 保证区间合法；下限恒为 256（避免 max_tokens 过小导致空输出）。
+    return base.round().clamp(256, math.max(256, maxTokens)).toInt();
   }
 
   /// 是否需要抑制思考链输出。

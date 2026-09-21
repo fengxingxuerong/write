@@ -69,6 +69,16 @@ void main() {
       );
       expect(tokens, 256);
     });
+
+    test('maxTokens 小于 256 时不抛 ArgumentError，仍按 256 下限取值', () {
+      // 修复前 clamp(256, maxTokens) 在 maxTokens<256 时抛 ArgumentError。
+      final int tokens = TokenBudget.calculate(
+        targetWords: 10,
+        tier: TokenTier.standard,
+        maxTokens: 64,
+      );
+      expect(tokens, 256);
+    });
   });
 
   group('TokenBudget flag 方法', () {

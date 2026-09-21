@@ -63,10 +63,13 @@ class RetryPolicy {
   /// 执行 [body]，失败且可重试时按退避序列重来。
   ///
   /// [body] 收到当前尝试序号（0 基），便于自己决定是否要“第二次换个模型”。
+  /// [isCancelled] 非空时，每次失败后等待退避前先询问一次：
+  /// 已取消则立即抛 [GenerationCancelledException]，不再白等退避时间。
   Future<T> run<T>(
     Future<T> Function(int attempt) body, {
     required bool Function(Object error) isRetryable,
     void Function(int attempt, Duration delay, Object error)? onRetry,
+    bool Function()? isCancelled,
   }) async {
     Object? lastError;
     StackTrace? lastStack;
@@ -77,6 +80,9 @@ class RetryPolicy {
         lastError = e;
         lastStack = s;
         if (attempt >= maxAttempts - 1 || !isRetryable(e)) rethrow;
+        if (isCancelled?.call() ?? false) {
+          throw const GenerationCancelledException();
+        }
         final Duration delay =
             backoffFor(attempt, serverHint: retryAfterOf(e));
         onRetry?.call(attempt, delay, e);

@@ -238,4 +238,56 @@ void main() {
           isFalse);
     });
   });
+
+  group('取消中断', () {
+    test('失败后等待退避前先询问 isCancelled：已取消立即抛异常且不再重试', () async {
+      final _Recorder rec = _Recorder();
+      final RetryPolicy p = RetryPolicy(
+        maxAttempts: 3,
+        baseBackoff: const Duration(milliseconds: 800),
+        sleep: rec.call,
+      );
+      int calls = 0;
+      await expectLater(
+        p.run(
+          (int attempt) async {
+            calls++;
+            throw const LlmTransportException('限流',
+                statusCode: 429, retryable: true);
+          },
+          isRetryable: LlmHttpErrors.retryable,
+          isCancelled: () => true,
+        ),
+        throwsA(isA<GenerationCancelledException>()),
+      );
+      // 只尝试了第一次；退避一次都没等（不被 sleep 卡住）。
+      expect(calls, 1);
+      expect(rec.waits, isEmpty);
+    });
+
+    test('取消发生在第二次失败后：第一次退避照常，第二次失败即中断', () async {
+      final _Recorder rec = _Recorder();
+      final RetryPolicy p = RetryPolicy(
+        maxAttempts: 4,
+        baseBackoff: const Duration(milliseconds: 500),
+        sleep: rec.call,
+      );
+      int calls = 0;
+      await expectLater(
+        p.run(
+          (int attempt) async {
+            calls++;
+            throw const LlmTransportException('服务端错误',
+                statusCode: 500, retryable: true);
+          },
+          isRetryable: LlmHttpErrors.retryable,
+          isCancelled: () => calls >= 2,
+        ),
+        throwsA(isA<GenerationCancelledException>()),
+      );
+      // 第二次失败后直接中断：尝试 2 次，只等了 1 次退避。
+      expect(calls, 2);
+      expect(rec.waits, hasLength(1));
+    });
+  });
 }

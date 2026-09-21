@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/llm_http_errors.dart';
@@ -67,25 +68,23 @@ class LlmChatClient {
   /// [temperature] 可选：不传时保持默认 0.2（向后兼容既有调用方）；
   /// 流水线等高级调用方可显式传入角色所需温度（如 glm/kimi 需 1.0）。
   ///
-  /// 带整体超时保护：服务端接受请求后长时间不响应时，
-  /// 在 [timeout] 后抛超时异常；限流/5xx 会按 [retry] 退避重来。
+  /// [timeoutOverride] 可覆盖构造时的 [timeout]（如 ping 想用更短时限）。
+  ///
+  /// 整体超时保护：服务端接受请求后长时间不响应时，内部 Timer 会
+  /// **强制关闭底层连接**（而非只结束外层 future），杜绝超时后挂起连接
+  /// 泄漏；限流/5xx 会按 [retry] 退避重来。
   Future<LlmChatResult> chat(String system, String user,
       {String? role,
       double? temperature,
       int? maxTokens,
+      Duration? timeoutOverride,
       void Function(int attempt, Duration delay, Object error)? onRetry}) async {
     if (!config.isConfigured) {
       throw const EngineException('LLM 未配置：请先在设置页填写模型与地址');
     }
+    final Duration budget = timeoutOverride ?? timeout;
     return retry.run(
-      (int attempt) =>
-          _doChat(system, user, role, temperature, maxTokens).timeout(
-        timeout,
-        onTimeout: () => throw LlmTransportException(
-          'LLM 请求超时（超过 ${timeout.inSeconds}s）',
-          retryable: true,
-        ),
-      ),
+      (int attempt) => _doChat(system, user, role, temperature, maxTokens, budget),
       isRetryable: LlmHttpErrors.retryable,
       onRetry: onRetry,
     );
@@ -108,12 +107,7 @@ class LlmChatClient {
         '你好，请只回复两个字：正常',
         temperature: 0.2,
         maxTokens: 16,
-      ).timeout(
-        timeout,
-        onTimeout: () => throw LlmTransportException(
-          '连接超时（超过 ${timeout.inSeconds}s）',
-          retryable: true,
-        ),
+        timeoutOverride: timeout,
       );
       final String content = r.content.trim();
       return LlmPingResult(
@@ -131,70 +125,101 @@ class LlmChatClient {
     }
   }
 
-  /// 实际执行请求（被 [chat] 的重试与超时包裹）。
+  /// 实际执行请求（被 [chat] 的重试包裹）。
+  ///
+  /// 超时控制放在**请求内部**：一旦 [budget] 到期，立即 [HttpClient.close]
+  /// 强断底层连接（挂起的读写立刻失败），再向 completeError 抛超时异常。
+  /// 此前用 `Future.timeout` 只结束了外层 future，底层的 HttpClient + socket
+  /// 仍挂到服务端响应为止——每次超时泄漏一个持活连接。
   Future<LlmChatResult> _doChat(String system, String user, String? role,
-      double? temperature, int? maxTokensOverride) async {
+      double? temperature, int? maxTokensOverride, Duration budget) {
     final HttpClient client = (clientFactory ?? HttpClient.new)()
       ..connectionTimeout = const Duration(seconds: 15);
-    try {
-      final String base = config.baseUrl.endsWith('/')
-          ? config.baseUrl.substring(0, config.baseUrl.length - 1)
-          : config.baseUrl;
-      final String path = config.provider == LlmProvider.ollama
-          ? '/api/chat'
-          : '/chat/completions';
-      final HttpClientRequest req = await client.postUrl(Uri.parse('$base$path'));
-      req.headers
-        ..set(HttpHeaders.contentTypeHeader, 'application/json')
-        ..set(HttpHeaders.acceptHeader, 'application/json');
-      if (config.provider == LlmProvider.openaiCompatible &&
-          config.apiKey.trim().isNotEmpty) {
-        req.headers.set(
-            HttpHeaders.authorizationHeader, 'Bearer ${config.apiKey}');
+    final Completer<LlmChatResult> completer = Completer<LlmChatResult>();
+    final Timer timer = Timer(budget, () {
+      client.close(force: true); // 掐断连接：挂起的读写立即失败并释放 socket。
+      if (!completer.isCompleted) {
+        completer.completeError(LlmTransportException(
+          'LLM 请求超时（超过 ${budget.inSeconds}s）',
+          retryable: true,
+        ));
       }
-      final Map<String, dynamic> payload;
-      if (config.provider == LlmProvider.ollama) {
-        payload = <String, dynamic>{
-          'model': config.model,
-          'stream': false,
-          'options': <String, dynamic>{
-            'temperature': 0.2,
-            'num_predict': _calcTokenBudget(maxTokensOverride),
-          },
-          'messages': _buildMessages(system, user, role),
-        };
-      } else {
-        // OpenAI 兼容
-        final bool isReasoningModel = _isReasoningModel(config.model);
-        payload = <String, dynamic>{
-          'model': config.model,
-          'stream': false,
-          'max_tokens': _calcTokenBudget(maxTokensOverride),
-          'temperature': temperature ?? 0.2,
-          'messages': _buildMessages(system, user, role),
-        };
-        // OpenAI 兼容 API 一律发送 enable_thinking: false（对标准模型无害，对推理模型有效）
-        payload['chat_template_kwargs'] = <String, dynamic>{'enable_thinking': false};
-        // 推理模型（SensNova 等）额外发送 options.Thinking: false
-        if (isReasoningModel) {
-          payload['options'] = <String, dynamic>{'Thinking': false};
+    });
+    // 真实请求在后台执行：任何 await 挂起都不会阻塞外层收尾。
+    // 异常一律落到 completer（超时/连接错误/HTTP 状态码），绝不漏抛。
+    Future<void>(() async {
+      try {
+        final String base = config.baseUrl.endsWith('/')
+            ? config.baseUrl.substring(0, config.baseUrl.length - 1)
+            : config.baseUrl;
+        final String path = config.provider == LlmProvider.ollama
+            ? '/api/chat'
+            : '/chat/completions';
+        final HttpClientRequest req =
+            await client.postUrl(Uri.parse('$base$path'));
+        req.headers
+          ..set(HttpHeaders.contentTypeHeader, 'application/json')
+          ..set(HttpHeaders.acceptHeader, 'application/json');
+        if (config.provider == LlmProvider.openaiCompatible &&
+            config.apiKey.trim().isNotEmpty) {
+          req.headers.set(
+              HttpHeaders.authorizationHeader, 'Bearer ${config.apiKey}');
         }
-      }
-      req.add(utf8.encode(jsonEncode(payload)));
-      final HttpClientResponse resp = await req.close();
-      final String text = await resp.transform(utf8.decoder).join();
-      if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        throw LlmHttpErrors.fromStatus(
-          resp.statusCode,
-          text,
-          retryAfterHeader: resp.headers
-              .value(HttpHeaders.retryAfterHeader),
+        final Map<String, dynamic> payload;
+        if (config.provider == LlmProvider.ollama) {
+          payload = <String, dynamic>{
+            'model': config.model,
+            'stream': false,
+            'options': <String, dynamic>{
+              'temperature': temperature ?? 0.2,
+              'num_predict': _calcTokenBudget(maxTokensOverride),
+            },
+            'messages': _buildMessages(system, user, role),
+          };
+        } else {
+          // OpenAI 兼容
+          final bool isReasoningModel = _isReasoningModel(config.model);
+          payload = <String, dynamic>{
+            'model': config.model,
+            'stream': false,
+            'max_tokens': _calcTokenBudget(maxTokensOverride),
+            'temperature': temperature ?? 0.2,
+            'messages': _buildMessages(system, user, role),
+          };
+          // OpenAI 兼容 API 一律发送 enable_thinking: false（对标准模型无害，对推理模型有效）
+          payload['chat_template_kwargs'] = <String, dynamic>{
+            'enable_thinking': false,
+          };
+          // 推理模型（SensNova 等）额外发送 options.Thinking: false
+          if (isReasoningModel) {
+            payload['options'] = <String, dynamic>{'Thinking': false};
+          }
+        }
+        req.add(utf8.encode(jsonEncode(payload)));
+        final HttpClientResponse resp = await req.close();
+        final String text = await resp.transform(utf8.decoder).join();
+        if (resp.statusCode < 200 || resp.statusCode >= 300) {
+          throw LlmHttpErrors.fromStatus(
+            resp.statusCode,
+            text,
+            retryAfterHeader: resp.headers
+                .value(HttpHeaders.retryAfterHeader),
+          );
+        }
+        if (completer.isCompleted) return;
+        completer.complete(_extractResult(text));
+      } catch (e) {
+        if (completer.isCompleted) return;
+        // 连接层失败（DNS/拒连/TLS）也要包装成可重试的传输异常，
+        // 之前 SocketException 直接冒出，isRetryable 判定为 false→零重试。
+        completer.completeError(
+          e is LlmTransportException ? e : LlmHttpErrors.transport(e),
         );
+      } finally {
+        client.close(force: true);
       }
-      return _extractResult(text);
-    } finally {
-      client.close(force: true);
-    }
+    });
+    return completer.future.whenComplete(timer.cancel);
   }
 
   /// 构造 messages 数组（支持可选 assistant 前缀）。
@@ -211,13 +236,16 @@ class LlmChatClient {
   ///
   /// [override] 由调用方按目标字数推算（如单场景生成），仍尊重配置上限。
   int _calcTokenBudget(int? override) {
+    // clamp(min, max) 要求 min <= max：maxTokens 过小（如 16）时 256 > 4×maxTokens
+    // 会抛 ArgumentError。上限至少 256，保证 clamp 区间合法。
+    final int hi = math.max(256, config.maxTokens * 4);
     if (override != null && override > 0) {
-      return override.clamp(256, config.maxTokens * 4).toInt();
+      return override.clamp(256, hi).toInt();
     }
     final bool isReasoning = _isReasoningModel(config.model);
     if (isReasoning) {
       // 推理模型需要 ~2 token 输出才能生成 1 token 正文
-      return (config.maxTokens * 2.5).round().clamp(512, 32768);
+      return (config.maxTokens * 2.5).round().clamp(512, math.max(512, 32768));
     }
     return config.maxTokens;
   }
@@ -280,8 +308,13 @@ class LlmChatClient {
       }
 
       return LlmChatResult(cleanContent, reasoning: reasoning);
-    } catch (_) {
-      return const LlmChatResult('');
+    } catch (e) {
+      // 2xx 但响应体无法解析：服务端异常，吞成「空正文」会让上层误以为
+      // 模型正常返回了空稿。抛传输异常，交给路由 failover 与日志定位。
+      throw LlmTransportException(
+        'AI 服务返回了无法解析的响应',
+        cause: e,
+      );
     }
   }
 

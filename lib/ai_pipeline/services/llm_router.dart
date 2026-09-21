@@ -135,7 +135,9 @@ class ChainLlmRouter implements LlmRouter {
         onLog?.call('${cfg.model} 失败：${e.message}'
             '${enteredCooldown ? '（进入冷却 ${cooldown.inMinutes} 分钟）' : ''}');
       } catch (e) {
-        onLog?.call('${cfg.model} 异常：${e.toString().substring(0, 80)}');
+        final String s = e.toString();
+        final String brief = s.length > 80 ? s.substring(0, 80) : s;
+        onLog?.call('${cfg.model} 异常：$brief');
       }
     }
     return const LlmRouteResult(content: '');
