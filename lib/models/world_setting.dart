@@ -63,4 +63,20 @@ class WorldSetting {
       content: content ?? this.content,
     );
   }
+
+  /// 值语义比较：记忆管线用 `merged != existing` 判断「是否有实质变化」，
+  /// 缺省的身份比较会让 copyWith 结果恒不等于原对象 → 每次 LLM 提取同名
+  /// 设定都重写落库（写放大）。
+  @override
+  bool operator ==(Object other) =>
+      other is WorldSetting &&
+      other.id == id &&
+      other.novelId == novelId &&
+      other.title == title &&
+      other.category == category &&
+      other.content == content;
+
+  @override
+  int get hashCode =>
+      Object.hash(id, novelId, title, category, content);
 }

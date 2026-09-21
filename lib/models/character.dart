@@ -88,4 +88,31 @@ class Character {
       dialogueStyle: dialogueStyle ?? this.dialogueStyle,
     );
   }
+
+  /// 值语义比较：记忆管线用 `merged != existing` 判断「是否有实质变化」，
+  /// 缺省的身份比较会让 copyWith 结果恒不等于原对象 → 每次 LLM 提取同名
+  /// 角色都重写落库（写放大 + 更新时间无意义递增）。
+  @override
+  bool operator ==(Object other) =>
+      other is Character &&
+      other.id == id &&
+      other.novelId == novelId &&
+      other.name == name &&
+      other.role == role &&
+      other.traits == traits &&
+      other.background == background &&
+      other.relationships == relationships &&
+      other.dialogueStyle == dialogueStyle;
+
+  @override
+  int get hashCode => Object.hash(
+        id,
+        novelId,
+        name,
+        role,
+        traits,
+        background,
+        relationships,
+        dialogueStyle,
+      );
 }
