@@ -212,7 +212,7 @@ class Engine:
         s._setup(chars_known); buf = ''; current = 0
         if continuation:
             buf += s._fill(s.rng.pick(CONTINUATION_OPENERS)) + '\n\n'; current = count_words(buf)
-        pts = [l.strip() for l in outline.split('\n') if l.strip()] if outline else []
+        pts = [line.strip() for line in outline.split('\n') if line.strip()] if outline else []
         first_sk = s.rng.pick(SKELETONS)
         if pts:
             bi = 0; usable = first_sk if first_sk else [('起','推进')]

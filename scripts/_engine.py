@@ -110,7 +110,7 @@ class Engine:
             tpl = s.rng.p(CONTINUATION_OPENERS)
             buf += s._fill(tpl) + '\n\n'
             current = wc(buf)
-        outline_pts = [l.strip() for l in outline.split(chr(10)) if l.strip()] if outline else []
+        outline_pts = [line.strip() for line in outline.split(chr(10)) if line.strip()] if outline else []
         first_sk = s.rng.p(s.skeps)
         if outline_pts:
             bi = 0

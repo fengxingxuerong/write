@@ -36,7 +36,7 @@ def print(*args, **kwargs):
 from fanqie_prompts import FANQIE_SYSTEM_PROMPT as SYSTEM_PROMPT  # noqa: E402
 
 
-from fanqie_prompts import GOLDEN3_SPEC as _GOLDEN3, GOAL_FORMAT as _GOAL_FORMAT
+from fanqie_prompts import GOLDEN3_SPEC as _GOLDEN3, GOAL_FORMAT as _GOAL_FORMAT  # noqa: E402
 
 # 题材规格表（新增题材只需在此登记；planning/scene 两处 prompt 自动生效）
 # label: 题材定位（进规划官 prompt）| world: 世界观 JSON 字段提示 | anchor: 场景物件锚点
