@@ -161,10 +161,18 @@ class _EditorPageState extends ConsumerState<EditorPage>
 
   Future<void> _persist(String content) async {
     if (widget.chapterId == null) return;
-    await ref
-        .read(chapterRepositoryProvider)
-        .updateChapterContent(widget.novelId, widget.chapterId!, content);
-    if (mounted) setState(() => _saved = true);
+    try {
+      await ref
+          .read(chapterRepositoryProvider)
+          .updateChapterContent(widget.novelId, widget.chapterId!, content);
+      if (mounted) setState(() => _saved = true);
+    } catch (e) {
+      // 保存失败：保持未保存标记并提示，避免变更静默丢失 / unhandled 异常。
+      if (mounted) {
+        setState(() => _saved = false);
+        AppToast.error(context, '保存失败：$e');
+      }
+    }
   }
 
   /// 文本变更时重跑敏感词检测（防抖处理：输入停止 300ms 后才执行）。

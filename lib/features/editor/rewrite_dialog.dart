@@ -49,6 +49,7 @@ class _RewriteDialogState extends ConsumerState<RewriteDialog> {
   String? _error;
   String? _finalText;
   StreamSubscription<String>? _sub;
+  HttpClient? _client;
 
   @override
   void initState() {
@@ -59,9 +60,17 @@ class _RewriteDialogState extends ConsumerState<RewriteDialog> {
   @override
   void dispose() {
     _sub?.cancel();
+    _client?.close(force: true);
+    _client = null;
     _instructionCtrl.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  /// 关闭当前请求的底层 HttpClient（幂等）。
+  void _closeClient() {
+    _client?.close(force: true);
+    _client = null;
   }
 
   /// 向 user prompt 追加角色说话风格块（仅非空风格的角色）。
@@ -96,7 +105,9 @@ class _RewriteDialogState extends ConsumerState<RewriteDialog> {
       _finalText = null;
     });
 
-    final HttpClient client = HttpClient()
+    // 复用同一个 client 时先关闭上一次请求的连接。
+    _closeClient();
+    final HttpClient client = _client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 8);
     try {
       final LlmConfig cfg = llm.config;
@@ -195,6 +206,7 @@ class _RewriteDialogState extends ConsumerState<RewriteDialog> {
           }
         },
         onError: (Object e) {
+          _closeClient();
           if (mounted) {
             setState(() {
               _streaming = false;
@@ -203,6 +215,7 @@ class _RewriteDialogState extends ConsumerState<RewriteDialog> {
           }
         },
         onDone: () {
+          _closeClient();
           if (mounted) {
             setState(() {
               _streaming = false;
@@ -212,7 +225,7 @@ class _RewriteDialogState extends ConsumerState<RewriteDialog> {
         },
       );
     } catch (e) {
-      client.close(force: true);
+      _closeClient();
       if (mounted) {
         setState(() {
           _streaming = false;
@@ -256,6 +269,7 @@ class _RewriteDialogState extends ConsumerState<RewriteDialog> {
 
   Future<void> _cancelStream() async {
     await _sub?.cancel();
+    _closeClient();
     if (mounted) {
       setState(() {
         _streaming = false;

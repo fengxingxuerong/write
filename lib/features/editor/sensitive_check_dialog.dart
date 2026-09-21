@@ -85,9 +85,18 @@ class _SensitiveCheckDialogState extends ConsumerState<SensitiveCheckDialog> {
   Future<void> _addWord() async {
     final String w = _wordCtrl.text.trim();
     if (w.isEmpty) return;
-    await widget.service.addCustomWord(w);
-    _wordCtrl.clear();
-    if (mounted) setState(() {});
+    try {
+      await widget.service.addCustomWord(w);
+      _wordCtrl.clear();
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) {
+        _wordCtrl.clear();
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text('添加失败：$e')));
+      }
+    }
   }
 
   /// 历史累计命中 TOP 统计区。
@@ -249,10 +258,19 @@ class _SensitiveCheckDialogState extends ConsumerState<SensitiveCheckDialog> {
                     .map((w) => InputChip(
                           label: Text(w),
                           visualDensity: VisualDensity.compact,
-                          onDeleted: () {
-                            widget.service.removeCustomWord(w);
-                            setState(() {});
-                          },
+                          onDeleted: () async {
+                              try {
+                                await widget.service.removeCustomWord(w);
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context)
+                                    ..hideCurrentSnackBar()
+                                    ..showSnackBar(SnackBar(
+                                        content: Text('删除「$w」失败：$e')));
+                                }
+                              }
+                              if (mounted) setState(() {});
+                            },
                         ))
                     .toList(),
               ),

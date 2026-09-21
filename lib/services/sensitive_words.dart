@@ -153,10 +153,30 @@ class SensitiveWordsService {
     }
   }
 
-  /// 添加用户词并持久化。
+  /// 归一化文本用于匹配：全角 ASCII → 半角、全角空格 → 空格、统一小写。
+  ///
+  /// 所有映射均为 1:1 字符（不改变字符数），因此归一化后的命中索引
+  /// 可直接映射回原文位置，无需额外的索引重建。
+  static String _normalize(String s) {
+    final StringBuffer sb = StringBuffer();
+    for (final int code in s.runes) {
+      if (code >= 0xFF01 && code <= 0xFF5E) {
+        sb.writeCharCode(code - 0xFEE0);
+      } else if (code == 0x3000) {
+        sb.write(' ');
+      } else {
+        sb.writeCharCode(code);
+      }
+    }
+    return sb.toString().toLowerCase();
+  }
+
+  /// 添加用户词并持久化（按归一化结果去重）。
   Future<void> addCustomWord(String word) async {
     final String w = word.trim();
-    if (w.isEmpty || _customWords.contains(w)) return;
+    if (w.isEmpty) return;
+    final String norm = _normalize(w);
+    if (_customWords.any((String x) => _normalize(x) == norm)) return;
     _customWords = <String>[..._customWords, w];
     await _saveCustom();
   }
@@ -216,17 +236,23 @@ class SensitiveWordsService {
   }
 
   /// 检测文本中的敏感词。
+  ///
+  /// 匹配前对文本与词表做大小写/全半角归一化（1:1 字符映射，索引不漂移），
+  /// 因此「ＶＸ：」也能命中内置词「vx:」，但存储原文与词表原文均不被改写。
   SensitiveCheckResult check(String text) {
     if (text.isEmpty) return const SensitiveCheckResult(<SensitiveHit>[]);
+    final String normText = _normalize(text);
     final List<SensitiveHit> hits = <SensitiveHit>[];
 
     void scan(String word, String category) {
       if (word.isEmpty) return;
-      int idx = text.indexOf(word);
+      final String normWord = _normalize(word);
+      if (normWord.isEmpty) return;
+      int idx = normText.indexOf(normWord);
       while (idx >= 0) {
-        // 白名单校验：若命中位置的上下文匹配白名单正则 → 跳过
+        // 白名单校验用原文（归一化为 1:1 映射，索引一致）。
         if (_isWhitelisted(text, idx, word.length, word)) {
-          idx = text.indexOf(word, idx + word.length);
+          idx = normText.indexOf(normWord, idx + normWord.length);
           continue;
         }
         hits.add(SensitiveHit(
@@ -235,7 +261,7 @@ class SensitiveWordsService {
           start: idx,
           context: _contextAround(text, idx, word.length),
         ));
-        idx = text.indexOf(word, idx + word.length);
+        idx = normText.indexOf(normWord, idx + normWord.length);
       }
     }
 

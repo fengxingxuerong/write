@@ -74,9 +74,19 @@ mixin EditorSearchMixin<T extends ConsumerStatefulWidget>
       selection: TextSelection.collapsed(offset: m.start + replacement.length),
     );
     onApplyEdit(replaced);
-    doSearch(searchCtrl.text, select: false);
-    // 维持当前语义位置：重新计数后跳到原位置附近。
-    jumpMatch(0);
+    // 宿主 onApplyEdit 内已按新文本重建 matches（select: false），
+    // 这里只校准索引到「替换位置之后第一个匹配」，不再重复全量搜索，
+    // 也避免 jumpMatch(0) 因 delta=0 停留在替换位置上的旧匹配。
+    final int anchor = m.start + replacement.length;
+    int next = 0;
+    while (next < matches.length && matches[next].start < anchor) {
+      next++;
+    }
+    if (next >= matches.length) next = 0;
+    setState(() {
+      matchIndex = next;
+      if (matches.isNotEmpty) selectMatch(matches[next]);
+    });
   }
 
   /// 全部替换。
