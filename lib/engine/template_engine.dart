@@ -111,12 +111,16 @@ class TemplateEngine implements GenerationEngine {
     final ReceivePort resultPort = ReceivePort();
     final Completer<GenerationResult> completer =
         Completer<GenerationResult>();
-    late final Isolate isolate;
+    Isolate? isolate;
     SendPort? cancelPort;
     bool cancelRequested = false;
+    bool cleaned = false;
 
     void cleanup() {
-      isolate.kill(priority: Isolate.immediate);
+      // 幂等：正常完成路径的回调与异常路径的 finally 都可能触发。
+      if (cleaned) return;
+      cleaned = true;
+      isolate?.kill(priority: Isolate.immediate);
       resultPort.close();
     }
 
@@ -144,23 +148,27 @@ class TemplateEngine implements GenerationEngine {
       }
     });
 
-    isolate = await Isolate.spawn(
-      _isolateEntry,
-      _IsolateMessage(resultPort.sendPort, config, ctx),
-    );
-
-    // 注册取消回调：通知生成隔离终止。
-    cancelToken?.onCancel = () {
-      cancelRequested = true;
-      cancelPort?.send(_kCancel);
-    };
-
     try {
+      isolate = await Isolate.spawn(
+        _isolateEntry,
+        _IsolateMessage(resultPort.sendPort, config, ctx),
+      );
+
+      // 注册取消回调：通知生成隔离终止。
+      cancelToken?.onCancel = () {
+        cancelRequested = true;
+        cancelPort?.send(_kCancel);
+      };
+
       return await completer.future;
     } on GenerationCancelledException {
       rethrow;
     } catch (e) {
       throw EngineException('生成失败', e);
+    } finally {
+      // spawn 失败 / 引擎内部异常时结果端口无人关闭会泄漏；
+      // 正常完成时已由回调 cleanup，幂等跳过。
+      cleanup();
     }
   }
 }
@@ -199,11 +207,31 @@ class _TemplateEngineCore {
   ///
   /// 闸门把「整句重复率 >1%」列为重写级硬指标，而模板轮转只能保证
   /// 模板不复用——同一模板若两次取到相同占位符值，仍会产出相同整句。
-  /// 故在填充后再查一层重。
+  /// 故在填充后再查一层重。集合按「句块」粒度登记：语料模板常一条
+  /// 内含多句（如 `「我劝你少打听。有些事知道得越多，活着的日子就越短。」`），
+  /// 只有按句切块比对，跨章种子（同样按句登记）才能拦住完整复现。
   final Set<String> _emitted = <String>{};
 
+  /// 把一句填充结果切成查重句块：按句末标点/换行切分、去空白，
+  /// 只保留长度 ≥ 10 的块（与跨章种子来源同口径）。
+  List<String> _clausesOf(String text) => text
+      .split(RegExp(r'[。！？…\n]+'))
+      .map((String s) => s.trim())
+      .where((String s) => s.length >= 10)
+      .toList();
+
+  /// 尝试登记一句填充结果；若其任一句块与已登记集合重叠则判重复且不登记，
+  /// 返回 false；否则登记全部句块并返回 true。短句（< 10 字）是节奏手段，
+  /// 跨章复用不算事故，直接放行。
+  bool _tryEmit(String filled) {
+    final List<String> clauses = _clausesOf(filled);
+    if (clauses.isEmpty) return true;
+    if (clauses.any(_emitted.contains)) return false;
+    _emitted.addAll(clauses);
+    return true;
+  }
+
   /// 取一条节拍句并填充占位符；填充结果若与本章已有整句重复则换一条重试。
-  /// 取一条节拍句并登记查重。
   ///
   /// [forceDialogue] 为 true 时只从对白攻防池取样：用于首屏保底与
   /// 对白占比保底（番茄硬指标：首段须有对白、引号内字数占比 ≥18%）。
@@ -219,7 +247,7 @@ class _TemplateEngineCore {
     for (int attempt = 0; attempt < 12; attempt++) {
       final String filled =
           _fill(_pickBeatByFlag(forceDialogue, forceTension, stage));
-      if (_emitted.add(filled)) {
+      if (_tryEmit(filled)) {
         _countBeat(filled);
         return filled;
       }
@@ -227,7 +255,7 @@ class _TemplateEngineCore {
     // 兜底：句池组合已接近耗尽，接受一次重复，不阻塞生成。
     final String last =
         _fill(_pickBeatByFlag(forceDialogue, forceTension, stage));
-    _emitted.add(last);
+    _tryEmit(last);
     _countBeat(last);
     return last;
   }
@@ -696,6 +724,10 @@ class _TemplateEngineCore {
   /// 仅用于**用户自写的大纲要点**（点题句有真实信息量）。
   String _weaveHint(String hint, String stage) {
     final String lead = _pickFromPool('leadin', _hintLeadIns);
+    // 前缀段（引导语 + 提示）单独登记查重：之前只登记了尾句，前缀若
+    // 与相邻段撞车会被闸门算整句重复。hint 是用户大纲要点（真实信息量），
+    // 重复出现也允许输出，仅登记不阻断。
+    _tryEmit('$lead$hint。');
     return '$lead$hint。${_nextBeatSentence(stage)}';
   }
 
@@ -736,7 +768,7 @@ class _TemplateEngineCore {
         attempt++) {
       filled = _fill(_pickFromPool('continuation', _continuationOpeners));
     }
-    _emitted.add(filled);
+    _tryEmit(filled);
     buffer.write(filled);
     buffer.writeln();
     buffer.writeln();
@@ -898,8 +930,11 @@ class _TemplateEngineCore {
     SendPort resultPort,
     bool Function() isCancelled,
   ) async {
-    final int target =
-        config.targetWords.clamp(200, _controller.maxWords);
+    // clamp(min, max) 要求 min <= max：maxWords 配置过小（< 200）会抛
+    // ArgumentError，用 max(200, ·) 保证区间合法，按配置上限走。
+    final int target = config.targetWords
+        .clamp(200, _controller.maxWords < 200 ? 200 : _controller.maxWords)
+        .toInt();
     final List<List<PlotBeat>> skeletons = corpus.plotSkeleton.skeletons;
 
     // 锚定整章场景与人物，保证叙事一致性。
@@ -976,12 +1011,15 @@ class _TemplateEngineCore {
       if (current >= target || isCancelled()) break;
       if (config.style == WritingStyle.detailed && rng.chance(0.5)) {
         // 氛围段也进查重：细腻文风下穿插频繁，旧版不查重会与正文撞句。
+        // 注意登记与输出只做一次：循环条件里登记成功后退出，若末尾再
+        // 登记一次会与自身句块自撞误判（旧实现）。全 5 次重选仍撞则
+        // 接受最后一句（不登记，保底不阻塞生成）。
         String ambient = _fill(_pickAmbient());
-        for (int attempt = 0; attempt < 5 && _emitted.contains(ambient);
-            attempt++) {
+        bool ok = _tryEmit(ambient);
+        for (int attempt = 0; attempt < 5 && !ok; attempt++) {
           ambient = _fill(_pickAmbient());
+          ok = _tryEmit(ambient);
         }
-        _emitted.add(ambient);
         buffer.write(ambient);
         buffer
           ..writeln()
@@ -1012,11 +1050,15 @@ class _TemplateEngineCore {
     // 章末钩子：以悬念句收尾，牵引下一章；仅在字数余量充足时追加。
     // 钩子同样进查重：钩子与正文句子撞车会被闸门算作整句重复。
     if (!isCancelled()) {
+      // 钩子同样进查重：与正文句子撞车会被闸门算作整句重复。
+      // 与氛围段同口径：登记成功即退出，末尾不再重复登记（避免自撞）；
+      // 全失败则接受最后一句保底。
       String hook = _fill(corpus.beatCorpus.hook(rng));
-      for (int attempt = 0; attempt < 5 && _emitted.contains(hook); attempt++) {
+      bool ok = _tryEmit(hook);
+      for (int attempt = 0; attempt < 5 && !ok; attempt++) {
         hook = _fill(corpus.beatCorpus.hook(rng));
+        ok = _tryEmit(hook);
       }
-      _emitted.add(hook);
       final String merged = '${buffer.toString().trim()}$hook';
       if (AppConstants.countWords(merged) <= target + 60) {
         buffer

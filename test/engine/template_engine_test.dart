@@ -86,6 +86,17 @@ void main() {
       expect(result.actualWords, lessThanOrEqualTo(20000));
     });
 
+    test('maxWords 配置过小（< 200）时不抛 ArgumentError，按 200 下限生成', () async {
+      const engine = TemplateEngine();
+      final result = await engine.generate(
+        _buildConfig(targetWords: 100, maxWords: 150),
+        _buildContext(),
+      );
+      // 修复前 clamp(200, 150) 直接抛 ArgumentError；修复后不崩溃且产出非空。
+      expect(result.content, isNotEmpty);
+      expect(result.actualWords, greaterThan(0));
+    });
+
     test('同配置可复现（相同种子 -> 相同正文）', () async {
       const engine = TemplateEngine();
       final cfg = _buildConfig(targetWords: 2000, randomLevel: 0.3);
