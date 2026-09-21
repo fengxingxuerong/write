@@ -9,6 +9,8 @@ import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/engine/corpus/plot_skeleton.dart';
 import 'package:novel_writer/engine/generation_engine.dart';
+import 'package:novel_writer/engine/quality/token_tier.dart';
+import 'package:novel_writer/engine/writing_guidelines.dart';
 import 'package:novel_writer/features/generate/generate_viewmodel.dart';
 import 'package:novel_writer/features/workspace/llm_settings_dialog.dart';
 import 'package:novel_writer/models/chapter.dart';
@@ -198,6 +200,114 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
     ref
         .read(generateViewModelProvider(widget.novel.id).notifier)
         .generate(config, ctx, order, title);
+  }
+
+  /// 发送前上下文预览：把「这次到底把什么发给了模型」摊开给用户。
+  ///
+  /// 本地模型用户最需要它——上下文预算是硬约束，超限会被静默截断；
+  /// 云 API 用户则关心费用。字数口径与 [TokenBudget] 一致：中文 1 字 ≈ 1.5 token。
+  Widget _contextPreview() {
+    final AppInk ink = AppInk.of(context);
+    final LlmSettingsState llmState = ref.watch(llmSettingsProvider);
+
+    int sumChars(Iterable<String> parts) =>
+        parts.fold<int>(0, (int acc, String s) => acc + s.length);
+
+    final int systemChars = WritingGuidelines.systemPrompt.length;
+    final int styleChars = WritingGuidelines.genreGuidance(_genre).length;
+    final int characterChars = _useExisting
+        ? sumChars(widget.novel.characters.map((c) =>
+            '${c.name}${c.role}${c.traits}${c.background}${c.relationships}${c.dialogueStyle}'))
+        : 0;
+    final int worldChars = _useExisting
+        ? sumChars(widget.novel.worldSettings
+            .map((w) => '${w.title}${w.category}${w.content}'))
+        : 0;
+    final int outlineChars = _outlineCtrl.text.trim().length +
+        (_chapterCount > 1 ? _volumeCtrl.text.trim().length : 0);
+    final int summaryChars = _buildPlotSummary().length;
+    final int continuationChars =
+        _continueFromLast ? _lastChapterContent.length : 0;
+    final int totalChars = systemChars +
+        styleChars +
+        characterChars +
+        worldChars +
+        outlineChars +
+        summaryChars +
+        continuationChars;
+    final int estimatedTokens = (totalChars * 1.5).round();
+    final TokenTier tier = TokenTier.fromModel(llmState.config.model);
+    final int budget = TokenBudget.calculate(
+      targetWords: _targetWords,
+      tier: tier,
+      maxTokens: llmState.config.maxTokens,
+    );
+    final String modelLabel = llmState.config.model.isEmpty
+        ? '未配置模型'
+        : '${llmState.config.model}${tier.isReasoning ? ' · 推理型' : ''}';
+
+    return ExpansionTile(
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsets.only(bottom: AppTokens.s2),
+      shape: const Border(),
+      collapsedShape: const Border(),
+      title: Text('本次将发送的上下文（估算）',
+          style: AppFonts.text(ink.ink, size: 13, weight: FontWeight.w600)),
+      subtitle: Text('约 $estimatedTokens token · 预算 $budget',
+          style: AppFonts.text(ink.inkFaint, size: 11.5)),
+      children: <Widget>[
+        _previewRow(ink, '系统提示词（技法 / 反 AI 腔 / 过审）', '$systemChars 字'),
+        _previewRow(ink, '题材与文风指令', '$styleChars 字'),
+        _previewRow(
+          ink,
+          '角色',
+          _useExisting
+              ? '${widget.novel.characters.length} 个 · $characterChars 字'
+              : '未启用（未勾选「使用已有设定」）',
+        ),
+        _previewRow(
+          ink,
+          '世界观',
+          _useExisting
+              ? '${widget.novel.worldSettings.length} 条 · $worldChars 字'
+              : '未启用（未勾选「使用已有设定」）',
+        ),
+        _previewRow(ink, '大纲 / 卷纲', '$outlineChars 字'),
+        _previewRow(ink, '前情提要（最近 2 章）', '$summaryChars 字'),
+        if (_continueFromLast)
+          _previewRow(ink, '续写锚点（上一章末尾）', '$continuationChars 字'),
+        const Divider(height: AppTokens.s4),
+        _previewRow(ink, '合计', '约 $totalChars 字 ≈ $estimatedTokens token'),
+        _previewRow(ink, '单次生成预算 max_tokens', '$budget（$modelLabel）'),
+        Padding(
+          padding: const EdgeInsets.only(top: AppTokens.s2),
+          child: Text(
+            '估算口径：中文 1 字 ≈ 1.5 token（与引擎 TokenBudget 一致）；实际以模型分词为准。',
+            style: AppFonts.text(ink.inkFaint, size: 11, height: 1.5),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 预览行：左标签右数值（数值加粗，便于扫读 token 预算）。
+  Widget _previewRow(AppInk ink, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Expanded(
+            child: Text(label,
+                style: AppFonts.text(ink.inkSoft, size: 12, height: 1.5)),
+          ),
+          const SizedBox(width: AppTokens.s2),
+          Text(value,
+              style: AppFonts.text(ink.ink,
+                  size: 12, weight: FontWeight.w600, height: 1.5)),
+        ],
+      ),
+    );
   }
 
   @override
@@ -435,6 +545,7 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                     ? null
                     : (v) => setState(() => _expandOutline = v),
               ),
+              _contextPreview(),
               if (vm.isGenerating) ...<Widget>[
                 const SizedBox(height: AppTokens.s3),
                 LinearProgressIndicator(value: vm.progress),
