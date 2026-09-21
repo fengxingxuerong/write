@@ -194,6 +194,70 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
     );
   }
 
+  /// 键位速查：应用内唯一可查的快捷键入口（Ctrl+/ 与应用内入口共用）。
+  void _showShortcuts() {
+    const List<(String, String)> items = <(String, String)>[
+      ('Ctrl+S', '保存全部章节'),
+      ('Ctrl+B', '一键生成续写'),
+      ('Ctrl+E', '导出当前小说'),
+      ('F11', '专注模式：收起左右栏'),
+      ('Ctrl+/', '本键位速查'),
+    ];
+    showDialog<void>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: const Text('快捷键'),
+        contentPadding: const EdgeInsets.fromLTRB(24, 20, 32, 8),
+        content: SizedBox(
+          width: 320,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              for (final (String keys, String desc) in items)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 5),
+                  child: Row(
+                    children: <Widget>[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppInk.of(ctx).inkSoft.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          keys,
+                          style: AppFonts.text(
+                            AppInk.of(ctx).ink,
+                            size: 12,
+                            weight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          desc,
+                          style: AppFonts.text(AppInk.of(ctx).inkSoft, size: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _openGenerate() async {
     final Novel? novel = _novel;
     if (novel == null) return;
@@ -264,6 +328,9 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
             if (n != null) showExportDialog(context, n);
           },
           const SingleActivator(LogicalKeyboardKey.f11): _toggleFocus,
+          // Ctrl+/：键位速查（此前快捷键只存在于代码与 README，应用内无处可查）。
+          const SingleActivator(LogicalKeyboardKey.slash, control: true):
+              _showShortcuts,
         },
         child: Column(
           children: <Widget>[
@@ -295,6 +362,7 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
                   CoverGenerator.showCoverPreview(context, novel),
               onExport: () => showExportDialog(context, novel),
               onGenerate: _openGenerate,
+              onShortcuts: _showShortcuts,
             ),
             Expanded(
               child: LayoutBuilder(
@@ -423,6 +491,7 @@ class _WorkspaceHeader extends ConsumerWidget {
     required this.onVolumeOutline,
     required this.onExport,
     required this.onGenerate,
+    required this.onShortcuts,
     this.onBeatBoard,
     this.onCover,
   });
@@ -440,6 +509,7 @@ class _WorkspaceHeader extends ConsumerWidget {
   final VoidCallback? onCover;
   final VoidCallback onExport;
   final VoidCallback onGenerate;
+  final VoidCallback onShortcuts;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

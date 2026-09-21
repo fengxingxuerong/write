@@ -284,12 +284,16 @@ class _ProofreadDialogState extends ConsumerState<ProofreadDialog> {
                   ),
                 ],
               ] else if (!_loading && _error == null) ...<Widget>[
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 24),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
                   child: Text(
                     '将通读当前章节全文，找出错别字、病句、逻辑矛盾与重复啰嗦，'
                     '并逐条给出修正建议。\n\n可勾选要应用的问题，一键替换回正文。',
-                    style: AppFonts.text(AppInk.of(context).inkSoft, size: 13, height: 1.5),
+                    style: AppFonts.text(
+                      AppInk.of(context).inkSoft,
+                      size: 13,
+                      height: 1.5,
+                    ),
                   ),
                 ),
                 Align(
