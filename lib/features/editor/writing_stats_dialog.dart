@@ -80,25 +80,30 @@ Future<void> showWritingStatsDialog(
                 style: theme.textTheme.titleSmall,
               ),
               const SizedBox(height: AppTokens.s2),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(AppTokens.r1),
-                child: LinearProgressIndicator(
-                  value: (progress / 100).clamp(0.0, 1.0),
-                  minHeight: 8,
-                  color: reached ? AppInk.of(ctx).success : null,
+              // 进度条与差值文案仅在设置了目标时展示：targetWords<=0 时
+              // 进度会被钳成满格、差值变成「还差 -N 字」这类错误信息。
+              if (targetWords > 0) ...<Widget>[
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(AppTokens.r1),
+                  child: LinearProgressIndicator(
+                    value: (progress / 100).clamp(0.0, 1.0),
+                    minHeight: 8,
+                    color: reached ? AppInk.of(ctx).success : null,
+                  ),
                 ),
-              ),
-              const SizedBox(height: AppTokens.s1 + 2),
-              Text(
-                reached
-                    ? '🎉 已达成本章字数目标！'
-                    : '还差 ${targetWords - stats.wordCount} 字达标',
-                style: TextStyle(
-                  fontSize: 12,
-                  color:
-                      reached ? AppInk.of(ctx).success : theme.colorScheme.outline,
+                const SizedBox(height: AppTokens.s1 + 2),
+                Text(
+                  reached
+                      ? '🎉 已达成本章字数目标！'
+                      : '还差 ${targetWords - stats.wordCount} 字达标',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: reached
+                        ? AppInk.of(ctx).success
+                        : theme.colorScheme.outline,
+                  ),
                 ),
-              ),
+              ],
               const Divider(height: 24),
               _row(ctx, '当前字数', '${stats.wordCount} 字'),
               _row(ctx, '本次新增', '+${stats.sessionAdded} 字'),
