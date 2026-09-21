@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -59,6 +60,13 @@ class ExportService {
   /// 项目仓库（用于按需加载最新数据）。
   final NovelRepository novelRepo;
 
+  /// 导出用章节列表：按 [Chapter.order] 升序（上游任何写入路径都不保证
+  /// 数组有序，导出侧做防御性排序，避免章节错乱）。
+  static List<Chapter> _orderedChapters(Novel novel) =>
+      List<Chapter>.of(novel.chapters)..sort(_byOrder);
+
+  static int _byOrder(Chapter a, Chapter b) => a.order.compareTo(b.order);
+
   /// 拼接导出文本（按章节顺序）。不触发任何网络请求。
   ///
   /// [includeSettings] 为 true 时，正文后附加角色与世界观附录。
@@ -67,6 +75,7 @@ class ExportService {
     ExportFormat format, {
     bool includeSettings = false,
   }) async {
+    final List<Chapter> chapters = _orderedChapters(novel);
     final StringBuffer buffer = StringBuffer();
     if (format == ExportFormat.markdown) {
       buffer.writeln('# ${novel.title}');
@@ -75,7 +84,7 @@ class ExportService {
         '> 题材：${GenrePresets.get(novel.genre).label} ｜ 基调：${novel.tone}',
       );
       buffer.writeln();
-      for (final Chapter c in novel.chapters) {
+      for (final Chapter c in chapters) {
         buffer.writeln('## ${c.title}');
         buffer.writeln();
         buffer.writeln(c.content);
@@ -88,7 +97,7 @@ class ExportService {
       buffer.writeln(novel.title);
       buffer.writeln('-' * novel.title.length.clamp(1, 30));
       buffer.writeln();
-      for (final Chapter c in novel.chapters) {
+      for (final Chapter c in chapters) {
         buffer.writeln('第${c.order + 1}章 ${c.title}');
         buffer.writeln(c.content);
         buffer.writeln();
@@ -176,9 +185,9 @@ class ExportService {
   /// toc.ncx、nav.xhtml 与每章 xhtml，UTF-8 编码。
   Uint8List buildEpub(Novel novel) {
     final String title = novel.title;
-    final String uuid =
-        'urn:uuid:${_fakeUuid()}'; // 幂等：基于书名与章节数生成稳定 UUID。
-    final List<Chapter> chapters = novel.chapters;
+    final String uuid = 'urn:uuid:${_fakeUuid(novel.id, title)}';
+    // 幂等：基于 项目 id + 书名 + 章节数 生成稳定 UUID（同书多次导出一致）。
+    final List<Chapter> chapters = _orderedChapters(novel);
     // 真实修改时间（ISO 8601 UTC），避免硬编码时间戳。
     final String modified = novel.updatedAt.toUtc().toIso8601String();
 
@@ -286,7 +295,8 @@ class ExportService {
   ///
   /// 最小合法 docx：Content_Types + rels + document.xml（段落样式
   /// 标题/正文，UTF-8）。复用 [buildEpub] 的 zip 构建器。
-  Uint8List buildDocx(Novel novel) {
+  /// [includeSettings] 为 true 时正文后追加角色与世界观附录段落。
+  Uint8List buildDocx(Novel novel, {bool includeSettings = false}) {
     final StringBuffer document = StringBuffer();
     document.writeln('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>');
     document.writeln('<w:document '
@@ -299,7 +309,7 @@ class ExportService {
     document.writeln('    <w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr>'
         '<w:r><w:t>${_xml('题材：${GenrePresets.get(novel.genre).label} ｜ 基调：${novel.tone}')}</w:t></w:r></w:p>');
     // 章节。
-    for (final Chapter c in novel.chapters) {
+    for (final Chapter c in _orderedChapters(novel)) {
       document.writeln('    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'
           '<w:r><w:t>${_xml('第${c.order + 1}章 ${c.title}')}</w:t></w:r></w:p>');
       // 按空行分段。
@@ -309,6 +319,19 @@ class ExportService {
           .toList();
       for (final String p in paras) {
         document.writeln('    <w:p><w:r><w:t>${_xml(p.trim())}</w:t></w:r></w:p>');
+      }
+    }
+    // 附加入口：角色与世界观附录（复用纯文本拼接，再按行转段落）。
+    if (includeSettings) {
+      final StringBuffer appendix = StringBuffer();
+      _appendSettings(appendix, novel, false);
+      for (final String line in appendix.toString().split('\n')) {
+        final String t = line.trim();
+        if (t.isEmpty) continue;
+        final bool isHeading = t.startsWith('【') && t.endsWith('】');
+        document.writeln(
+            '    <w:p>${isHeading ? '<w:pPr><w:pStyle w:val="Heading2"/></w:pPr>' : ''}'
+            '<w:r><w:t>${_xml(t)}</w:t></w:r></w:p>');
       }
     }
     document.writeln('  </w:body>');
@@ -322,11 +345,17 @@ class ExportService {
         '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
         '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
         '</Types>';
+    // 包级 rels：只声明主文档。
     const String rels =
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
-        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="word/styles.xml"/>'
+        '</Relationships>';
+    // 文档级 rels：声明主文档对 styles.xml 的引用（此前缺失导致样式全部失效）。
+    const String docRels =
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
         '</Relationships>';
     const String styles =
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
@@ -342,12 +371,16 @@ class ExportService {
         '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/>'
         '<w:pPr><w:spacing w:before="360" w:after="180"/></w:pPr>'
         '<w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/>'
+        '<w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr>'
+        '<w:rPr><w:b/><w:sz w:val="26"/></w:rPr></w:style>'
         '</w:styles>';
 
     final Map<String, Uint8List> entries = <String, Uint8List>{
       '[Content_Types].xml': utf8.encode(contentTypes),
       '_rels/.rels': utf8.encode(rels),
       'word/document.xml': utf8.encode(document.toString()),
+      'word/_rels/document.xml.rels': utf8.encode(docRels),
       'word/styles.xml': utf8.encode(styles),
     };
     return _buildZip(entries);
@@ -364,16 +397,35 @@ class ExportService {
         .join('\n');
   }
 
-  /// XML 转义。
-  String _xml(String s) => s
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;');
+  /// XML 转义 + 非法字符过滤。
+  ///
+  /// XML 1.0 合法字符集为 `#x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] |
+  /// [#x10000-#x10FFFF]`。从网页/Office 粘贴进编辑器的正文常携带
+  /// `\x00-\x08`、`\x0B`、`\x0C`、`\x0E-\x1F`、`\x7F` 等控制字符，原样写入
+  /// 会被 Word / EPUB 阅读器判为"文档已损坏"，故先替换为 U+FFFD 再转义。
+  String _xml(String s) {
+    final StringBuffer sb = StringBuffer();
+    for (final int r in s.runes) {
+      final bool legal = r == 0x9 ||
+          r == 0xA ||
+          r == 0xD ||
+          (r >= 0x20 && r <= 0xD7FF) ||
+          (r >= 0xE000 && r <= 0xFFFD) ||
+          (r >= 0x10000 && r <= 0x10FFFF);
+      sb.writeCharCode(legal ? r : 0xFFFD);
+    }
+    return sb
+        .toString()
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+  }
 
-  /// 基于书名+章节数生成稳定伪 UUID（同书多次导出一致，便于阅读器识别）。
-  String _fakeUuid() {
+  /// 基于 项目 id + 书名 生成稳定伪 UUID（同项目多次导出一致，便于阅读器识别；
+  /// 不同书本 id 必然不同，避免书库条目互相覆盖）。
+  String _fakeUuid(String novelId, String title) {
     int h = 0x811c9dc5;
-    const String seed = 'novel-writer'; // 固定前缀。
+    final String seed = 'novel-writer|$novelId|$title'; // 混入可变标识。
     for (final int c in seed.codeUnits) {
       h = ((h ^ c) * 0x01000193) & 0xFFFFFFFF;
     }
@@ -473,7 +525,9 @@ class ExportService {
     l.add((v >> 24) & 0xFF);
   }
 
-  /// CRC-32（IEEE 802.3 多项式）。
+  /// CRC-32（IEEE 802.3 多项式）。标准实现处理完所有字节后需对结果取反
+  /// （final XOR），否则 zip 校验字段会与实际数据不匹配，严格校验工具
+  /// （unzip -t / macOS ditto / 部分阅读器）会判定文件损坏。
   int _crc32(Uint8List data) {
     int crc = 0xFFFFFFFF;
     for (final int b in data) {
@@ -482,11 +536,14 @@ class ExportService {
         crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
       }
     }
-    return crc & 0xFFFFFFFF;
+    return (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF;
   }
 
-  /// 拼接并让用户选择保存路径（file_picker）。返回最终保存路径。
+  /// 拼接并让用户选择保存路径（file_picker），随后**显式写盘**。
   ///
+  /// 桌面端（Windows/macOS/Linux）的 `saveFile` 只弹系统对话框返回路径，
+  /// 不会落盘（其 `bytes` 参数仅移动端生效）——因此必须拿到路径后显式
+  /// `File.writeAsBytes`，否则导出"成功"提示但磁盘无文件。
   /// [includeSettings] 为 true 时，txt/md/docx 导出附带角色与世界观附录。
   /// 用户取消时抛 [ExportException]。
   Future<String> export(
@@ -494,65 +551,54 @@ class ExportService {
     ExportFormat format, {
     bool includeSettings = false,
   }) async {
-    if (format == ExportFormat.epub) {
-      final Uint8List bytes = buildEpub(novel);
-      final String suggested =
-          '${AppConstants.safeFileName(novel.title)}_${AppConstants.timestamp()}.epub';
-      final String? result = await FilePicker.platform.saveFile(
-        fileName: suggested,
-        type: FileType.custom,
-        bytes: bytes,
-        allowedExtensions: <String>['epub'],
-      );
-      if (result == null) {
-        throw const ExportException('用户取消了导出');
-      }
-      return result;
-    }
-    if (format == ExportFormat.docx) {
-      final Uint8List bytes = buildDocx(novel);
-      final String suggested =
-          '${AppConstants.safeFileName(novel.title)}_${AppConstants.timestamp()}.docx';
-      final String? result = await FilePicker.platform.saveFile(
-        fileName: suggested,
-        type: FileType.custom,
-        bytes: bytes,
-        allowedExtensions: <String>['docx'],
-      );
-      if (result == null) {
-        throw const ExportException('用户取消了导出');
-      }
-      return result;
-    }
-    if (format == ExportFormat.backup) {
-      final String json = const JsonEncoder.withIndent('  ')
-          .convert(novel.toJson());
-      final String suggested =
-          '${AppConstants.safeFileName(novel.title)}_backup_${AppConstants.timestamp()}.json';
-      final String? result = await FilePicker.platform.saveFile(
-        fileName: suggested,
-        type: FileType.custom,
-        bytes: utf8.encode(json),
-        allowedExtensions: <String>['json'],
-      );
-      if (result == null) {
-        throw const ExportException('用户取消了导出');
-      }
-      return result;
-    }
-    final String content = await buildContent(novel, format,
-        includeSettings: includeSettings);
-    final String suggested =
-        '${AppConstants.safeFileName(novel.title)}_${AppConstants.timestamp()}.${format.ext}';
-    final String? result = await FilePicker.platform.saveFile(
+    final (Uint8List bytes, String suggested, String ext) = switch (format) {
+      ExportFormat.epub => (
+          buildEpub(novel),
+          '${AppConstants.safeFileName(novel.title)}_${AppConstants.timestamp()}.epub',
+          'epub',
+        ),
+      ExportFormat.docx => (
+          buildDocx(novel, includeSettings: includeSettings),
+          '${AppConstants.safeFileName(novel.title)}_${AppConstants.timestamp()}.docx',
+          'docx',
+        ),
+      ExportFormat.backup => (
+          utf8.encode(const JsonEncoder.withIndent('  ').convert(novel.toJson())),
+          '${AppConstants.safeFileName(novel.title)}_backup_${AppConstants.timestamp()}.json',
+          'json',
+        ),
+      ExportFormat.txt || ExportFormat.markdown => (
+          utf8.encode(
+            await buildContent(novel, format, includeSettings: includeSettings),
+          ),
+          '${AppConstants.safeFileName(novel.title)}_${AppConstants.timestamp()}.${format.ext}',
+          format.ext,
+        ),
+    };
+    return _pickAndWrite(suggested, bytes, ext);
+  }
+
+  /// 弹出保存对话框并写盘，返回最终路径。取消/写盘失败抛 [ExportException]。
+  Future<String> _pickAndWrite(
+    String suggested,
+    Uint8List bytes,
+    String ext,
+  ) async {
+    final String? path = await FilePicker.platform.saveFile(
       fileName: suggested,
       type: FileType.custom,
-      bytes: utf8.encode(content),
-      allowedExtensions: <String>[format.ext],
+      bytes: bytes,
+      allowedExtensions: <String>[ext],
     );
-    if (result == null) {
+    if (path == null) {
       throw const ExportException('用户取消了导出');
     }
-    return result;
+    try {
+      final File f = File(path);
+      await f.writeAsBytes(bytes, flush: true);
+      return path;
+    } catch (e) {
+      throw ExportException('导出写入失败：$e', e);
+    }
   }
 }

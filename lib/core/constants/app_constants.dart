@@ -62,10 +62,12 @@ class AppConstants {
     return count;
   }
 
-  /// 将任意字符串转换为安全的文件名片段（去除路径分隔符等）。
+  /// 将任意字符串转换为安全的文件名片段（去除路径分隔符、控制字符等）。
   static String safeFileName(String input) {
-    final String trimmed = input.trim().replaceAll(RegExp(r'\s+'), '_');
-    return trimmed.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    final String trimmed =
+        input.trim().replaceAll(RegExp(r'\s+'), '_').replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '');
+    final String cleaned = trimmed.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    return cleaned.isEmpty ? '未命名作品' : cleaned;
   }
 
   /// 生成本地时间戳（yyyyMMdd_HHmmss），不依赖 intl 以避免多余依赖。
