@@ -262,13 +262,16 @@ test/
 │   └── reliability_test.dart          # 备份生成/自愈/索引容错（5 用例）
 ├── services/
 │   └── sensitive_words_test.dart      # 内置/自定义/命中统计/hitStats 持久化
+├── ai_pipeline/                       # 多角色流水线：run 编排 / 链式路由 / 断点存储 / 质检 / 全书体检
+│   ├── ai_pipeline_service_run_test.dart  # run 全流程编排（18 用例，_FakeRouter 零网络）
+│   └── ...                            # 模型序列化 / 路由冷却 / 导入器 / 固定分工预设
 └── features/
     ├── generate_viewmodel_test.dart  # 多章/取消/卷纲/previewText/reset（9 用例）
     ├── editor_experience_test.dart    # 写作统计/splitChapter（6 用例）
     └── export_service_test.dart      # txt/md/epub/docx/backup 结构（8 用例）
 ```
 
-**当前：735 个用例，覆盖率 75.9%**，CI 流水线设 60% 门槛。
+**当前：844 个用例，覆盖率 84.6%**，CI 流水线设 60% 门槛。最近一轮补测集中在多角色 AI 流水线的 `AiPipelineService.run` 编排（`test/ai_pipeline/ai_pipeline_service_run_test.dart`，18 用例、零网络替身），该文件行覆盖率 **94.5%**。
 
 ### ViewModel 测试要点
 
