@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/core/theme/app_tokens.dart';
+import 'package:novel_writer/core/utils/entity_highlight.dart';
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/models/reader_settings.dart';
@@ -24,6 +25,9 @@ class ReaderPage extends ConsumerStatefulWidget {
 
 class _ReaderPageState extends ConsumerState<ReaderPage> {
   int _chapterIndex = 0;
+
+  /// 角色名高亮开关（阅读模式专用，不持久化：只是看稿时的临时辅助）。
+  bool _highlight = true;
 
   List<Chapter> get _chapters => widget.novel.chapters;
 
@@ -52,6 +56,18 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         return (const Color(0xFFF5EFE0), const Color(0xFF4A3F2F));
       case ReaderTheme.dark:
         return (const Color(0xFF121212), const Color(0xFFCFCFCF));
+    }
+  }
+
+  /// 角色名高亮底色：三套阅读主题各配一层低饱和暖色（像荧光笔，不抢正文）。
+  Color _entityTint(ReaderTheme theme) {
+    switch (theme) {
+      case ReaderTheme.light:
+        return const Color(0x33E2A93B);
+      case ReaderTheme.sepia:
+        return const Color(0x40D89B2C);
+      case ReaderTheme.dark:
+        return const Color(0x33C98F2E);
     }
   }
 
@@ -97,6 +113,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
             ),
             onPressed: () =>
                 _update(_settings.copyWith(serif: !_settings.serif)),
+          ),
+          // 角色名高亮：看稿时快速辨认谁在说话/谁被提到。
+          IconButton(
+            tooltip: '角色名高亮',
+            icon: Icon(_highlight ? Icons.highlight : Icons.highlight_off),
+            onPressed: () => setState(() => _highlight = !_highlight),
           ),
           IconButton(
             tooltip: '减小字号',
@@ -161,16 +183,23 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                             ),
                           ),
                           const SizedBox(height: AppTokens.s6),
-                          Text(
-                            current.content.isEmpty
-                                ? '（本章暂无内容）'
-                                : current.content,
-                            style: AppFonts.text(
-                              fg,
-                              size: _settings.fontSize,
-                              height: _settings.lineHeight,
-                              letterSpacing: 0.5,
-                              serifFace: _settings.serif,
+                          Text.rich(
+                            entityHighlightedSpan(
+                              text: current.content.isEmpty
+                                  ? '（本章暂无内容）'
+                                  : current.content,
+                              baseStyle: AppFonts.text(
+                                fg,
+                                size: _settings.fontSize,
+                                height: _settings.lineHeight,
+                                letterSpacing: 0.5,
+                                serifFace: _settings.serif,
+                              ),
+                              entityNames: _highlight
+                                  ? widget.novel.characters
+                                      .map((c) => c.name)
+                                  : const <String>[],
+                              highlightColor: _entityTint(_settings.theme),
                             ),
                           ),
                         ],
