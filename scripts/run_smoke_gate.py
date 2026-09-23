@@ -5,9 +5,11 @@
 每次改动 novel_pipeline.py / generate_novel.py / fanqie_review.py 后跑一次：
   1) 编译检查（py_compile 三大脚本）
   2) 3 章小样全链路（写前守门 → 逐章 → 守护/爽点 → 终审多采样 → 评估卡/终审卡）
-  3) 自动验收十二项，输出 SMOKE GATE: PASS / FAIL
+  3) 自动验收十三项，输出 SMOKE GATE: PASS / FAIL
      其中 9~12 项是 2026-09 事故回归护栏（正文元话语残留/章内大段重复/题材漂移/
      阻断级硬伤章），与 fanqie_review 同口径——门禁必须能拦住评审报的硬伤。
+     第 13 项是语义硬伤三关（人称漂移/主角称谓漂移/题材内容塌陷，2026-09-23），
+     与 qa_semantic_check 同口径——机器分抓不住、人工试读才看得见的硬伤进门禁。
 
 断点友好：中途中断后重跑同命令自动续传，续传完成后照常验收。
 用法：
@@ -34,6 +36,8 @@ OUT_DEFAULT = os.path.join(ROOT, "data", "generated", "smoke_gate.jsonl")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fanqie_review import (blocking_reasons, genre_drift, intra_repeat,  # noqa: E402
                            meta_talk, prompt_leak)
+from qa_semantic_check import (detect_pov_drift, detect_name_drift,  # noqa: E402
+                               detect_content_drift)
 
 
 def step_compile():
@@ -187,6 +191,41 @@ def check(output, max_chapters, review_pass=78.0, genre="玄幻"):
         if bl:
             blocked.append(f"第{idx}章：{'、'.join(bl)}")
     chk("无阻断级硬伤章", not blocked, "、".join(blocked[:3]))
+
+    # 13) 语义硬伤三关（与 qa_semantic_check 同口径，2026-09-23）：
+    #  人称漂移 / 主角称谓漂移（含"占位称呼→新簇接管"）/ 题材内容塌陷（含标题词未现）。
+    #  这些是机器质检分抓不住、人工试读才看得见的硬伤（《铁掌破风》93.3 高潜🔥
+    #  人工四连翻车的事故形态）；正常生成不应触发，触发即生成侧事故 → FAIL。
+    #  占位称呼（S1 提示级）与题材密度偏低（suspect）仅 WARN 不拦截。
+    book = [(c.get("idx", i + 1),
+             c.get("title") or f"第 {c.get('idx', i + 1)} 章",
+             c.get("content", "") or "")
+            for i, c in enumerate(chapters)]
+    pov_ev, _pov_sum = detect_pov_drift(book)
+    name_d = detect_name_drift(book)
+    cont_d = detect_content_drift(book, genre)
+    sem_hits = []
+    for e in pov_ev:
+        sem_hits.append(f"第{e['chapter']}章人称切换 {e['from_pov']}→{e['to_pov']}"
+                        f"（「{e['excerpt'][:20]}…」）")
+    for a in name_d.get("span_alerts", []):
+        sem_hits.append(f"主角级称谓区间断裂: {a['cluster_a']}簇 vs {a['cluster_b']}簇")
+    for t in name_d.get("takeover_alerts", []):
+        sem_hits.append(f"主角换名: 「{t['cluster']}」簇于全书 "
+                        f"{t['cluster_first_ratio'] * 100:.0f}% 处接管")
+    for a in cont_d.get("alerts", []):
+        if a["level"] in ("high", "medium"):
+            kw = a["title_words"][0] if a["title_words"] else ""
+            sem_hits.append(f"第{a['idx']}章题材内容塌陷（命中 {a['hits']} 次，"
+                            f"标题词「{kw}」{'未' if not a['title_hit'] else ''}现）")
+    chk("语义三关无硬伤（人称/称谓/题材内容）", not sem_hits,
+        "；".join(sem_hits[:3]) + (f" 等 {len(sem_hits)} 处" if len(sem_hits) > 3 else ""))
+    ph_n = len(name_d.get("placeholders", []))
+    if ph_n:
+        print(f"  [WARN] 占位称呼 {ph_n} 簇（未落实命名信号，仅提示不拦截）")
+    sus_n = sum(1 for a in cont_d.get("alerts", []) if a["level"] == "suspect")
+    if sus_n:
+        print(f"  [WARN] 题材密度偏低章 {sus_n} 个（仅提示不拦截）")
 
     n_pass = sum(1 for _, ok, _ in results if ok)
     print(f"\nSMOKE GATE: {'PASS' if n_pass == len(results) else 'FAIL'}（{n_pass}/{len(results)}）")
