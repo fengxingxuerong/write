@@ -13,7 +13,7 @@ assert.equal(new Set(ids).size, ids.length);
 for (const m of html.matchAll(/href="#([^"]+)"/g)) assert(ids.includes(m[1]));
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'inksmith-ui-'));
 const chrome = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const child = spawn(chrome, ['--headless', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' });
+const child = spawn(chrome, ['--headless', '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' });
 let launchError;
 child.on('error', error => { launchError = error; });
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -21,6 +21,7 @@ let ws;
 (async () => {
   const portFile = path.join(profile, 'DevToolsActivePort');
   for (let i = 0; !fs.existsSync(portFile) && i < 100; i++) { if (launchError) throw launchError; await sleep(100); }
+  if (!fs.existsSync(portFile)) throw Error(`Chrome did not create DevToolsActivePort (chrome=${chrome}${launchError ? `, launchError=${launchError.message}` : ''}). Is the binary present and runnable?`);
   const port = fs.readFileSync(portFile, 'utf8').split('\n')[0];
   const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   ws = new WebSocket(tabs.find(tab => tab.type === 'page').webSocketDebuggerUrl);

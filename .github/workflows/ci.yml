@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Python scripts quality check
         # scripts/ Python 流水线必须通过：语法编译 + ruff F 类静态检查
@@ -47,8 +47,17 @@ jobs:
         run: flutter config --enable-web
 
       - name: Pub get
-        # pubspec.lock 已入库：强制按锁定版本装依赖，保证 CI 可复现
-        run: flutter pub get --enforce-lockfile
+        # CI 网络瞬断（pub.dev 偶发 5xx / 连接重置）首跑实测踩过：单次调用
+        # 直接挂掉整个 job（exit 65）。加 3 次重试 + 注解留痕，匿名也能在
+        # Actions summary 的 Annotations 里看到重试原因。
+        run: |
+          for i in 1 2 3; do
+            if flutter pub get --enforce-lockfile; then exit 0; fi
+            echo "::notice::flutter pub get attempt ${i} failed (network or resolution), retrying in 20s"
+            sleep 20
+          done
+          echo "::error::flutter pub get failed after 3 attempts"
+          exit 1
 
       - name: Offline demo write smoke
         # 零 API 费端到端回归：模板引擎连写三章 + 番茄双质检（NovelQualityChecker
@@ -91,16 +100,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
 
+      - name: Ensure Chrome available
+        # runner 镜像不保证预装 google-chrome（首跑 8 秒秒挂的根因疑点）：
+        # 优先用镜像自带的，没有就用 @puppeteer/browsers 装一份稳定版。
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "Chrome found: $(google-chrome --version)"
+            echo "CHROME_PATH=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          else
+            echo "::notice::google-chrome not preinstalled on runner image, installing via @puppeteer/browsers"
+            npx -y @puppeteer/browsers install chrome@stable --path "$RUNNER_TEMP/chrome"
+            BIN=$(find "$RUNNER_TEMP/chrome" -type f -name chrome | head -n 1)
+            if [ -z "$BIN" ]; then echo "::error::Chrome install finished but binary not found"; exit 1; fi
+            echo "Installed Chrome at: $BIN"
+            echo "CHROME_PATH=$BIN" >> "$GITHUB_ENV"
+          fi
+
       - name: Browser regression (3 suites)
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
         run: |
           node scripts/verify_web.cjs
           node scripts/verify_ai_failure.cjs
