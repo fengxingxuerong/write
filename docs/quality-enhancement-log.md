@@ -193,7 +193,7 @@
 2. **LLM 审校证据注入**：`quality_review_prompt` 新增可选参数 `qa_evidence`——章级评分
    （每 3 章）时注入本地质检证据（钩子命中/直白爽点/变强异动每千字），prompt 明确要求
    「评分必须与证据对照，不得矛盾」。默认空参，旧调用行为不变
-   （注：Dart 侧 `pipeline_prompts.dart` 的 qualityReviewPrompt 待下轮双端同步）
+   - （注：Dart 侧已完成双端同步——2026-09-23 `ai_pipeline_service.dart` 调用点组装 qaEv 传入 qualityReviewPrompt，替身测试断言评分 prompt 携带证据块）
 
 ### 验证
 

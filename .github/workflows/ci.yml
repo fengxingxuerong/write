@@ -71,8 +71,8 @@ jobs:
           echo "Lines hit: $LH / $COV"
           PERCENT=$(python3 -c "print(round(100.0*$LH/$COV, 1))" 2>/dev/null || echo "unknown")
           echo "Coverage: $PERCENT%"
-          if [ "$PERCENT" != "unknown" ] && [ "$(python3 -c "print(1 if $PERCENT >= 60 else 0)")" = "0" ]; then
-            echo "::error::Coverage $PERCENT% below threshold 60%"
+          if [ "$PERCENT" != "unknown" ] && [ "$(python3 -c "print(1 if $PERCENT >= 80 else 0)")" = "0" ]; then
+            echo "::error::Coverage $PERCENT% below threshold 80%"
             exit 1
           fi
 
