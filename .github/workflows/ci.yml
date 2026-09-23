@@ -47,10 +47,12 @@ jobs:
         run: flutter config --enable-web
 
       - name: Pub get
-        # CI 网络瞬断（pub.dev 偶发 5xx / 连接重置）首跑实测踩过：单次调用
-        # 直接挂掉整个 job（exit 65）。加 3 次重试 + 注解留痕，匿名也能在
-        # Actions summary 的 Annotations 里看到重试原因。
+        # pubspec.lock 由国内镜像环境生成（条目 url 指向 pub.flutter-io.cn），
+        # GitHub runner 访问该镜像不可靠（首两次 CI 均挂在此，重试也救不回）。
+        # CI 上先改写到 pub.dev 再 enforce-lockfile；本地不受影响——镜像由
+        # PUB_HOSTED_URL 决定，本地 pub get 会按本地源自动改写回 lockfile。
         run: |
+          sed -i 's|https://pub.flutter-io.cn|https://pub.dev|g' pubspec.lock
           for i in 1 2 3; do
             if flutter pub get --enforce-lockfile; then exit 0; fi
             echo "::notice::flutter pub get attempt ${i} failed (network or resolution), retrying in 20s"
