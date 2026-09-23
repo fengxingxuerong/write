@@ -948,6 +948,9 @@ def generate_appended_chapter(ch, ctx):
 
     rv["words"] = count_words(final_text)
     ctx["reviews"].append(rv)
+    # 评审全字段落盘（与主循环 3.6 同款）：此前只进内存——门禁数不到补章评审分
+    # （run10 实战：4 章书仅 2 章"评审有效"假警报），断点续传后评估卡/终审也会丢补章评审
+    append_state(args.output, "review", dict(rv))
 
     final_text = dedup_chapter(final_text, idx)
 
@@ -1339,6 +1342,18 @@ def load_reviews_from_jsonl(path):
                 d = rec.get("data", {})
                 if isinstance(d, dict) and d.get("idx") is not None:
                     out[d["idx"]] = d
+            elif rec.get("type") == "chief_rewrite":
+                # 打回重写的复审分覆盖旧评审（last-wins）：live 路径在打回时已同步
+                # reviews[ri]，续传路径此前只恢复内容不恢复分数，评估卡/终审会拿旧分
+                d = rec.get("data", {})
+                if isinstance(d, dict) and d.get("idx") is not None and d.get("rescore") is not None:
+                    cur = out.get(d["idx"])
+                    if isinstance(cur, dict):
+                        cur["score"] = d["rescore"]
+                    else:
+                        out[d["idx"]] = {"idx": d["idx"], "score": d["rescore"],
+                                         "verdict": "重写复审", "words": d.get("words"),
+                                         "problems": []}
     return [out[k] for k in sorted(out)]
 
 

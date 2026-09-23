@@ -132,6 +132,12 @@ def check(output, max_chapters, review_pass=78.0, genre="玄幻"):
                     d = rec["data"]
                     reviews[d.get("idx")] = d.get("score", 0)
                     review_rows[d.get("idx")] = d
+                elif rec.get("type") == "chief_rewrite":
+                    # 终审打回重写的复审分覆盖旧评审（last-wins，与 load_reviews_from_jsonl 同口径）；
+                    # blockers 仍取原始评审记录（保守：重写记录不含阻断项明细）
+                    d = rec["data"]
+                    if d.get("rescore") is not None:
+                        reviews[d.get("idx")] = d.get("rescore")
     zeros = {k: v for k, v in reviews.items() if v <= 0}
     lows = {k: v for k, v in reviews.items() if 0 < v < review_pass}
     chk(f"各章评审分数有效（无 0 分静默失效），数量 ≥ {max_chapters}",
