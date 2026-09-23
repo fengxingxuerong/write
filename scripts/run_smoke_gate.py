@@ -5,11 +5,14 @@
 每次改动 novel_pipeline.py / generate_novel.py / fanqie_review.py 后跑一次：
   1) 编译检查（py_compile 三大脚本）
   2) 3 章小样全链路（写前守门 → 逐章 → 守护/爽点 → 终审多采样 → 评估卡/终审卡）
-  3) 自动验收十三项，输出 SMOKE GATE: PASS / FAIL
+  3) 自动验收十五项，输出 SMOKE GATE: PASS / FAIL
      其中 9~12 项是 2026-09 事故回归护栏（正文元话语残留/章内大段重复/题材漂移/
      阻断级硬伤章），与 fanqie_review 同口径——门禁必须能拦住评审报的硬伤。
      第 13 项是语义硬伤三关（人称漂移/主角称谓漂移/题材内容塌陷，2026-09-23），
      与 qa_semantic_check 同口径——机器分抓不住、人工试读才看得见的硬伤进门禁。
+     第 14 项人物关系张冠李戴（关卡4，纯规则，同 qa_semantic_check）。
+     第 15 项编造核查（关卡5，type=fact_check LLM 记录）；无记录（历史产物或
+     --no-fact-check）降级 WARN 不计入拦截，有记录但存在编造/执行失败即 FAIL。
 
 断点友好：中途中断后重跑同命令自动续传，续传完成后照常验收。
 用法：
@@ -37,7 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fanqie_review import (blocking_reasons, genre_drift, intra_repeat,  # noqa: E402
                            meta_talk, prompt_leak)
 from qa_semantic_check import (detect_pov_drift, detect_name_drift,  # noqa: E402
-                               detect_content_drift)
+                               detect_content_drift, detect_relation_drift)
 
 
 def step_compile():
@@ -226,6 +229,44 @@ def check(output, max_chapters, review_pass=78.0, genre="玄幻"):
     sus_n = sum(1 for a in cont_d.get("alerts", []) if a["level"] == "suspect")
     if sus_n:
         print(f"  [WARN] 题材密度偏低章 {sus_n} 个（仅提示不拦截）")
+
+    # 14) 关卡4 人物关系张冠李戴（纯规则，与 qa_semantic_check.detect_relation_drift 同口径）：
+    #  排他型关系（父母/师父/夫妻…）同一 (关系, 被修饰者) 指向不同对象 = 张冠李戴。
+    #  人工试读四连翻车之一（《铁掌破风》），机器分抓不住；触发即生成侧事故 → FAIL。
+    rel_d = detect_relation_drift(book)
+    rel_hits = []
+    for a in rel_d["alerts"]:
+        vs = "、".join(
+            f"{v['value']}(第{'/'.join(str(c) for c in v['chapters'])}章)"
+            for v in a["values"][:3])
+        rel_hits.append(f"{a['head']}的{a['rel']}→{vs}")
+    chk("人物关系无张冠李戴（关卡4）", not rel_hits,
+        "；".join(rel_hits[:3]) + (f" 等 {len(rel_hits)} 处" if len(rel_hits) > 3 else ""))
+
+    # 15) 关卡5 编造核查（type=fact_check，novel_pipeline 每章默认写入）：
+    #  按 idx last-wins；存在 fabrications 或执行 error → FAIL（error 不算通过凭据）；
+    #  无记录 = 历史产物 / --no-fact-check → WARN 不计入拦截（新跑默认开启应有记录）。
+    fact_recs = {}
+    if os.path.exists(output):
+        with open(output, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("type") == "fact_check":
+                    fd = rec["data"]
+                    fact_recs[fd.get("idx")] = fd
+    if not fact_recs:
+        print("  [WARN] 编造核查无记录（历史产物或 --no-fact-check，仅提示不拦截）")
+    else:
+        fab_n = sum(len(d.get("fabrications") or []) for d in fact_recs.values())
+        err_idx = sorted(i for i, d in fact_recs.items() if d.get("error"))
+        bad = fab_n > 0 or err_idx
+        detail = (f"编造 {fab_n} 处" if fab_n else "") + \
+                 (f"{'、' if fab_n else ''}执行失败章 {err_idx}" if err_idx else "")
+        chk("编造核查通过（关卡5，无编造且无执行失败）", not bad,
+            detail or f"{len(fact_recs)} 章全部通过")
 
     n_pass = sum(1 for _, ok, _ in results if ok)
     print(f"\nSMOKE GATE: {'PASS' if n_pass == len(results) else 'FAIL'}（{n_pass}/{len(results)}）")

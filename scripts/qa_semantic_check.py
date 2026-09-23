@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """墨匠语义硬伤检测器 v1 —— 抓机器质检够不着、人工试读才看得见的硬伤。
 
-背景：机器质检分（钩子/爽点/AI 味/句式指纹）对下列「语义级硬伤」天然失明，
+背景：机器质检分（钩子/爽点/AI 味/句式指纹）对下列「语义级硬伤」天然失盲，
 历来只能靠人工试读发现（《铁掌破风》机器 93.3 高潜🔥但人工复核翻车即为例证）：
 
   关卡 1  人称漂移：第一人称叙述 ↔ 第三人称叙述中途切换
@@ -9,9 +9,14 @@
   关卡 2  主角称谓漂移：主角名字中途换人 / 占位称呼未落实命名
           （「苏小子/姓苏的」→「裴照」，且两个称呼体系几乎互不重叠；
             「X某 / 姓X的 / X小子」属 AI 写手未落实命名的强信号）
+  关卡 3  标题-内容相符：题材词零命中 = 内容塌陷 / 跑偏
+          （《铁掌破风》玄幻书正文写成守井人现代文）
+  关卡 4  人物关系张冠李戴：排他型关系（父母/师父/夫妻）同一
+          「(关系, 被修饰者)」指向不同对象（人工试读四连翻车之一，2026-09-23）
 
-本脚本为前两关提供**纯规则**检测，零 LLM 成本，作为「投前五关」的第一批关卡。
-函数均为可导入纯函数，便于后续集成进 novel_pipeline / qa_scan_existing / Dart 端。
+本脚本为上述关卡提供**纯规则**检测，零 LLM 成本，作为「投前五关」的规则层关卡
+（关卡 5 编造核查走 LLM 换模型家族，见 novel_pipeline 的 fact_check 阶段）。
+函数均为可导入纯函数，便于集成进 run_smoke_gate / qa_scan_existing / Dart 端。
 
 用法:
   python qa_semantic_check.py <小说.txt路径> [--json] [--block-chars 500]
@@ -20,6 +25,7 @@
 校准基准（2026-09-23）:
   genre_tiyu_full.txt（《铁掌破风》）应报: 第 1 章内 first→third 切换 + 苏/裴称谓断裂
   genre_junshi_full.txt / novel_10w_pipeline_final.txt 等正常书应零/低误报
+  关卡 4 同口径：负样本零误报优先（宁可漏报不可误报）
 """
 import argparse
 import json
@@ -600,6 +606,115 @@ def detect_content_drift(chapters, genre=None):
 
 
 # ============================================================
+# 关卡 4：人物关系归属一致性（关系张冠李戴）
+# ============================================================
+# 背景：《铁掌破风》人工试读四连翻车含「角色关系张冠李戴」，机器分抓不住。
+# 机制：只取**排他型关系词**（唯一父母/唯一师承/一夫一妻/唯一主人身份），
+# 双向句式归一为 (关系, 被修饰者) → 关系对象；同一键指向不同对象即疑似张冠李戴：
+#   P1「林舟的父亲是林啸天」→ (父亲, 林舟) → 林啸天
+#   P2「林啸天是林舟的父亲」→ (父亲, 林舟) → 林啸天
+# 非排他关系（徒弟/师兄/朋友/对手/属下天然多值）不参与，防误报。
+# 防误报三件套（负样本零误报优先，宁可漏报）：
+#   ① 名字含代词/否定/量词/的 → 整条丢弃（「他是林啸天的父亲」「一位医生」类）
+#   ② 时地副词前后缀剥离（「当年林啸天」「就是林啸天」与「林啸天」归一）
+#   ③ P1 对象侧加 (?![汉字]) 边界——后接叙述文字的贪婪吞字直接不匹配（漏报可接受）
+
+# 排他型关系词（P1: X的rel是Y / P2: X是Y的rel；rel 均为捕获组，
+# 防「王夫人的女儿」这类被修饰者姓名本身含关系词时取错 rel）
+REL_WORDS = ("父亲", "母亲", "师父", "师傅", "丈夫", "妻子", "夫人",
+             "儿子", "女儿", "义父", "义母")
+_REL_ALT = "|".join(REL_WORDS)
+REL_P1_PAT = re.compile(
+    r"([一-鿿]{2,5})的(%s)(?:乃是|是)([一-鿿]{2,5})(?![一-鿿])" % _REL_ALT)
+REL_P2_PAT = re.compile(
+    r"([一-鿿]{2,5})(?:乃是|是)([一-鿿]{2,5})的(%s)" % _REL_ALT)
+
+# 名字里出现这些字 → 是代词/否定/量词/结构词而非人名，整条丢弃
+_REL_BAD_CHARS = set("是他她它我你您的了没非谁什这那其位个诸众各")
+# 时地/评注副词前后缀（与人名归一：当年林啸天 ≡ 林啸天 ≡ 林啸天就是）
+_REL_ADVERBS = (
+    "当年", "如今", "此刻", "此时", "此番", "后来", "之前", "便是",
+    "竟然", "原来", "确实", "其实", "真正", "的确", "才是", "就是",
+    "也是", "正是", "似乎", "仿佛", "想必", "好像", "大概", "本来",
+)
+
+
+def _clean_rel_name(s):
+    """剥离副词前后缀并做名字资格校验；不合格返回 None。"""
+    s = (s or "").strip()
+    prev = None
+    while s and s != prev:  # 循环剥离直到稳定（「当年林啸天就是」多段叠加）
+        prev = s
+        for w in _REL_ADVERBS:
+            if len(s) > len(w) and s.startswith(w):
+                s = s[len(w):]
+            if len(s) > len(w) and s.endswith(w):
+                s = s[:-len(w)]
+    if len(s) < 2 or len(s) > 6:
+        return None
+    if _REL_BAD_CHARS & set(s):
+        return None
+    return s
+
+
+def detect_relation_drift(chapters):
+    """检测人物关系张冠李戴。入参 [(idx, title, content)]。
+
+    返回 {"claims": 总关系断言数, "alerts": [
+        {"rel", "head", "level": high|medium,
+         "values": [{"value", "chapters": [...], "count", "phrase"}...],
+         "phrase": 首条证据句}]}。
+    - high：同一章内同一 (关系, 被修饰者) 出现两个对象（章内自相矛盾）
+    - medium：跨章指向不同对象（身世揭露类反转也可能触发，需人工复核）
+    """
+    claims = []
+    for idx, _title, content in chapters:
+        narr = strip_dialogue(content)  # 对话里的假设/举例不算断言
+        for m in REL_P1_PAT.finditer(narr):
+            head = _clean_rel_name(m.group(1))
+            value = _clean_rel_name(m.group(3))
+            if not head or not value or head == value:
+                continue
+            claims.append({"rel": m.group(2), "head": head, "value": value,
+                           "chapter": idx, "phrase": m.group(0)[:40]})
+        for m in REL_P2_PAT.finditer(narr):
+            value = _clean_rel_name(m.group(1))
+            head = _clean_rel_name(m.group(2))
+            if not head or not value or head == value:
+                continue
+            claims.append({"rel": m.group(3), "head": head, "value": value,
+                           "chapter": idx, "phrase": m.group(0)[:40]})
+
+    groups = {}
+    for c in claims:
+        groups.setdefault((c["rel"], c["head"]), []).append(c)
+
+    alerts = []
+    for (rel, head), cs in groups.items():
+        by_value = {}
+        for c in cs:
+            by_value.setdefault(c["value"], []).append(c)
+        if len(by_value) < 2:
+            continue
+        chs_by_ch = {}
+        for c in cs:
+            chs_by_ch.setdefault(c["chapter"], set()).add(c["value"])
+        same_ch = any(len(v) >= 2 for v in chs_by_ch.values())
+        values = []
+        for v, vcs in by_value.items():
+            values.append({"value": v,
+                           "chapters": sorted({c["chapter"] for c in vcs}),
+                           "count": len(vcs),
+                           "phrase": vcs[0]["phrase"]})
+        values.sort(key=lambda x: -x["count"])
+        alerts.append({"rel": rel, "head": head,
+                       "level": "high" if same_ch else "medium",
+                       "values": values, "phrase": cs[0]["phrase"]})
+    alerts.sort(key=lambda a: (a["level"] != "high", a["head"]))
+    return {"claims": len(claims), "alerts": alerts}
+
+
+# ============================================================
 # CLI 报告输出
 # ============================================================
 
@@ -682,21 +797,39 @@ def print_report(result, book_title=""):
             print(f"  结论: ⚠ 抓到 {n_high} 章题材内容塌陷"
                   if n_high else "  结论: 💡 无塌陷章，仅密度偏低提示")
 
+    # 关卡 4：人物关系归属（张冠李戴）
+    rel_d = result.get("relation_drift") or {}
+    if rel_d:
+        print(f"\n【关卡 4 · 人物关系一致性】（关系断言 {rel_d.get('claims', 0)} 条）")
+        if rel_d.get("alerts"):
+            for a in rel_d["alerts"]:
+                tag = "章内自相矛盾" if a["level"] == "high" else "跨章指向不同"
+                vs = "、".join(
+                    f"「{v['value']}」(第{'/'.join(str(c) for c in v['chapters'])}章×{v['count']})"
+                    for v in a["values"][:3])
+                print(f"  ⚠ [{tag}] {a['head']}的{a['rel']}: {vs}")
+                print(f"      ↳ 证据: 「{a['phrase']}」")
+            print(f"  结论: ⚠ 抓到 {len(rel_d['alerts'])} 处关系张冠李戴（人工复核）")
+        else:
+            print("  结论: ✅ 未检出排他型关系矛盾")
+
     # 总判
+    rel_d = result.get("relation_drift") or {}
     total_alerts = (len(pov_events) + len(name["span_alerts"])
                     + len(name.get("takeover_alerts") or [])
                     + sum(1 for a in content.get("alerts", [])
-                          if a["level"] in ("high", "medium")))
+                          if a["level"] in ("high", "medium"))
+                    + len(rel_d.get("alerts") or []))
     print(f"\n{'-' * 62}")
     if total_alerts > 0:
         print(f"  总判: ⚠ 共 {total_alerts} 处语义硬伤警报——投递前须人工复核")
     else:
-        print("  总判: ✅ 三关全过（规则层零警报，仍建议抽读正文）")
+        print("  总判: ✅ 四关全过（规则层零警报，仍建议抽读正文）")
     print()
 
 
 def main():
-    ap = argparse.ArgumentParser(description="墨匠语义硬伤检测器 v1（人称/角色名漂移）")
+    ap = argparse.ArgumentParser(description="墨匠语义硬伤检测器 v1（人称/角色名/题材/关系漂移）")
     ap.add_argument("book", help="小说 txt 路径")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
     ap.add_argument("--block-chars", type=int, default=500, help="人称检测块大小（默认 500 字）")
@@ -715,6 +848,7 @@ def main():
     pov_events, pov_summary = detect_pov_drift(chapters, args.block_chars)
     name_drift = detect_name_drift(chapters, args.expected_protagonist, args.min_cluster)
     content_drift = detect_content_drift(chapters, args.genre)
+    relation_drift = detect_relation_drift(chapters)
 
     result = {
         "book": title or os.path.basename(args.book),
@@ -722,6 +856,7 @@ def main():
         "pov_summary": pov_summary,
         "name_drift": name_drift,
         "content_drift": content_drift,
+        "relation_drift": relation_drift,
     }
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))

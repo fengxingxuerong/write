@@ -32,7 +32,9 @@ from generate_novel import (count_words, parse_json_from_llm, quality_check,
                             append_state, load_state, export_txt,
                             planning_prompt_idea, scene_planning_prompt, scene_prompt, hook_for,
                             has_ending_hook, SYSTEM_PROMPT,
-                            thrill_per_thousand, surge_per_thousand)  # noqa: E402
+                            thrill_per_thousand, surge_per_thousand,
+                            registry_block, facts_block, extract_registry_prompt,
+                            merge_registry, merge_facts)  # noqa: E402
 from fanqie_review import (review_chapter, fix_prompt, patch_gate, local_hook_fallback,
                            extract_world_terms, dedup_intra_repeat)  # noqa: E402
 from fanqie_prompts import first_screen_rewrite_prompt, pack_prompt  # noqa: E402
@@ -496,6 +498,7 @@ def state_extract_prompt(text, prev_state):
 
 只记录硬状态：
 - 人物伤势（含恢复情况）、修为/境界变化
+- 人物关系（谁是谁的父亲/师父/仇家等——关系确立后不得改写换人，防关系张冠李戴）
 - 随身物品的获得/丢失（含具体物名：玉简/银戒/灰布/断剑/钥匙等）
 - 承诺、恩怨、伪装身份
 - 关键地点变化
@@ -503,7 +506,7 @@ def state_extract_prompt(text, prev_state):
 
 要求：
 1. 在旧状态基础上增删改，不要整段重写
-2. 每条一行，格式：人物：状态；物品：xxx；事件：xxx（已完成）
+2. 每条一行，格式：人物：状态；关系：A是B的师父；物品：xxx；事件：xxx（已完成）
 3. 输出 3~10 行，简洁具体
 4. 只输出状态清单文本，不要任何解释或 Markdown
 
@@ -512,6 +515,81 @@ def state_extract_prompt(text, prev_state):
 
 【本章内容】
 {text}"""
+
+
+# ============================================================
+# 关卡 5 · 编造核查（投前五关最后一关，2026-09-23）
+# ============================================================
+# 与写手不同模型家族独立核查（写手主位 dsf/DeepSeek → 核查走规划官 glm 链），
+# 对照户籍表/数字台账/跨章状态，抓「身份换人 / 数字漂移 / 状态矛盾 / 无中生有」。
+# 必须在户籍表更新前调用——核查的是「本章 vs 前章已确立事实」。
+FACT_CHECK_SYS = "你是独立事实核查员，只输出 JSON，不要任何解释。"
+
+
+def fabrication_check_prompt(chapter_text, registry, state_track, idx):
+    """编造核查 prompt：对照已确立事实核查本章正文的编造/篡改。"""
+    reg = registry_block(registry) or "（空）"
+    facts = facts_block(registry) or "（无已确立数字）"
+    return f"""对照下列已确立事实，核查第 {idx} 章正文是否编造/篡改了事实：
+1. 身份矛盾：给户籍表内姓名安排了不同身份/职业/立场
+2. 数字漂移：同一事项的金额/期限/数量与数字台账不一致（新事项首次出现的数字不算问题）
+3. 状态矛盾：与跨章状态清单冲突的伤势/修为/物品得失
+4. 无中生有：把前文从未确立的细节当前文既定事实引用（凭空师门/恩怨/旧约）
+
+只输出 JSON：
+{{"fabrications":[{{"claim":"正文问题断言原句节选（30字内）","evidence":"对照依据","type":"identity|number|state|fabricated"}}]}}
+没有问题就输出 {{"fabrications":[]}}。
+
+【配角户籍表】
+{reg}
+
+【数字台账】
+{facts}
+
+【跨章状态清单】
+{state_track or "（无）"}
+
+【第 {idx} 章正文】
+{chapter_text}"""
+
+
+def run_fact_check(registry, state_track, final_text, idx):
+    """关卡 5 · 编造核查：规划官 glm 链（与写手 dsf/DeepSeek 异家族）独立核查。
+
+    返回 fabrication 列表；LLM/解析失败返回 None（调用方记 error，不算通过凭据）。
+    """
+    try:
+        raw = call_chain(PLANNER_CHAIN, FACT_CHECK_SYS,
+                         fabrication_check_prompt(final_text, registry, state_track, idx),
+                         max_tokens=3000)
+        parsed = parse_json_from_llm(raw)
+    except Exception:
+        return None
+    if parsed is None:
+        return None
+    return parsed.get("fabrications") or []
+
+
+def update_registry(output, registry, final_text, idx):
+    """章节定稿后维护配角户籍表/数字台账。
+
+    数字本地零成本（首见即锁定）；身份由 dsf-flash 轻任务提取（失败保留旧表）。
+    每次追加 type=registry 落盘（load_state last-wins，断点续传可恢复）。
+    """
+    merge_facts(registry, final_text, idx)
+    try:
+        raw = llm_call(STATE_EXTRACTOR, "你是小说设定整理员，只输出 JSON。",
+                       extract_registry_prompt(final_text, idx, registry),
+                       max_tokens=2000)
+        extracted = parse_json_from_llm(raw)
+    except Exception:
+        extracted = None
+    if extracted:
+        for cf in merge_registry(registry, extracted, idx):
+            print(f"  [户籍] ⚠ 疑似穿帮：{cf}")
+    append_state(output, "registry", registry)
+    print(f"  [户籍] 户籍表 {len(registry.get('characters', []))} 人 / "
+          f"数字台账 {len(registry.get('facts', []))} 条")
 
 
 def reader_proxy_prompt(text, genre):
@@ -713,6 +791,7 @@ def generate_appended_chapter(ch, ctx):
     target = ch.get("target", 3000)
     trackers = ctx["trackers"]
     state = ctx["state"]
+    registry = ctx.get("registry") or {"characters": [], "facts": []}
     print(f"\n{'=' * 60}\n[CH {idx}·结构补章] {chapter_title}（目标 {target} 字）\n  章纲：{goal}\n{'=' * 60}")
 
     # 未收伏笔 + 跨章状态注入（收尾章的核心使命就是收伏笔）
@@ -732,7 +811,9 @@ def generate_appended_chapter(ch, ctx):
         raw = call_chain(PLANNER_CHAIN, PLANNER_SYS,
                          scene_planning_prompt(goal, trackers["last_summary"], state_inject,
                                                protagonist=ctx["protagonist"], genre=args.genre,
-                                               world_hint=world_hint),
+                                               world_hint=world_hint,
+                                               registry=registry_block(registry),
+                                               facts=facts_block(registry)),
                          max_tokens=2000)
         plan = parse_json_from_llm(raw)
         if plan and plan.get("scenes"):
@@ -768,7 +849,9 @@ def generate_appended_chapter(ch, ctx):
                                            args.genre, write_state,
                                            protagonist=ctx["protagonist"], world=ctx["world_str"],
                                            hook=hook_for(idx) if si + 1 == len(scenes) else "",
-                                           is_opening=False),
+                                           is_opening=False,
+                                           registry=registry_block(registry),
+                                           facts=facts_block(registry)),
                               max_tokens=int(tw * 3.0))
             if text.strip():
                 break
@@ -864,9 +947,28 @@ def generate_appended_chapter(ch, ctx):
     ctx["reviews"].append(rv)
 
     final_text = dedup_chapter(final_text, idx)
+
+    # 关卡5 编造核查（与主循环同款：户籍表更新前、glm 与写手异家族独立核查）
+    fab_issues = []
+    if not args.no_fact_check:
+        fabs = run_fact_check(registry, trackers["state_track"], final_text, idx)
+        if fabs is None:
+            append_state(args.output, "fact_check",
+                         {"idx": idx, "fabrications": [], "error": True})
+            print("  [核查] ⚠ 编造核查执行失败（记 error，不算通过凭据）")
+        else:
+            for fb in fabs[:8]:
+                desc = f"{fb.get('type', 'fabricated')}: {str(fb.get('claim', ''))[:60]}"
+                fab_issues.append({"type": "fabrication", "desc": desc})
+                print(f"  [核查] ⚠ {desc}")
+            append_state(args.output, "fact_check",
+                         {"idx": idx, "fabrications": fabs, "error": False})
+            if not fabs:
+                print("  [核查] 编造核查通过 ✅（0 处编造）")
+
     record = {"idx": idx, "title": title_ok, "content": final_text,
               "words": count_words(final_text), "raw_words": w,
-              "scenes": len(scenes), "issues": [], "chief_structural": True}
+              "scenes": len(scenes), "issues": fab_issues, "chief_structural": True}
     if promise_results:
         n_ok = sum(1 for r in promise_results if r.get("fulfilled"))
         record["issues"].append({"type": "promise_check",
@@ -875,6 +977,8 @@ def generate_appended_chapter(ch, ctx):
                      {"idx": idx, "results": promise_results, "promise_block": promise_block})
     state["chapters"].append(record)
     append_state(args.output, "chapter", record)
+    # 户籍表/数字台账更新（收尾章同样入册，供后续三审与下一本书借鉴）
+    update_registry(args.output, registry, final_text, idx)
     trackers["total_words"] += record["words"]
     trackers["last_summary"] = final_text[-200:] if len(final_text) > 200 else final_text
 
@@ -1495,6 +1599,8 @@ def main():
                    help="跳过大纲终审官写前守门（默认开启；守门岗失败不阻塞生成）")
     p.add_argument("--no-reader-proxy", action="store_true",
                    help="跳过读者官每章追读反馈（默认开启；反馈注入下一章场景规划）")
+    p.add_argument("--no-fact-check", action="store_true",
+                   help="跳过关卡5 编造核查（默认每章开启，规划官 glm 链与写手异家族独立核查）")
     p.add_argument("--no-chief-rewrite", action="store_true",
                    help="终审不达标时不打回重写（默认开启打回权）")
     p.add_argument("--chief-rewrite-threshold", type=float, default=75.0,
@@ -1590,6 +1696,13 @@ def main():
         last_content = state["chapters"][-1].get("content", "")
         last_summary = last_content[-200:] if len(last_content) > 200 else last_content
 
+    # 配角户籍表/数字台账：断点恢复（load_state 回放最后一条 type=registry）；
+    # 每章定稿后更新，场景规划/写手强注入——防跨章身份漂移与数字漂移（2026-09-22 事故复盘）
+    registry = state.get("registry") or {"characters": [], "facts": []}
+    if registry.get("characters") or registry.get("facts"):
+        print(f"[RESUME] 户籍表 {len(registry.get('characters', []))} 人 / "
+              f"数字台账 {len(registry.get('facts', []))} 条")
+
     # ===== Phase 2：逐章多角色协作 =====
     reviews = load_reviews_from_jsonl(args.output)
     if reviews:
@@ -1646,7 +1759,9 @@ def main():
             raw = call_chain(PLANNER_CHAIN, PLANNER_SYS,
                              scene_planning_prompt(goal, last_summary, state_inject,
                                                    protagonist=protagonist, genre=args.genre,
-                                                   world_hint=world_hint),
+                                                   world_hint=world_hint,
+                                                   registry=registry_block(registry),
+                                                   facts=facts_block(registry)),
                              max_tokens=2000)
             plan = parse_json_from_llm(raw)
             if plan and plan.get("scenes"):
@@ -1687,7 +1802,9 @@ def main():
                                   scene_prompt(si + 1, len(scenes), stage, goal_s, beats, prev_text, args.genre,
                                                write_state_main, protagonist=protagonist, world=world_str,
                                                hook=hook_for(idx) if si + 1 == len(scenes) else "",
-                                               is_opening=(idx == 1 and si == 0)),
+                                               is_opening=(idx == 1 and si == 0),
+                                               registry=registry_block(registry),
+                                               facts=facts_block(registry)),
                                   max_tokens=int(tw * 3.0))
                 if text.strip():
                     break
@@ -1935,6 +2052,24 @@ def main():
         # 7.6) 章内去重：复制粘贴级的整块重复（实测第 3 章开头 800 字出现两遍）
         final_text = dedup_chapter(final_text, idx)
 
+        # 7.60) 关卡5 编造核查（规划官 glm 链与写手异家族，--no-fact-check 可关）：
+        #        必须在户籍表更新前——核查「本章 vs 前章已确立事实」；失败记 error 不算通过凭据
+        if not args.no_fact_check:
+            fabs = run_fact_check(registry, state_track, final_text, idx)
+            if fabs is None:
+                append_state(args.output, "fact_check",
+                             {"idx": idx, "fabrications": [], "error": True})
+                print("  [核查] ⚠ 编造核查执行失败（记 error，不作为通过凭据）")
+            else:
+                for fb in fabs[:8]:
+                    desc = f"{fb.get('type', 'fabricated')}: {str(fb.get('claim', ''))[:60]}"
+                    issues.append({"type": "fabrication", "desc": desc})
+                    print(f"  [核查] ⚠ {desc}")
+                append_state(args.output, "fact_check",
+                             {"idx": idx, "fabrications": fabs, "error": False})
+                if not fabs:
+                    print("  [核查] 编造核查通过 ✅（0 处编造）")
+
         chapter_record = {
             "idx": idx,
             "title": title_ok,
@@ -1973,6 +2108,10 @@ def main():
             print(f"  [伏笔] 台账已更新（open {n_open} / closed {n_closed}）")
         else:
             print("  [伏笔] 提取失败，保留旧台账")
+
+        # 7.62) 配角户籍表/数字台账更新（数字本地零成本 + 身份 dsf 轻任务，失败保留旧表）
+        #        必须在下一章场景规划前——下一章的 registry 注入依赖本章更新后的表
+        update_registry(args.output, registry, final_text, idx)
 
         # 7.6) 每 5 章检查超时未收伏笔（防长篇丢伏笔/改设定）
         if idx % 5 == 0:
@@ -2190,7 +2329,7 @@ def main():
                             "foreshadow_ledger": foreshadow_ledger}
                 ctx = {"args": args, "outline": outline, "state": state, "reviews": reviews,
                        "trackers": trackers, "protagonist": protagonist, "world_str": world_str,
-                       "review_world_terms": review_world_terms}
+                       "review_world_terms": review_world_terms, "registry": registry}
                 for c in new_chs:
                     generate_appended_chapter(c, ctx)
                 # 同步回 main 局部变量，供三审与后续导出使用
