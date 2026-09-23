@@ -439,6 +439,29 @@ void main() {
       expect(t.chapters.single.content, contains('第一幕'));
     });
 
+    test('质量评审证据注入：verifier 评分 prompt 携带本地质检证据', () async {
+      final _FakeRouter router = _FakeRouter(baseRespond(
+        outline: outlineJson(),
+        quality: '{"scores":{"opening":80,"thrill":70,"hook":85,'
+            '"motivation":75,"rhythm":80},"overall":78,"comment":"稳健"}',
+      ));
+      final AiPipelineTask t =
+          await runTask(task(config(useQualityReview: true)), router);
+
+      expect(t.status, PipelineTaskStatus.done);
+      // 与 Python 端 qa_ev 同口径：钩子命中 + 爽点/异动密度注入评分 prompt，
+      // 治「评审 100 分但钩子无」的评分分裂（证据矛盾时 prompt 明令不得矛盾）。
+      final String qrPrompt = router.users.firstWhere(
+        (String u) => u.contains('请以网文编辑的眼光'),
+        orElse: () => '',
+      );
+      expect(qrPrompt, isNotEmpty);
+      expect(qrPrompt, contains('本地质检证据'));
+      expect(qrPrompt, contains('章末钩子检测：命中'));
+      expect(qrPrompt, contains('直白爽点'));
+      expect(qrPrompt, contains('变强异动'));
+    });
+
     test('断点续传：跳过已完成章节，并裁掉跨章衔接重叠', () async {
       final AiPipelineTask t0 = task(config())
         ..outline = outlineOf(<int>[1, 2])
