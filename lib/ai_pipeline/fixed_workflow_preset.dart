@@ -70,9 +70,10 @@ class FixedWorkflowPreset {
     final title = endpoint('NOVEL_KEY_SENSE_K3',
         'https://token.sensenova.cn/v1', 'deepseek-v4-flash', 0.8);
     final candidates = includeCandidates ? [
-      // NVIDIA `z-ai/glm-5.2` 已 EOL（410），仅作链尾兜底保留。
+      // NVIDIA `z-ai/glm-5.2` 已 EOL（410，2026-09-23 确认不在在架目录）→
+      // 换代际后继 `z-ai/glm-5.3` 作链尾兜底（NV 端点当前排队严重，仅象征性兜底）。
       endpoint('NOVEL_KEY_NVIDIA', 'https://integrate.api.nvidia.com/v1',
-          'z-ai/glm-5.2', 1.0),
+          'z-ai/glm-5.3', 1.0),
       // OpenRouter 免费档 50 次/天；`stealth/ox-alpha` 已更名为 z-ai/glm-5.3-flash。
       endpoint('NOVEL_KEY_OPENROUTER', 'https://openrouter.ai/api/v1',
           'z-ai/glm-5.3-flash', 0.8),

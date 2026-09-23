@@ -47,9 +47,9 @@ const List<_Ep> _eps = <_Ep>[
   _Ep('SenseNova', 'https://token.sensenova.cn/v1',
       'deepseek-v4-flash', 'NOVEL_KEY_SENSE_K1'),
   _Ep('NVIDIA', 'https://integrate.api.nvidia.com/v1',
-      'deepseek-v4-flash', 'NOVEL_KEY_NVIDIA'),
+      'deepseek-ai/deepseek-v4.1-flash', 'NOVEL_KEY_NVIDIA'),
   _Ep('OpenRouter', 'https://openrouter.ai/api/v1',
-      'stealth/ox-alpha', 'NOVEL_KEY_OPENROUTER'),
+      'z-ai/glm-5.3-flash', 'NOVEL_KEY_OPENROUTER'),
 ];
 
 /// ping 阶段选出的首个可用端点（测试顺序执行，跨用例共享）。

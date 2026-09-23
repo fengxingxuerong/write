@@ -53,14 +53,17 @@ def _key(name):
     return k
 
 # 角色配置（2026-09-12 两轮大 token 探针实测后优化——8 角色协作矩阵 v2）：
-# 可用性矩阵（2026-09-12 实测）：
+# 可用性矩阵（2026-09-12 实测；2026-09-23 花名册更新见质量日志第十四节）：
 #   商汤 glm-5.2: K1✅K2✅K3✅（三件套 temp=1.0+大token+enable_thinking=False；长场景 prompt 有思考死循环风险）
 #   商汤 deepseek-v4-pro: K1✅K2✅K3✅（思考链重 2000-2900 token，max_tokens≥6000 否则正文必空）
 #   商汤 kimi-k3: K2✅（K1/K3 上轮 429）；硬约束 temperature 仅允许 1（llm_call 已加守卫）
 #   商汤 deepseek-v4-flash: K1✅K2✅K3✅【本轮复活，上轮 401】（3-4s 快，思维链轻但也会吃 400+ token，需 max_tokens≥1500）
 #   AMD DeepSeek-V4-Flash: ✅（约 30s 偏慢，高峰限流，作末备）
-#   NVIDIA deepseek-v4-flash-0731: ✅（3.1s，新增容量；kimi/pro 在 NV 超时不可用）
-#   NVIDIA z-ai/glm-5.2: 410 EOL 确认死亡（2026-08-21 下架，勿再尝试）
+#   NVIDIA deepseek-ai/deepseek-v4.1-flash: 【2026-09-23 换】旧 deepseek-v4-flash-0731 已
+#       下架（HTTP 410，且不在 /v1/models 目录）→ 换代际后继 v4.1-flash（目录在架；
+#       当前端点排队严重，60s+ 超时频发 → 维持链末位，不指望它兜底）
+#   NVIDIA z-ai/glm-5.2: 410 EOL 确认死亡（2026-08-21 下架，勿再尝试）；
+#       现目录在架 z-ai/glm-5.3 / glm-5.3-flash / deepseek-v4.1-flash / moonshotai/kimi-k3
 #   OpenRouter: 账户 0 余额（402），stealth/ox-alpha 内测期结束→变身 z-ai/glm-5.3-flash；
 #               充值后可解锁 glm-5.3 / glm-5.3-flash / deepseek-v4.1-flash / kimi-k3，届时优先升级写手与规划官
 #   sensenova-6.8-flash-lite: 持续弃用（空输出/不支持 system/传 temperature 即空）
@@ -92,13 +95,13 @@ PLANNER_CHAIN = [
     dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),           # K2 备
     dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),           # K3 备
     dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8, max_tokens=4000),   # AMD 备（稳定 30s，链序原则排 NV 前）
-    dict(url=NVIDIA, model="deepseek-ai/deepseek-v4-flash-0731", key="", temp=0.8, max_tokens=4000),  # NV 末备（300s 超时风险）
+    dict(url=NVIDIA, model="deepseek-ai/deepseek-v4.1-flash", key="", temp=0.8, max_tokens=4000),  # NV 末备（-0731 已 410 下架，2026-09-23 换代；端点排队严重仅象征性兜底）
 ]
 WRITER_CHAIN = [
     dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=6000),  # K1 dsf 主（快，思维链轻）
     dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),            # K2 glm 备（三件套）
     dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8, max_tokens=6000),    # AMD（稳定 30s，思考死循环免疫，排 NV 前）
-    dict(url=NVIDIA, model="deepseek-ai/deepseek-v4-flash-0731", key="", temp=0.8, max_tokens=6000),  # NV 末备（有 300s 超时风险）
+    dict(url=NVIDIA, model="deepseek-ai/deepseek-v4.1-flash", key="", temp=0.8, max_tokens=6000),  # NV 末备（-0731 已 410 下架，2026-09-23 换代；端点排队严重仅象征性兜底）
 ]
 EDITOR_CHAIN = [
     dict(url=SENSE, model="kimi-k3", key="", temp=1.0, max_tokens=4000),           # K2 kimi 主（temp=1 硬约束）
@@ -1750,6 +1753,9 @@ def main():
             rb_block = "【读者试读反馈（上一章，规划本章时尽量回应其期待、避开其弃点）】\n" + reader_hint
             state_inject = (state_inject + "\n\n" + rb_block) if state_inject else rb_block
         # 必兑现清单注入（超时伏笔硬约束）：场景规划必须为其安排落点
+        # write_state_main 必须先给默认值——7a319d3 曾只在内层 if 赋值，
+        # 无超时伏笔时（如第 1 章）直接 UnboundLocalError（2026-09-23 冒烟实锤）
+        write_state_main = state_track
         if promise_block_main:
             state_inject = (state_inject + "\n\n" + promise_block_main) if state_inject else promise_block_main
             print(f"  [承诺] 超时伏笔必兑现清单 {promise_block_main.count(chr(10))} 条注入场景规划与写手")
@@ -1783,14 +1789,11 @@ def main():
         for si, sc in enumerate(scenes):
             stage = sc.get("stage", "承")
             goal_s = sc.get("goal", "")
+            # 外显爽点硬约束：规划层写了打脸/当众类目标时，强制写手写出外部可见反应
+            # （治执行衰减：fulltest 第5章规划"当众打脸"但💥词表命中 0.00，写手写成了内心戏）
             if any(k in goal_s for k in ("外显爽点", "打脸", "当众")):
                 goal_s += ("【本场景硬约束】这是外显爽点场景：必须写出对手/旁观者的当众外部反应"
                            "（脸色骤变、失态、惊呼、修为显化、围观哗然），禁止只写主角内心感受或含蓄暗示。")
-        # 外显爽点硬约束：规划层写了打脸/当众类目标时，强制写手写出外部可见反应
-        # （治执行衰减：fulltest 第5章规划"当众打脸"但💥词表命中 0.00，写手写成了内心戏）
-        if any(k in goal_s for k in ("外显爽点", "打脸", "当众")):
-            goal_s += ("【本场景硬约束】这是外显爽点场景：必须写出对手/旁观者的当众外部反应"
-                       "（脸色骤变、失态、惊呼、修为显化、围观哗然），禁止只写主角内心感受或含蓄暗示。")
             beats = sc.get("beats", [])
             tw = sc.get("targetWords", 600)
             print(f"  [场景 {si+1}/{len(scenes)}] {stage}：{goal_s}（目标 {tw} 字）")
