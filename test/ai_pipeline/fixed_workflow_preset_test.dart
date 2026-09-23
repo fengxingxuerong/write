@@ -70,6 +70,14 @@ void main() {
       expect(roles[AiRole.planner]!.llm.baseUrl, contains('sensenova'));
       expect(roles[AiRole.verifier]!.llm.temperature, 0.2);
 
+      // 2026-09-22 全端点实测定稿：规划/审校主力 glm-5.2（需 temp=1.0），
+      // 编辑主力 kimi-k3，写手备选为 K2 的 deepseek-v4-flash。
+      expect(roles[AiRole.planner]!.llm.model, 'glm-5.2');
+      expect(roles[AiRole.planner]!.llm.temperature, 1.0);
+      expect(roles[AiRole.editor]!.llm.model, 'kimi-k3');
+      expect(roles[AiRole.verifier]!.llm.model, 'glm-5.2');
+      expect(roles[AiRole.writer]!.fallbacks.first.model, 'deepseek-v4-flash');
+
       // 标题官复用第 3 个 Key，避免与策划/编辑抢同一配额。
       expect(roles[AiRole.titler]!.llm.apiKey, 'sk-cccccccccccccccccccccccccccccccc');
       expect(roles[AiRole.editor]!.llm.apiKey, 'sk-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');

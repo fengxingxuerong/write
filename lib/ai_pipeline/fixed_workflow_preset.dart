@@ -42,6 +42,13 @@ class FixedWorkflowPreset {
   }
 
   /// 缺密钥端点不进入链；可选候选模型未经本轮验证，默认不启用。
+  ///
+  /// 角色分配（2026-09-22 全端点实测定稿）：
+  /// - 规划官：SenseNova K1 `glm-5.2`（长 JSON 输出稳；需 temp=1.0 + maxTokens≥4000）
+  /// - 写手：AMD `DeepSeek-V4-Flash`（17~20 字/s 全量实测最稳，配额最宽）
+  /// - 编辑：K2 `kimi-k3`（去AI味效果最好，配额波动大，必须带降级链）
+  /// - 标题官：K3 `deepseek-v4-flash`（轻量高频，独占 K3 分散 RPM）
+  /// - 审校：K1 `glm-5.2`（低频，与规划共享 K1，温度压到 0.2）
   static Map<AiRole, AiRoleConfig> roles(Map<String, String> keys,
       {bool includeCandidates = false}) {
     LlmConfig endpoint(String key, String base, String model, double temp) =>
@@ -50,24 +57,33 @@ class FixedWorkflowPreset {
           temperature: temp, maxTokens: 4096);
     final amd = endpoint('NOVEL_KEY_AMD',
         'https://developer.amd.com.cn/radeon/api/v1', 'DeepSeek-V4-Flash', 0.8);
-    final sense = endpoint('NOVEL_KEY_SENSE_K1',
-        'https://token.sensenova.cn/v1', 'deepseek-v4-flash', 0.7);
+    // 规划/审校主力（K1：低频角色专用）
+    final planner = endpoint('NOVEL_KEY_SENSE_K1',
+        'https://token.sensenova.cn/v1', 'glm-5.2', 1.0);
+    // 写手备选 / 标题官备选（K2：与编辑同 Key 的轻量模型）
+    final dsfK2 = endpoint('NOVEL_KEY_SENSE_K2',
+        'https://token.sensenova.cn/v1', 'deepseek-v4-flash', 0.8);
+    // 去AI味编辑主力（K2：kimi 配额波动大，失败沿链降级）
     final editor = endpoint('NOVEL_KEY_SENSE_K2',
-        'https://token.sensenova.cn/v1', 'deepseek-v4-flash', 0.5);
+        'https://token.sensenova.cn/v1', 'kimi-k3', 1.0);
+    // 标题官主力（K3：独占第三个 Key，避免与规划/编辑抢配额）
     final title = endpoint('NOVEL_KEY_SENSE_K3',
-        'https://token.sensenova.cn/v1', 'deepseek-v4-flash', 0.6);
+        'https://token.sensenova.cn/v1', 'deepseek-v4-flash', 0.8);
     final candidates = includeCandidates ? [
+      // NVIDIA `z-ai/glm-5.2` 已 EOL（410），仅作链尾兜底保留。
       endpoint('NOVEL_KEY_NVIDIA', 'https://integrate.api.nvidia.com/v1',
           'z-ai/glm-5.2', 1.0),
+      // OpenRouter 免费档 50 次/天；`stealth/ox-alpha` 已更名为 z-ai/glm-5.3-flash。
       endpoint('NOVEL_KEY_OPENROUTER', 'https://openrouter.ai/api/v1',
-          'stealth/ox-alpha', 0.8),
+          'z-ai/glm-5.3-flash', 0.8),
     ] : <LlmConfig>[];
     final chains = <AiRole, List<LlmConfig>>{
-      AiRole.planner: [sense, amd, ...candidates],
-      AiRole.writer: [amd, sense, ...candidates],
-      AiRole.editor: [editor, sense, amd, ...candidates],
-      AiRole.titler: [title, sense, amd],
-      AiRole.verifier: [sense.copyWith(temperature: 0.2), amd, ...candidates],
+      AiRole.planner: [planner, amd, ...candidates],
+      AiRole.writer: [amd, dsfK2, planner, ...candidates],
+      AiRole.editor: [editor, planner, amd, ...candidates],
+      AiRole.titler: [title, dsfK2, amd],
+      AiRole.verifier: [planner.copyWith(temperature: 0.2),
+        dsfK2.copyWith(temperature: 0.2), amd, ...candidates],
     };
     return chains.map((role, chain) {
       final seen = <(String, String, String)>{};
