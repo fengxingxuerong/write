@@ -147,7 +147,9 @@ jobs:
           cache: true
 
       - name: Pub get
-        # 与 analyze-test 同因：lockfile 镜像源在 runner 上不可达，先改写再拉
+        # 与 analyze-test 同因：lockfile 镜像源在 runner 上不可达，先改写再拉。
+        # 注意 windows-latest 默认 shell 是 PowerShell，此脚本为 bash 语法须显式指定。
+        shell: bash
         run: |
           sed -i 's|https://pub.flutter-io.cn|https://pub.dev|g' pubspec.lock
           for i in 1 2 3; do
