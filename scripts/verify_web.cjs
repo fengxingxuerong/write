@@ -20,10 +20,16 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 let ws;
 (async () => {
   const portFile = path.join(profile, 'DevToolsActivePort');
-  for (let i = 0; !fs.existsSync(portFile) && i < 100; i++) { if (launchError) throw launchError; await sleep(100); }
+  // CI 冷启动的 Chrome 可能 10 秒+ 才写端口文件，放宽到 30s
+  for (let i = 0; !fs.existsSync(portFile) && i < 300; i++) { if (launchError) throw launchError; await sleep(100); }
   if (!fs.existsSync(portFile)) throw Error(`Chrome did not create DevToolsActivePort (chrome=${chrome}${launchError ? `, launchError=${launchError.message}` : ''}). Is the binary present and runnable?`);
   const port = fs.readFileSync(portFile, 'utf8').split('\n')[0];
-  const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  // 端口文件出现 ≠ HTTP 服务已就绪，json/list 拉取带重试消除竞态
+  let tabs;
+  for (let i = 0; ; i++) {
+    try { tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json(); break; }
+    catch (e) { if (i >= 20) throw e; await sleep(250); }
+  }
   ws = new WebSocket(tabs.find(tab => tab.type === 'page').webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
   let sequence = 0;

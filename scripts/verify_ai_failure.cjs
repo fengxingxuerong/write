@@ -36,10 +36,16 @@ async function main() {
   let launchError;
   browser.on('error', error => { launchError = error; });
   const portFile = path.join(profile, 'DevToolsActivePort');
-  for (let i = 0; i < 100 && !fs.existsSync(portFile); i++) { if (launchError) throw launchError; await sleep(50); }
+  // CI 冷启动的 Chrome 可能 10 秒+ 才写端口文件（第 3 轮 CI 偶发挂在此），放宽到 30s
+  for (let i = 0; i < 300 && !fs.existsSync(portFile); i++) { if (launchError) throw launchError; await sleep(100); }
   if (!fs.existsSync(portFile)) throw Error(`Chrome did not create DevToolsActivePort (chrome=${chrome}${launchError ? `, launchError=${launchError.message}` : ''}). Is the binary present and runnable?`);
   const debugPort = fs.readFileSync(portFile, 'utf8').split('\n')[0];
-  const pages = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`, { signal: AbortSignal.timeout(4000) })).json();
+  // 端口文件出现 ≠ HTTP 服务已就绪，json/list 拉取带重试消除竞态
+  let pages;
+  for (let i = 0; ; i++) {
+    try { pages = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`, { signal: AbortSignal.timeout(4000) })).json(); break; }
+    catch (e) { if (i >= 20) throw e; await sleep(250); }
+  }
   socket = new WebSocket(pages.find(p => p.type === 'page').webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(Error('WebSocket timeout')), 5000); socket.onopen = () => { clearTimeout(timer); resolve(); }; socket.onerror = () => { clearTimeout(timer); reject(Error('WebSocket error')); }; });
   let serial = 0;

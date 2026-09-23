@@ -137,17 +137,26 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.44.9'
-          channel: stable
+          channel: 'stable'
           cache: true
 
       - name: Pub get
-        run: flutter pub get --enforce-lockfile
+        # 与 analyze-test 同因：lockfile 镜像源在 runner 上不可达，先改写再拉
+        run: |
+          sed -i 's|https://pub.flutter-io.cn|https://pub.dev|g' pubspec.lock
+          for i in 1 2 3; do
+            if flutter pub get --enforce-lockfile; then exit 0; fi
+            echo "::notice::flutter pub get attempt ${i} failed, retrying in 20s"
+            sleep 20
+          done
+          echo "::error::flutter pub get failed after 3 attempts"
+          exit 1
 
       - name: Build Windows Release
         run: flutter build windows --release
