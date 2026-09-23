@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:novel_writer/features/project_list/project_list_viewmodel.dart';
+import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/storage/app_database.dart';
 import 'package:novel_writer/storage/novel_repository.dart';
 
@@ -152,4 +153,60 @@ void main() {
       expect(vm.state.novels.length, originalCount);
     });
   });
+
+  group('异常分支（AppException → 错误上屏）', () {
+    test('load 抛 StorageException → error 为其 message', () async {
+      vm = ProjectListViewModel(_ThrowingRepo());
+      await vm.load();
+      expect(vm.state.isLoading, isFalse);
+      expect(vm.state.error, '存储层故障');
+    });
+
+    test('load 抛普通异常 → error 前缀「加载失败」', () async {
+      vm = ProjectListViewModel(_ThrowingRepo(appError: false));
+      await vm.load();
+      expect(vm.state.isLoading, isFalse);
+      expect(vm.state.error, startsWith('加载失败'));
+    });
+
+    test('create 抛 StorageException → error 上屏且列表不动', () async {
+      final ProjectListViewModel bad = ProjectListViewModel(_ThrowingRepo());
+      await bad.create('新书', '玄幻', '热血');
+      expect(bad.state.error, '存储层故障');
+      expect(bad.state.novels, isEmpty);
+    });
+
+    test('delete / rename / setArchived 抛错 → error 上屏', () async {
+      final ProjectListViewModel bad = ProjectListViewModel(_ThrowingRepo());
+      await bad.delete('n1');
+      expect(bad.state.error, '存储层故障');
+      await bad.rename('n1', '改名');
+      expect(bad.state.error, '存储层故障');
+      await bad.setArchived('n1', true);
+      expect(bad.state.error, '存储层故障');
+      await bad.setArchived('n1', false);
+      expect(bad.state.error, '存储层故障');
+    });
+
+  });
+}
+
+/// 恒抛错的仓储：验证 ViewModel 对 AppException / 普通异常的兜底。
+///
+/// 用 implements + noSuchMethod 兜底（同 generate_viewmodel_test 的
+/// _FakeChapterRepo 口径）：被测路径只走 listNovels / createNovel /
+/// deleteNovel / renameNovel / setArchived，其余成员不应被触达。
+class _ThrowingRepo implements NovelRepository {
+  _ThrowingRepo({this.appError = true});
+
+  /// true → 抛 AppException（StorageException）；false → 抛普通异常。
+  final bool appError;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    if (appError) {
+      throw const StorageException('存储层故障');
+    }
+    throw StateError('boom');
+  }
 }
