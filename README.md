@@ -1,6 +1,6 @@
 # 墨匠 InkSmith —— 完全离线一键小说写作工具
 
-[![CI](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml/badge.svg)](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml) ![Coverage](https://img.shields.io/badge/coverage-86%25-brightgreen) ![Tests](https://img.shields.io/badge/tests-869-blue) ![Dart](https://img.shields.io/badge/dart-3.12%2B-blue) ![Flutter](https://img.shields.io/badge/flutter-3.44%2B-blue)
+[![CI](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml/badge.svg)](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml) ![Coverage](https://img.shields.io/badge/coverage-86%25-brightgreen) ![Tests](https://img.shields.io/badge/tests-873-blue) ![Dart](https://img.shields.io/badge/dart-3.12%2B-blue) ![Flutter](https://img.shields.io/badge/flutter-3.44%2B-blue)
 
 > 单代码库 Flutter / Dart，核心链路零网络请求、零外部 API。所有生成与存储均在本机完成。
 > 支持接入本地大模型（llama.cpp / Ollama）实现 AI 辅助写作，同样完全离线。
@@ -135,7 +135,7 @@ flutter analyze
 flutter test
 ```
 
-当前测试覆盖：**869 个用例**（模型序列化 / 模板引擎生成质量与番茄闸门过审 / 生成 ViewModel 多章连写 / 引擎抽象与种子可复现 / 存储层归档与数据可靠性 / 敏感词统计 / 编辑器体验 / 导出服务（txt·md·epub·docx·backup）/ AI 记忆链路 / 校对解析 / 语料版权卫生与骨架泄漏护栏 / 阅读设置 / 崩溃日志上报 / DI 装配 / 全书体检报告 / 节拍语料与流水线断点存储 / **AI 流水线 run 编排（大纲失败·取消·骨架兜底·钩子补写与本地兜底·润色采纳与压缩拒绝·低分重写·断点续传·提前收官·审校与伏笔超时·本地质检证据注入）** / **本地质检三件套（QA 报告·链式路由日志与健康池自愈·章纲→场景规划与兜底）** / 项目列表异常分支错误上屏 / 其他核心逻辑），行覆盖率约 **86%**。
+当前测试覆盖：**873 个用例**（模型序列化 / 模板引擎生成质量与番茄闸门过审 / 生成 ViewModel 多章连写 / 引擎抽象与种子可复现 / 存储层归档与数据可靠性 / 敏感词统计 / 编辑器体验 / 导出服务（txt·md·epub·docx·backup）/ AI 记忆链路 / 校对解析 / 语料版权卫生与骨架泄漏护栏 / 阅读设置 / 崩溃日志上报 / DI 装配 / 全书体检报告 / 节拍语料与流水线断点存储 / **AI 流水线 run 编排（大纲失败·取消·骨架兜底·钩子补写与本地兜底·润色采纳与压缩拒绝·低分重写·断点续传·提前收官·审校与伏笔超时·本地质检证据注入）** / **本地质检三件套（QA 报告·链式路由日志与健康池自愈·章纲→场景规划与兜底）** / 关键 prompt 内容回归（状态关系条目·证据块注入）/ 项目列表异常分支错误上屏 / 其他核心逻辑），行覆盖率约 **86%**。
 
 ### CI 流水线
 

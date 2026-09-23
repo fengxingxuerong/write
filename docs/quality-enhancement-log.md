@@ -422,9 +422,9 @@
 ### 后续
 
 - 关卡 3（标题-内容相符）：✅ 2026-09-23 已落地（见下）
-- 关卡 4（关系归属）：人物关系纳入状态提取官硬状态
-- 关卡 5（编造核查）：换模型家族独立事实核查
-- 四关齐后并入冒烟门禁 run_smoke_gate.py，作为导出投递版前置条件
+- 关卡 4（关系归属）：✅ 2026-09-23 已落地（见第十三节）——防（状态清单入关系）+ 检（detect_relation_drift 纯规则）+ 门禁第 14 项
+- 关卡 5（编造核查）：✅ 2026-09-23 已落地（见第十三节）——规划官 glm 链（与写手异家族）对照户籍表/数字台账/状态清单核查，type=fact_check 落盘 + 门禁第 15 项
+- 五关已全部落地并入冒烟门禁 run_smoke_gate（第 13~15 项），作为导出投递版前置条件
 
 ### 关卡 3 补充（同日）：题材内容塌陷 + 标题词命中（detect_content_drift）
 
@@ -441,3 +441,45 @@
 - 首战即中：对 smoke_gate_v3.jsonl（恶劣配额窗口的历史事故产物）跑 --check-only，第 13 项精准拦下两处真伤——①陈默(36次,第3章)/周成(28次,第1章)两章两个主角名（即当次"主角完全错位"事故）②第 2 章玄幻词 0 命中（正文实为"运费/算盘"现代都市内容，即"题材错位"事故）——验证门禁能拦住历史上真实发生过的生成事故形态
 - 取舍记录：不加"跨章人称不一致"信号——碎脉铸仙录等第三人称书的独白密集章（first 块多）会造成大规模误报；整章人称漂移通常伴随题材跑偏，由关卡 3 题材塌陷兜底
 - 回归：五本负样本零警报不变、《铁掌破风》正样本 4 处警报不变
+
+## 十三、2026-09-23 关卡 4/5 落地 + 户籍表接入主流水线 + 门禁十五项
+
+### 关卡 4 · 人物关系归属（防 + 检 + 门禁）
+
+- **防（双端）**：状态提取 prompt 硬状态清单新增「人物关系」条目（Python `novel_pipeline.state_extract_prompt` + Dart `pipeline_prompts.stateExtractPrompt`），格式行同步「关系：A是B的师父」——关系入跨章状态清单随章注入，确立后不得改写换人
+- **检（纯规则零成本）**：`qa_semantic_check.detect_relation_drift`——排他型关系词 11 个（父亲/母亲/师父/师傅/丈夫/妻子/夫人/儿子/女儿/义父/义母；徒弟/师兄/朋友/对手等天然多值词不参与），双向句式归一为 (关系, 被修饰者)→对象：P1「林舟的父亲是林啸天」/ P2「林啸天是林舟的父亲」同键
+- **防误报三件套**（负样本零误报优先，宁可漏报）：① 名字含代词/否定/量词/结构字整条丢弃（「他是林啸天的父亲」「母亲是一位医生」类）② 时地/评注副词前后缀循环剥离归一（当年林啸天 ≡ 林啸天 ≡ 林啸天就是）③ P1 对象侧 `(?![汉字])` 边界——后接叙述文字的贪婪吞字直接不匹配
+- **rel 捕获组**：rel 为正则独立捕获组（非整句 next() 扫描），防「王夫人的女儿」这类被修饰者姓名含关系词时取错
+- **判定**：同章同键两对象 → high（章内自相矛盾）；跨章指向不同 → medium（身世揭露类反转可能触发，人工复核）
+- **校准**：合成断言 9/9 PASS（双向一致零警报/跨章 medium/同章 high/对话剔除/代词量词过滤/副词归一/rel 捕获/关卡5 prompt 渲染/状态关系条目）；8 本真书（正样本《铁掌破风》+ 7 本负样本含 v3 事故产物）**零误报**——真书语料用领属表述（「师父让他扫台阶」）不用判断句，claims=0 属语料形态而非漏检，规则层口径与关卡 1-3 一致：宁可漏报不可误报
+- **门禁**：`run_smoke_gate` 第 14 项，high/medium 均 FAIL
+
+### 关卡 5 · 编造核查（LLM 换模型家族独立核查）
+
+- `novel_pipeline` 新增 `FACT_CHECK_SYS` + `fabrication_check_prompt` + `run_fact_check`：对照**户籍表/数字台账/跨章状态清单**核查四类编造——身份矛盾（户籍表内姓名换身份）/ 数字漂移（同一事项金额期限与台账冲突；新事项首次数字不算）/ 状态矛盾（伤势修为物品得失冲突）/ 无中生有（把前文未确立细节当前文既定事实）
+- **异家族**：核查走规划官 glm 链（写手主位 dsf-flash/DeepSeek-V4 异家族，防同源错误），max_tokens=3000，解析失败/异常返回 None
+- **时序硬约束**：必须在户籍表 `update_registry` **前**调用——核查的是「本章 vs 前章已确立事实」（本章新确立的数字先进台账会自我豁免）
+- **落盘** `type=fact_check {idx, fabrications, error}`：失败记 error **不算通过凭据**（与「评审 0 分=静默失效」同口径）；编造写入 chapter issues（type=fabrication）随 record 落盘；每章最多打印 8 条
+- **开关**：`--no-fact-check`（默认开启）；主循环 + 结构补章 `generate_appended_chapter` 双路径接入
+- **门禁第 15 项**：有记录且存在编造/执行失败 → FAIL；无记录（历史产物或开关关闭）→ WARN 降级不计入拦截
+
+### 户籍表/数字台账接入主流水线（关卡 4/5 的事实源，此前是死代码）
+
+- 现状修复：`generate_novel` 单模型 CLI 已完整接线，但 `novel_pipeline` 主流水线**零引用**——`registry_block/facts_block/extract_registry_prompt/merge_registry/merge_facts` 定义了却没人调；场景规划/写手 prompt 的 registry/facts 参数恒传空串
+- 接线四处：
+  1. **断点恢复**：`load_state` 本就回放最后一条 type=registry（last-wins），主循环 init `registry = state.get("registry") or {...}` + [RESUME] 打印
+  2. **注入**：主循环与结构补章两处 `scene_planning_prompt` + 两处 `scene_prompt` 均传 `registry=registry_block(registry), facts=facts_block(registry)`
+  3. **更新**：每章定稿后 `update_registry`——数字本地 `merge_facts` 首见即锁定（零成本）+ 身份 dsf-flash LLM 提取（失败保留旧表，冲突只记警示「疑似穿帮」）→ type=registry 落盘；主循环在伏笔提取后、结构补章在 record 后
+  4. **ctx 传引用**：`ctx["registry"] = registry`，结构补章与主循环共享同一对象，收尾章户籍入册
+- 时序：fact-check（章定稿后、record 前）→ record → 状态/伏笔提取 → update_registry → 下一章注入
+
+### 验证
+
+- py_compile 4 文件 + ruff --select=F 全绿；`novel_pipeline --help` 显示 `--no-fact-check`
+- 合成断言 9/9 PASS；8 本真书关系关零误报
+- 门禁干跑 smoke_gate_v3：第 14 项 PASS、第 15 项 WARN 降级（历史产物无记录）——总 11/14 项计入，存量事故仍被正确拦 FAIL
+- Dart：`dart analyze --fatal-infos` 零告警；`pipeline_prompts_test.dart` 新增 4 用例锁定双端同步（关系条目/证据块注入与不注入）
+
+### 门禁项数演进
+
+十二（2026-09-16）→ 十三（语义三关，09-23）→ **十五**（+ 关系张冠李戴第 14 项 + 编造核查记录第 15 项；无 fact_check 记录时 14 项计入 + 1 项 WARN）
