@@ -672,7 +672,7 @@ def print_report(result, book_title=""):
             tw = "/".join(a["title_words"][:2]) or "—"
             th = "标题词已现" if a["title_hit"] else "标题词未现"
             print(f"  {mark} 第 {a['idx']} 章「{a['title'][:14]}」"
-                  f"题材词命中 {a['hits']} 次（{a['density']}/千字，{th}）"
+                  f"题材词命中 {a['hits']} 次（{a['density']}/千字，{th}·「{tw}」）"
                   + ("——疑似内容跑偏，须人工复核" if a["level"] in ("high", "medium")
                      else "——题材密度偏低，留意"))
         if not content["alerts"]:
@@ -691,7 +691,7 @@ def print_report(result, book_title=""):
     if total_alerts > 0:
         print(f"  总判: ⚠ 共 {total_alerts} 处语义硬伤警报——投递前须人工复核")
     else:
-        print(f"  总判: ✅ 三关全过（规则层零警报，仍建议抽读正文）")
+        print("  总判: ✅ 三关全过（规则层零警报，仍建议抽读正文）")
     print()
 
 
