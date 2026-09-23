@@ -28,6 +28,14 @@ def print(*args, **kwargs):
     kwargs.setdefault("flush", True)
     _real_print(*args, **kwargs)
 
+# Windows 控制台默认 GBK：质检报告含 ✓/✗ 等字符会 UnicodeEncodeError
+# 直接把 stdout/stderr 重配为 UTF-8（失败时退化为 replace，绝不让报告打印炸掉主流程）
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # ============================================================
 # Prompts（与 Dart WritingGuidelines + 多 pass 引擎对齐）
 # ============================================================
@@ -160,7 +168,8 @@ def planning_prompt_idea(total_words=200000, prev_summary="", genre="玄幻", us
     return s
 
 
-def scene_planning_prompt(outline, prev_summary, state="", protagonist="", genre="玄幻", world_hint=""):
+def scene_planning_prompt(outline, prev_summary, state="", protagonist="", genre="玄幻", world_hint="",
+                          registry="", facts=""):
     """为每一章拆场景。state 为跨章状态清单（人物伤势/修为/物品/承诺）。
     protagonist 非空时强制场景只使用该主角名，禁止另起别名/新角色名。
     genre 为题材（见 GENRE_SPECS）。world_hint 为全书大纲世界观（JSON 片段），
@@ -189,6 +198,11 @@ def scene_planning_prompt(outline, prev_summary, state="", protagonist="", genre
         s += f"\n【全书世界观（规划官设定，本章场景必须严格遵循，不得另起体系/改名换设定）】\n{world_hint.strip()}\n"
     if state and state.strip():
         s += f"\n【跨章状态（场景必须遵守，不可与此矛盾）】\n{state.strip()}\n"
+    if registry:
+        s += (f"\n【配角户籍表（已登场角色身份固定：禁止给表内姓名安排不同身份/职业；"
+              f"章纲要求的新角色可以登场，但同一姓名全章只能有一个身份）】\n{registry}\n")
+    if facts:
+        s += f"\n【数字台账·硬约束】\n{facts}\n"
     if prev_summary:
         s += f"\n上一章结尾的情境（本场景必须承接，不可矛盾）：\n{prev_summary}\n"
     s += """
@@ -213,8 +227,132 @@ def hook_for(chapter_idx):
     return HOOK_TYPES[int(chapter_idx) % len(HOOK_TYPES)]
 
 
+# ============================================================
+# 配角户籍表 + 数字台账（2026-09-22 质量事故复盘新增）
+# 历史事故：同一配角名跨章换身份（公司经理→当铺老板→收破烂）；
+# 金额/期限跨章漂移（47万→23万、三个月→两个月）。
+# 机制：每章生成后由 LLM 提取新登场/身份变动角色，登记入册；
+# 首见即锁定，后续场景 prompt 强注入，发现冲突只记警示不改原籍。
+# ============================================================
+def registry_block(registry):
+    """把户籍表渲染成 prompt 注入块；空表返回空串。"""
+    chars = (registry or {}).get("characters", [])
+    if not chars:
+        return ""
+    lines = ["姓名｜身份（固定，禁止改换职业/身份/立场）｜首次登场｜备注"]
+    for c in chars:
+        lines.append(f"{c['name']}｜{c.get('identity', '')}｜"
+                     f"第 {c.get('first_seen', '?')} 章｜{c.get('note', '')}")
+    return "\n".join(lines)
+
+
+def facts_block(registry):
+    """把数字台账渲染成 prompt 注入块；空台账返回空串。"""
+    facts = (registry or {}).get("facts", [])
+    if not facts:
+        return ""
+    items = "、".join(f"{f['value']}（第 {f.get('first_seen', '?')} 章确立）" for f in facts)
+    return ("以下金额/期限/数量在前文已确立，涉及同一事项时必须沿用原值，"
+            "禁止漂移成其他数字：\n" + items)
+
+
+def extract_registry_prompt(chapter_text, idx, registry):
+    """章节生成后提取新登场/身份变动角色。只关心「有名字的角色」。"""
+    known = registry_block(registry) or "（空）"
+    return f"""你是小说设定整理员。下面是第 {idx} 章正文与既有户籍表。
+
+【既有户籍表】
+{known}
+
+【第 {idx} 章正文（节选尾部）】
+{chapter_text[-3000:]}
+
+任务：只输出 JSON，不要多余文字。
+1. new_characters：本章首次登场的有名字角色（户籍表里没有的），给出身份一句话；
+2. changed：户籍表已有、但本章身份/职业/立场明显不同的角色（疑似穿帮），给出本章写法。
+{{"new_characters":[{{"name":"...","identity":"..."}}],"changed":[{{"name":"...","identity":"...","note":"..."}}]}}
+没有就返回空数组。"""
+
+
+def merge_registry(registry, extracted, idx):
+    """合并提取结果。首见锁定：身份冲突不改原籍，只追加警示备注。返回冲突列表。"""
+    registry.setdefault("characters", [])
+    by_name = {c["name"]: c for c in registry["characters"]}
+    conflicts = []
+    for nc in (extracted or {}).get("new_characters", []):
+        name = (nc.get("name") or "").strip()
+        identity = (nc.get("identity") or "").strip()
+        if not name or name in by_name:
+            continue
+        entry = {"name": name, "identity": identity, "first_seen": idx, "note": ""}
+        registry["characters"].append(entry)
+        by_name[name] = entry
+    for chg in (extracted or {}).get("changed", []):
+        name = (chg.get("name") or "").strip()
+        old = by_name.get(name)
+        if not old:
+            continue
+        new_id = (chg.get("identity") or "").strip()
+        if not new_id or new_id == old.get("identity"):
+            continue
+        conflicts.append(f"「{name}」户籍身份「{old.get('identity')}」，第 {idx} 章写成「{new_id}」")
+        warn = f"⚠第{idx}章曾写成「{new_id}」（穿帮，已按原籍纠正）"
+        if warn not in old.get("note", ""):
+            old["note"] = (old.get("note", "") + "；" + warn).strip("；")
+    return conflicts
+
+
+# 金额 / 数量 / 期限（阿拉伯与中文数字）
+NUM_PAT = re.compile(
+    r"[一二三四五六七八九十半\d]+\s*个?(?:月|周|天|日|年|小时|时辰)|"
+    r"[\d一二三四五六七八九十百千万]+(?:\.\d+)?\s*(?:万|亿|千|百|块|元|两|枚|条|名|个)")
+
+
+def extract_key_numbers(text):
+    """从文本抽取金额/期限/数量台账项（去重保序）。"""
+    seen, out = set(), []
+    for m in NUM_PAT.finditer(text or ""):
+        v = re.sub(r"\s+", "", m.group(0))
+        if v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+def merge_facts(registry, text, idx, cap=40):
+    """把本章出现的金额/期限并入数字台账（首见即锁定，cap 防爆）。"""
+    registry.setdefault("facts", [])
+    known = {f["value"] for f in registry["facts"]}
+    for v in extract_key_numbers(text):
+        if v not in known:
+            registry["facts"].append({"value": v, "first_seen": idx})
+            known.add(v)
+        if len(registry["facts"]) >= cap:
+            break
+
+
+def emotion_fix_prompt(full_text, registry):
+    """零爽点章的情绪强化定点修：只加外部可见爽点，其余一律不许动。"""
+    lock = registry_block(registry)
+    nums = facts_block(registry)
+    reg_section = f"【配角户籍表】\n{lock}\n" if lock else ""
+    num_section = f"【数字台账】\n{nums}\n" if nums else ""
+    return f"""下面这章小说情节完整，但全程压抑、没有任何外显爽点，移动端读者会弃书。
+请输出强化后的全章正文，要求：
+- 主线情节、人物姓名、数字设定一律不变；
+- 选章内一个冲突场景，补一处「外部可见」的爽点：对手当众吃瘪的反应 / 关键物件入手的触感细节 / 真相反转时在众人的震惊，三选一；
+- 禁止只写主角内心感受充当爽点；
+- 保持原有字数规模（±20% 内），不要另起新情节。
+{reg_section}{num_section}
+【原章正文】
+{full_text}
+
+只输出强化后的全章正文："""
+
+
 def scene_prompt(scene_no, total_scenes, stage, goal, beats, prev_text, genre_hint="玄幻",
-                 state="", protagonist="", world="", hook="", is_opening=False):
+                 state="", protagonist="", world="", hook="", is_opening=False,
+                 registry="", facts=""):
     """单场景生成。state 为跨章状态清单（人物伤势/修为/物品/承诺）。
     genre_hint 为题材（见 GENRE_SPECS）；protagonist/world 为本书已确立的主角名与世界观，
     必须显式注入——缺这两项时写手会自己另起一个故事。
@@ -226,9 +364,14 @@ def scene_prompt(scene_no, total_scenes, stage, goal, beats, prev_text, genre_hi
     if world:
         s += f"本书世界观（必须沿用，不得改写或另起设定）：{world}\n"
     if protagonist:
-        s += f"本章主角：{protagonist}。全章只用这个名字，禁止改名、别名或新增有名字的角色。\n"
+        s += f"本章主角：{protagonist}。全章只用这个名字，禁止改名、别名。\n"
         s += (f"【主角名片】场景中首次出现主角时必须自然带出名字（对话称呼/名牌/他人介绍/身份描写均可），"
               f"让读者在前 300 字内记住「{protagonist}」这个名字及其处境；禁止长时间用「他/她」指代。\n")
+    if registry:
+        s += (f"【配角户籍表】已登场角色的身份/职业/立场固定如下，禁止给表中姓名安排不同身份；"
+              f"剧情需要的新角色可以登场，但同一姓名在本场景只能对应一个身份：\n{registry}\n")
+    if facts:
+        s += f"【数字台账·硬约束】{facts}\n"
     if is_opening:
         s += f"【开场变故·硬约束】这是全书第 1 章第 1 场景：前 300 字内必须发生「{spec['opening']}」，事件先行，禁止慢热铺陈环境。\n"
     s += f"这是本章第 {scene_no}/{total_scenes} 个场景（{stage}）。本场景任务：{goal}。\n"
@@ -804,10 +947,11 @@ def quality_check(chapters):
 # 状态持久化
 # ============================================================
 def load_state(path, min_words=800):
-    """加载进度；字数不足 min_words 的章节会被视为未完成，从 existing_idx 中排除以便重做。"""
+    """加载进度；字数不足 min_words 的章节会被视为未完成，从 existing_idx 中排除以便重做。
+    同时加载最新的配角户籍表/数字台账（type=registry，取最后一条）。"""
     if not os.path.exists(path):
-        return {"outline": None, "chapters": []}
-    out = {"outline": None, "chapters": []}
+        return {"outline": None, "chapters": [], "registry": None}
+    out = {"outline": None, "chapters": [], "registry": None}
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -819,6 +963,8 @@ def load_state(path, min_words=800):
                 continue
             if rec.get("type") == "outline":
                 out["outline"] = rec["data"]
+            elif rec.get("type") == "registry":
+                out["registry"] = rec["data"]  # 后写覆盖，取最新
             elif rec.get("type") == "chapter":
                 ch = rec["data"]
                 # 标记过短章节为需要重做
@@ -916,10 +1062,15 @@ def main():
     protagonist = _p.get("name", "") if isinstance(_p, dict) else ""
     _w = outline.get("world") or {}
     world_str = _w if isinstance(_w, str) else json.dumps(_w, ensure_ascii=False)
-    last_summary = ""
-    if state["chapters"]:
-        last_content = state["chapters"][-1].get("content", "")
-        last_summary = last_content[-200:] if len(last_content) > 200 else last_content
+    # 配角户籍表 + 数字台账：随进度文件持久化，跨章/跨次运行强一致；主角自动登记
+    registry = state.get("registry") or {"characters": [], "facts": []}
+    registry.setdefault("characters", [])
+    registry.setdefault("facts", [])
+    if protagonist and not any(c["name"] == protagonist for c in registry["characters"]):
+        _pdesc = _p.get("desc", "") if isinstance(_p, dict) else ""
+        registry["characters"].insert(0, {"name": protagonist,
+                                          "identity": _pdesc or "主角",
+                                          "first_seen": 1, "note": "主角（规划官设定）"})
 
     for ch in chars:
         idx = ch["idx"]
@@ -934,6 +1085,15 @@ def main():
         chapter_title = ch.get("title", f"第{idx}章")
         goal = ch.get("goal", "")
         target = ch.get("target", 2000)
+        # 承接前一章（按章号取，而非生成顺序——补写中间章时绝不能拿最后一章的尾巴，
+        # 历史事故：重写的第 2 章开场接了第 3 章结尾的飞刀，时间线穿越）
+        prev_done = sorted((c for c in state["chapters"] if c["idx"] < idx),
+                           key=lambda c: c["idx"])
+        if prev_done:
+            _pc = prev_done[-1].get("content", "")
+            last_summary = _pc[-200:] if len(_pc) > 200 else _pc
+        else:
+            last_summary = ""
         print(f"\n{'=' * 60}")
         print(f"[CH {idx}] {chapter_title}（目标 {target} 字）")
         print(f"  章纲：{goal}")
@@ -944,7 +1104,11 @@ def main():
         for attempt in range(2):
             scene_plan_raw = call_llm(base_url_raw, args.model,
                                      "你擅长长篇小说结构，能把章纲拆成有序场景组合。",
-                                     scene_planning_prompt(goal, last_summary, genre=args.genre),
+                                     scene_planning_prompt(goal, last_summary, genre=args.genre,
+                                                           protagonist=protagonist,
+                                                           world_hint=world_str,
+                                                           registry=registry_block(registry),
+                                                           facts=facts_block(registry)),
                                      api_key, 1200, 0.7)
             plan = parse_json_from_llm(scene_plan_raw)
             if plan and plan.get("scenes"):
@@ -968,7 +1132,9 @@ def main():
             text = call_llm(base_url_raw, args.model, SYSTEM_PROMPT,
                             scene_prompt(si + 1, len(scenes), stage, goal_s,
                                          beats, prev_text, args.genre, protagonist=protagonist, world=world_str,
-                                         hook=hook_for(idx) if si + 1 == len(scenes) else ""),
+                                         hook=hook_for(idx) if si + 1 == len(scenes) else "",
+                                         registry=registry_block(registry),
+                                         facts=facts_block(registry)),
                             api_key, int(tw * 1.8), args.temperature)
             text = text.strip()
             w = count_words(text)
@@ -996,6 +1162,27 @@ def main():
                 full_text += "\n\n" + add.strip()
                 w = count_words(full_text)
                 print(f"    续写后 {w} 字")
+        # 情绪闸门：零爽点章触发一轮情绪强化定点修（验收通过才采纳，绝不劣化原文）
+        _thrill = thrill_per_thousand(full_text)
+        _surge = surge_per_thousand(full_text)
+        if w >= target * 0.5 and _thrill < 0.5 and _surge < 1.0:
+            print("  [情绪] 本章无外显爽点，触发一轮情绪强化定点修...")
+            fix = call_llm(base_url_raw, args.model, SYSTEM_PROMPT,
+                           emotion_fix_prompt(full_text, registry),
+                           api_key, int(w * 2.2), args.temperature).strip()
+            if fix:
+                _fw = count_words(fix)
+                _names_ok = all(c["name"] in fix for c in registry.get("characters", [])
+                                if c.get("name") and c["name"] in full_text)
+                _ft = thrill_per_thousand(fix)
+                _fs = surge_per_thousand(fix)
+                if 0.7 * w <= _fw <= 1.6 * w and _names_ok and (_ft > _thrill or _fs > _surge):
+                    print(f"    [情绪] 采纳强化稿：爽点 {_thrill}→{_ft}/千字｜"
+                          f"异动 {_surge}→{_fs}/千字｜{_fw} 字")
+                    full_text, w = fix, _fw
+                else:
+                    print(f"    [情绪] 强化稿未过验收（{_fw} 字｜户籍完整={_names_ok}｜"
+                          f"爽点 {_ft}｜异动 {_fs}），保原文")
         chapter_content = {
             "idx": idx,
             "title": chapter_title,
@@ -1006,12 +1193,27 @@ def main():
         state["chapters"].append(chapter_content)
         append_state(args.output, "chapter", chapter_content)
         total_words += w
-        last_summary = full_text[-200:] if len(full_text) > 200 else full_text
+        # 户籍登记：LLM 提取本章新登场/身份变动角色（首见锁定，穿帮记警示）+ 数字台账合并
+        merge_facts(registry, full_text, idx)
+        _ext_raw = call_llm(base_url_raw, args.model,
+                            "你是小说设定整理员，只输出 JSON。",
+                            extract_registry_prompt(full_text, idx, registry),
+                            api_key, 1200, 0.3)
+        _ext = parse_json_from_llm(_ext_raw)
+        if _ext:
+            for _cf in merge_registry(registry, _ext, idx):
+                print(f"  [户籍] ⚠ 穿帮警示：{_cf}")
+        append_state(args.output, "registry", registry)
         print(f"  [完成] 第 {idx} 章：{w} 字 | 累计 {total_words} 字")
         if args.chapter_wait > 0 and idx < args.max_chapters and total_words < args.total_words:
             time.sleep(args.chapter_wait)
 
     # ====== 第三步：质检汇总 ======
+    # 断点续传/补章可能乱序或重复：按章号去重（保留最新记录）并排序，质检与导出同口径
+    _dedup = {}
+    for _c in state["chapters"]:
+        _dedup[_c["idx"]] = _c
+    state["chapters"] = [_dedup[k] for k in sorted(_dedup)]
     print(f"\n{'=' * 60}")
     print("[质检] 运行一致性检查...")
     quality_check(state["chapters"])  # 副作用：填充各章 _world_conflicts 等质检字段
@@ -1038,6 +1240,15 @@ def main():
         elif ch.get("idx", 99) > 0 and ch.get("_thrill_per_k", 1) < 0.5:
             print("      → 含蓄变强流（外显爽点偏少，建议补充打脸/收获等外显爽点增强追读）")
     print(f"\n  世界观冲突：{total_issues} 处")
+    _chars = registry.get("characters", [])
+    _facts = registry.get("facts", [])
+    if _chars:
+        print(f"  户籍表：{len(_chars)} 名角色已登记（首见锁定）")
+        for _c in _chars:
+            _note = f"｜{_c['note']}" if _c.get("note") else ""
+            print(f"    - {_c['name']}｜{_c.get('identity', '')}｜第 {_c.get('first_seen', '?')} 章{_note}")
+    if _facts:
+        print(f"  数字台账：{'、'.join(f['value'] for f in _facts)}")
 
     # ====== 第四步：导出 ======
     txt_path = export_txt(args.output, title, state["chapters"])
