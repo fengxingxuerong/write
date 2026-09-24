@@ -56,6 +56,7 @@ class EditorPage extends ConsumerStatefulWidget {
 
 class _EditorPageState extends ConsumerState<EditorPage>
     with
+        WidgetsBindingObserver,
         AutosaveMixin,
         EditorSearchMixin<EditorPage>,
         EditorPomodoroMixin<EditorPage>,
@@ -172,6 +173,7 @@ class _EditorPageState extends ConsumerState<EditorPage>
         setState(() => _saved = false);
         AppToast.error(context, '保存失败：$e');
       }
+      rethrow;
     }
   }
 

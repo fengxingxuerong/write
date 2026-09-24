@@ -15,17 +15,20 @@ class _AutosaveTestHost extends StatefulWidget {
   const _AutosaveTestHost({
     required this.onSave,
     this.throwOnSave = false,
+    this.failFirstSaves = 0,
   });
   final Future<void> Function(String) onSave;
   final bool throwOnSave;
+  final int failFirstSaves;
   @override
   State<_AutosaveTestHost> createState() => _AutosaveTestHostState();
 }
 
 class _AutosaveTestHostState extends State<_AutosaveTestHost>
-    with AutosaveMixin {
+    with WidgetsBindingObserver, AutosaveMixin {
   int saveCount = 0;
   String? lastSaved;
+  late int _remainingFailures;
 
   @override
   Widget build(BuildContext context) => const SizedBox.shrink();
@@ -33,12 +36,14 @@ class _AutosaveTestHostState extends State<_AutosaveTestHost>
   @override
   void initState() {
     super.initState();
+    _remainingFailures = widget.failFirstSaves;
     initAutosave((content) async {
       saveCount++;
-      lastSaved = content;
-      if (widget.throwOnSave) {
+      if (widget.throwOnSave || _remainingFailures > 0) {
+        if (_remainingFailures > 0) _remainingFailures--;
         throw Exception('保存失败');
       }
+      lastSaved = content;
       await widget.onSave(content);
     });
   }
@@ -173,6 +178,58 @@ void main() {
       // 直接 flushNow，没有 pending 内容
       await state.testFlushNow();
       expect(saveCount, 0);
+    });
+
+    testWidgets('应用进入后台时立即 flush 待保存内容', (tester) async {
+      int saveCount = 0;
+      String? savedContent;
+
+      await tester.pumpWidget(
+        _AutosaveTestHost(
+          onSave: (content) async {
+            saveCount++;
+            savedContent = content;
+          },
+        ),
+      );
+      final state = tester.state<_AutosaveTestHostState>(
+        find.byType(_AutosaveTestHost),
+      );
+      state.testScheduleSave('后台也要保存');
+      expect(saveCount, 0);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+
+      expect(saveCount, 1);
+      expect(savedContent, '后台也要保存');
+    });
+
+    testWidgets('保存失败后保留 pending，下一次 flush 可重试', (tester) async {
+      int saveCount = 0;
+      String? savedContent;
+
+      await tester.pumpWidget(
+        _AutosaveTestHost(
+          failFirstSaves: 1,
+          onSave: (content) async {
+            saveCount++;
+            savedContent = content;
+          },
+        ),
+      );
+
+      final state = tester.state<_AutosaveTestHostState>(
+        find.byType(_AutosaveTestHost),
+      );
+      state.testScheduleSave('失败后可重试');
+      await state.testFlushNow();
+      expect(saveCount, 0);
+      expect(savedContent, isNull);
+
+      await state.testFlushNow();
+      expect(saveCount, 1);
+      expect(savedContent, '失败后可重试');
     });
   });
 
