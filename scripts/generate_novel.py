@@ -415,7 +415,8 @@ def is_reasoning_model(model):
     return "sensenova" in m or "deepseek" in m
 
 
-def call_llm(base_url, model, system, user, api_key, max_tokens, temperature=0.8, retries=3, extra_wait=0):
+def call_llm(base_url, model, system, user, api_key, max_tokens, temperature=0.8,
+             retries=3, extra_wait=0, timeout=300):
     """流式调用 OpenAI 兼容 LLM。retries 含 4 次指数退避，额外支持 reasoning 模型 throatle。"""
     payload = {
         "model": model,
@@ -442,7 +443,7 @@ def call_llm(base_url, model, system, user, api_key, max_tokens, temperature=0.8
             req.add_header("Accept", "text/event-stream")
             if api_key:
                 req.add_header("Authorization", f"Bearer {api_key}")
-            with urllib.request.urlopen(req, timeout=300) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 chunks = []
                 for raw_line in resp:
                     line = raw_line.decode("utf-8").strip()
@@ -1249,7 +1250,8 @@ def main():
                     print('  [质量] 本章低于可投稿门槛，触发一轮定点修复...')
                     candidate = call_llm(
                         base_url_raw, args.model, SYSTEM_PROMPT, repair_prompt,
-                        api_key, int(w * 2.2), args.temperature).strip()
+                        api_key, int(w * 2.2), args.temperature,
+                        retries=1, timeout=90)
                     if candidate:
                         after_review = review_chapter(
                             candidate, last_summary, idx, args.genre, protagonist,
