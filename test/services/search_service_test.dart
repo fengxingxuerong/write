@@ -67,8 +67,8 @@ void main() {
 
       final List<SearchHit> hits = service.search(novel, '火');
 
-      expect(hits.map((SearchHit h) => h.chapter.order).toList(), <int>[0, 1, 2]);
-      expect(hits.first.chapter.title, '第一章');
+      expect(hits.map((SearchHit h) => h.chapter!.order).toList(), <int>[0, 1, 2]);
+      expect(hits.first.chapter!.title, '第一章');
     });
 
     test('同一章多次出现只取首个命中，且偏移为首次出现位置', () {
@@ -120,7 +120,7 @@ void main() {
       expect(hit.snippet, isNot(contains('\n')));
     });
 
-    test('仅检索正文：关键词只出现在大纲时不产生命中', () {
+    test('章节大纲参与检索并返回大纲来源', () {
       final Novel novel = novelWith(<Chapter>[
         chapter(
           id: 'c1',
@@ -130,15 +130,64 @@ void main() {
         ),
       ]);
 
-      expect(service.search(novel, '神器'), isEmpty);
+      final List<SearchHit> hits = service.search(novel, '神器');
+      expect(hits, hasLength(1));
+      expect(hits.single.scope, SearchScope.chapterOutline);
+      expect(hits.single.chapter?.id, 'c1');
     });
 
-    test('章节标题不参与检索（只查正文）', () {
+    test('章节标题参与检索并返回标题来源', () {
       final Novel novel = novelWith(<Chapter>[
         chapter(id: 'c1', order: 0, title: '神器现世', content: '正文无关内容。'),
       ]);
 
-      expect(service.search(novel, '神器'), isEmpty);
+      final List<SearchHit> hits = service.search(novel, '神器');
+      expect(hits, hasLength(1));
+      expect(hits.single.scope, SearchScope.chapterTitle);
+      expect(hits.single.chapter?.id, 'c1');
+    });
+
+    test('角色与世界观参与检索', () {
+      final Novel novel = Novel(
+        id: 'n1',
+        title: '测试书',
+        genre: 'kehuan',
+        tone: '冷峻',
+        targetWordsPerChapter: 2000,
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 1),
+        chapters: const <Chapter>[],
+        characters: const <Character>[
+          Character(
+            id: 'char-1',
+            novelId: 'n1',
+            name: '林舟',
+            role: '主角',
+            traits: '冷静',
+            background: '来自玄天大陆',
+            relationships: '与沈星同行',
+          ),
+        ],
+        worldSettings: const <WorldSetting>[
+          WorldSetting(
+            id: 'world-1',
+            novelId: 'n1',
+            title: '玄天大陆',
+            category: '地理',
+            content: '大陆中央有一座星门。',
+          ),
+        ],
+      );
+
+      final List<SearchHit> characterHits = service.search(novel, '沈星');
+      expect(characterHits.single.scope, SearchScope.character);
+      expect(characterHits.single.sourceId, 'char-1');
+      expect(characterHits.single.chapter, isNull);
+
+      final List<SearchHit> worldHits = service.search(novel, '星门');
+      expect(worldHits.single.scope, SearchScope.worldSetting);
+      expect(worldHits.single.sourceId, 'world-1');
+      expect(worldHits.single.chapter, isNull);
     });
   });
 }

@@ -6,7 +6,7 @@ import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/services/search_service.dart';
 
-/// 全文搜索弹窗：输入关键词，实时列出命中章节与上下文片段。
+  /// 全文搜索弹窗：输入关键词，实时列出正文、标题、大纲、角色和世界观命中。
 class SearchDialog extends StatefulWidget {
   /// 构造搜索弹窗。
   const SearchDialog({super.key, required this.novel, required this.onSelect});
@@ -14,8 +14,8 @@ class SearchDialog extends StatefulWidget {
   /// 目标项目。
   final Novel novel;
 
-  /// 点击命中时回调（跳转到对应章节）。
-  final void Function(String chapterId, int offset) onSelect;
+  /// 点击命中时回调。
+  final void Function(SearchHit hit) onSelect;
 
   @override
   State<SearchDialog> createState() => _SearchDialogState();
@@ -65,7 +65,7 @@ class _SearchDialogState extends State<SearchDialog> {
               controller: _controller,
               autofocus: true,
               decoration: InputDecoration(
-                hintText: '搜索章节内容…',
+                hintText: '搜索正文、标题、大纲、角色、世界观…',
                 prefixIcon: const Icon(Icons.search),
                 border: const OutlineInputBorder(),
                 isDense: true,
@@ -104,7 +104,7 @@ class _SearchDialogState extends State<SearchDialog> {
                           borderRadius: BorderRadius.circular(AppTokens.r2),
                           onTap: () {
                             Navigator.of(context).pop();
-                            widget.onSelect(h.chapter.id, h.index);
+                            widget.onSelect(h);
                           },
                           child: Padding(
                             padding: const EdgeInsets.all(AppTokens.s2),
@@ -119,13 +119,13 @@ class _SearchDialogState extends State<SearchDialog> {
                                     const SizedBox(width: 6),
                                     Expanded(
                                       child: Text(
-                                        h.chapter.title,
+                                        h.sourceTitle,
                                         style: theme.textTheme.titleSmall,
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                     ),
                                     Text(
-                                      '第${h.chapter.order + 1}章',
+                                      h.scopeLabel,
                                       style: theme.textTheme.labelSmall,
                                     ),
                                   ],

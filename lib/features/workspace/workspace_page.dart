@@ -22,6 +22,7 @@ import 'package:novel_writer/features/workspace/volume_outline_dialog.dart';
 import 'package:novel_writer/features/workspace/world_book_dialog.dart';
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/novel.dart';
+import 'package:novel_writer/services/search_service.dart';
 import 'package:novel_writer/widgets/app_card.dart';
 import 'package:novel_writer/widgets/app_feedback.dart';
 import 'package:novel_writer/widgets/common.dart';
@@ -342,8 +343,14 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
                 context: context,
                 builder: (BuildContext ctx) => SearchDialog(
                   novel: novel,
-                  onSelect: (String chapterId, int offset) =>
-                      setState(() => _selectedChapterId = chapterId),
+                  onSelect: (SearchHit hit) {
+                    final Chapter? chapter = hit.chapter;
+                    if (chapter != null) {
+                      setState(() => _selectedChapterId = chapter.id);
+                    } else {
+                      WorldBookDialog.show(context, novel);
+                    }
+                  },
                 ),
               ),
               onToggleFocus: _toggleFocus,
