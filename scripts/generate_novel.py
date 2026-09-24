@@ -42,6 +42,14 @@ for _stream in (sys.stdout, sys.stderr):
 # 写作准则已迁到 fanqie_prompts.py：每一条都能被 fanqie_review.py 量化检查，
 # 避免旧版「准则教套路、质检数词表」的自相矛盾。
 from fanqie_prompts import FANQIE_SYSTEM_PROMPT as SYSTEM_PROMPT  # noqa: E402
+from fanqie_review import (  # noqa: E402
+    dialogue_ratio,
+    filler_ratio,
+    fix_prompt,
+    pacing_stats,
+    review_chapter,
+    self_repeat_ratio,
+)
 
 
 from fanqie_prompts import GOLDEN3_SPEC as _GOLDEN3, GOAL_FORMAT as _GOAL_FORMAT  # noqa: E402
@@ -943,6 +951,43 @@ def quality_check(chapters):
     return report
 
 
+def _quality_repair_prompt(text, review, registry, genre, protagonist, prev_text):
+    """组装质量修复指令；只针对检测到的问题，不重写无关段落。"""
+    lock = registry_block(registry)
+    facts = facts_block(registry)
+    return fix_prompt(review, text) + (
+        f"\n【本题材】{genre}\n【主角】{protagonist}\n"
+        f"【上一章尾部】{prev_text[-200:] if prev_text else '无'}\n"
+        f"【角色户籍】{lock}\n【数字台账】{facts}\n"
+        "【修复硬约束】保留主线、人物身份、数字、章末钩子；"
+        "优先把叙述信息改成有压力的对白或动作；每句尽量不超过 25 字；"
+        "删除不推进剧情的段落；不得用环境、回忆或同义反复凑字数。"
+    )
+
+
+def _quality_repair_candidate(before, after, before_review, after_review, target_words):
+    """只接受不劣化且字数稳定的质量修复稿。"""
+    before_words = count_words(before)
+    after_words = count_words(after)
+    # 允许适度扩写：补对白、拆长句、删水段可能让正文增加 30%~50%；
+    # 超过 60%~150% 才视为模型失控，原稿必须保留。
+    if after_words < before_words * 0.6 or after_words > before_words * 1.5:
+        return False, '字数偏离原章超过允许范围'
+    if after_words < max(500, int(target_words * 0.5)):
+        return False, '修复后字数不足'
+    if after_review.get('score', 0) < before_review.get('score', 0):
+        return False, '质量分下降'
+    if len(after_review.get('blockers') or []) > len(before_review.get('blockers') or []):
+        return False, '阻断项增加'
+    if dialogue_ratio(after) < min(0.25, dialogue_ratio(before)):
+        return False, '对白占比没有改善'
+    if filler_ratio(after)[0] > filler_ratio(before)[0] + 2:
+        return False, '水段率恶化'
+    if self_repeat_ratio(after) > self_repeat_ratio(before) + 1:
+        return False, '整句重复恶化'
+    return True, '质量分/对白/水段/重复均未劣化'
+
+
 # ============================================================
 # 状态持久化
 # ============================================================
@@ -1007,6 +1052,8 @@ def main():
     p.add_argument("--output", default="novel_output.jsonl", help="进度文件路径")
     p.add_argument("--temperature", type=float, default=0.8)
     p.add_argument("--chapter-wait", type=float, default=2.0, help="每章之间的等待时间（秒），避免触发限流")
+    p.add_argument("--skip-quality-repair", action="store_true",
+                   help="跳过章节质量自动修复轮（调试/节省额度时使用）")
     p.add_argument("--dry-run", action="store_true", help="只打印大纲不生成正文")
     args = p.parse_args()
 
@@ -1183,6 +1230,45 @@ def main():
                 else:
                     print(f"    [情绪] 强化稿未过验收（{_fw} 字｜户籍完整={_names_ok}｜"
                           f"爽点 {_ft}｜异动 {_fs}），保原文")
+        # 质量修复轮：先评审，再把问题交给编辑模型；修复稿不劣化才采纳。
+        if not args.skip_quality_repair and w >= max(500, int(target * 0.5)):
+            before_review = review_chapter(
+                full_text, last_summary, idx, args.genre, protagonist,
+                has_hook=has_ending_hook(full_text))
+            needs_repair = (
+                before_review.get('score', 0) < 78 or
+                dialogue_ratio(full_text) < 0.25 or
+                filler_ratio(full_text)[0] > 10 or
+                self_repeat_ratio(full_text) > 2 or
+                not has_ending_hook(full_text))
+            if needs_repair:
+                repair_prompt = _quality_repair_prompt(
+                    full_text, before_review, registry, args.genre,
+                    protagonist, last_summary)
+                if repair_prompt:
+                    print('  [质量] 本章低于可投稿门槛，触发一轮定点修复...')
+                    candidate = call_llm(
+                        base_url_raw, args.model, SYSTEM_PROMPT, repair_prompt,
+                        api_key, int(w * 2.2), args.temperature).strip()
+                    if candidate:
+                        after_review = review_chapter(
+                            candidate, last_summary, idx, args.genre, protagonist,
+                            has_hook=has_ending_hook(candidate))
+                        accepted, reason = _quality_repair_candidate(
+                            full_text, candidate, before_review, after_review,
+                            target)
+                        if accepted:
+                            print('  [质量] 采纳修复稿：'
+                                  f"{before_review.get('score', 0):.0f}→"
+                                  f"{after_review.get('score', 0):.0f} 分｜"
+                                  f"对白 {dialogue_ratio(full_text):.1%}→"
+                                  f"{dialogue_ratio(candidate):.1%}")
+                            full_text, w = candidate, count_words(candidate)
+                        else:
+                            print(f'  [质量] 修复稿拒绝：{reason}，保留原稿')
+                    else:
+                        print('  [质量] 修复模型无有效输出，保留原稿')
+
         chapter_content = {
             "idx": idx,
             "title": chapter_title,
