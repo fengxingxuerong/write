@@ -137,6 +137,19 @@ void main() {
     expect(cfg.readAsStringSync(), contains('https://s.example.com/crash'));
   });
 
+    testWidgets('拒绝保存非 HTTPS 上报 URL', (tester) async {
+      await tester.pumpWidget(wrap(CrashLogsDialog(crashDir: crashDir, supportDir: supportDir)));
+      await tester.pump();
+      await tester.tap(find.text('上报设置'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'http://s.example.com/crash');
+      await tester.tap(find.text('保存'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('必须是有效的 HTTPS URL'), findsOneWidget);
+      expect(File('${supportDir.path}/crash_report_config.json').existsSync(), isFalse);
+    });
+
+
   testWidgets('未配置上报时点「上报」提示先配置 URL', (tester) async {
     seedLog('crash-1.log', 'some crash content');
     await tester.pumpWidget(wrap(CrashLogsDialog(crashDir: crashDir, supportDir: supportDir)));

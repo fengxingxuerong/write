@@ -42,25 +42,45 @@ class LlmConfig {
     this.temperature = 0.8,
   });
 
-  /// 是否已配置可用（模型非空；OpenAI 兼容需 API Key + Base URL，
-  /// 但本地地址（localhost/127.0.0.1）免 Key——如 QClaw 内置 llama-server）。
+  /// 是否已配置可用（模型非空；端点必须符合安全策略）。
   bool get isConfigured {
     if (model.trim().isEmpty) return false;
+    if (!isEndpointAllowed(baseUrl)) return false;
     if (provider == LlmProvider.openaiCompatible) {
-      if (baseUrl.trim().isEmpty) return false;
       if (_isLocalUrl(baseUrl)) return true; // 本地服务免 Key
       return apiKey.trim().isNotEmpty;
     }
-    return baseUrl.trim().isNotEmpty;
+    return true;
   }
 
-  /// 是否本地地址（llama-server / Ollama 等本机服务）。
+  /// 端点安全策略：仅允许 http/https；远程地址必须使用 HTTPS；
+  /// 拒绝 URL 内嵌账号密码、查询参数和片段。
+  static bool isEndpointAllowed(String raw) {
+    final Uri? uri = Uri.tryParse(raw.trim());
+    if (uri == null || uri.host.isEmpty) return false;
+    final String scheme = uri.scheme.toLowerCase();
+    if (scheme != 'http' && scheme != 'https') return false;
+    if (uri.userInfo.isNotEmpty || uri.hasQuery || uri.hasFragment) return false;
+    if (scheme == 'https') return true;
+    return _isLocalUrl(raw);
+  }
+
+  /// 是否本地回环地址（严格按 URI.host 判断，避免 localhost.evil 绕过）。
   static bool _isLocalUrl(String url) {
-    final String u = url.trim().toLowerCase();
-    return u.startsWith('http://localhost') ||
-        u.startsWith('http://127.0.0.1') ||
-        u.startsWith('http://0.0.0.0') ||
-        u.startsWith('http://[::1]');
+    final Uri? uri = Uri.tryParse(url.trim());
+    if (uri == null) return false;
+    final String scheme = uri.scheme.toLowerCase();
+    if (scheme != 'http' && scheme != 'https') return false;
+    final String host = uri.host.toLowerCase();
+    if (host == 'localhost' || host == '::1' || host == '[::1]') return true;
+    final List<String> parts = host.split('.');
+    return parts.length == 4 &&
+        parts[0].isNotEmpty &&
+        int.tryParse(parts[0]) == 127 &&
+        parts.every((String part) {
+          final int? value = int.tryParse(part);
+          return value != null && value >= 0 && value <= 255;
+        });
   }
 
   /// 是否本地服务配置（用于 UI 提示免 Key）。

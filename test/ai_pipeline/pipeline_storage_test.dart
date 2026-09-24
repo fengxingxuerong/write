@@ -87,6 +87,19 @@ void main() {
       expect(await storage.listTasks(), isEmpty);
     });
 
+    test('不同存储实例并发保存不丢索引', () async {
+      final PipelineStorage other = PipelineStorage(tempDir.path);
+      await Future.wait(<Future<void>>[
+        for (int i = 0; i < 30; i++)
+          (i.isEven ? storage : other)
+              .saveTask(task('concurrent-$i', DateTime(2026, 9, i + 1))),
+      ]);
+
+      final List<AiPipelineTask> all = await storage.listTasks();
+      expect(all.length, 30);
+      expect(all.map((AiPipelineTask t) => t.id).toSet().length, 30);
+    });
+
     test('删除任务：文件与索引记录一并移除', () async {
       await storage.saveTask(task('a', DateTime(2026, 9, 1)));
       await storage.saveTask(task('b', DateTime(2026, 9, 2)));

@@ -398,6 +398,43 @@ class AppDatabase {
   /// 判断项目文件是否存在。
   Future<bool> exists(String id) => novelFile(id).exists();
 
+  /// 清除应用本地数据（项目、流水线、设置、快照、目标与诊断配置）。
+  ///
+  /// 不会删除整个应用支持目录，避免误伤宿主应用或用户手动放入的文件；
+  /// 只清理墨匠明确拥有的目录与文件。执行期间建议先停止生成/编辑任务。
+  Future<void> clearAllData() async {
+    final Directory supportDir = directory.parent;
+    final List<Object> failures = <Object>[];
+    Future<void> deleteEntity(FileSystemEntity entity) async {
+      try {
+        if (await entity.exists()) {
+          await entity.delete(recursive: true);
+        }
+      } catch (error) {
+        failures.add(error);
+      }
+    }
+
+    await deleteEntity(File('${supportDir.path}${Platform.pathSeparator}machine_id'));
+    await deleteEntity(
+      File('${supportDir.path}${Platform.pathSeparator}crash_report_config.json'),
+    );
+    await deleteEntity(
+      Directory('${supportDir.path}${Platform.pathSeparator}crash_logs'),
+    );
+    if (await directory.exists()) {
+      await deleteEntity(directory);
+    }
+    try {
+      await directory.create(recursive: true);
+    } catch (error) {
+      failures.add(error);
+    }
+    if (failures.isNotEmpty) {
+      throw StorageException('部分本地数据清除失败', failures.first);
+    }
+  }
+
   /// 整本小说序列化：体量大时下沉后台 isolate，避免主线程掉帧。
   ///
   /// 数百章 × 2 万字的整本 `jsonEncode` 输入可达数 MB，纯主 isolate 编码

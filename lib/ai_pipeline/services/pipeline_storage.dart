@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -14,6 +15,35 @@ class PipelineStorage {
 
   /// 存储目录（`applicationSupportDirectory/ai_pipeline`）。
   final String directory;
+
+  /// 同一目录的串行写队列键（不同 PipelineStorage 实例也共享）。
+  String get _queueKey => directory.replaceAll('\\', '/').toLowerCase();
+
+  /// 同一目录下所有存储实例共用的 FIFO 队列。
+  static final Map<String, Future<void>> _queues = <String, Future<void>>{};
+
+  /// 在目录级 FIFO 队列中执行操作。
+  Future<T> _exclusive<T>(Future<T> Function() action) async {
+    final String key = _queueKey;
+    final Future<void>? previous = _queues[key];
+    final Completer<void> current = Completer<void>();
+    _queues[key] = current.future;
+    try {
+      if (previous != null) {
+        try {
+          await previous;
+        } catch (_) {
+          // 前一个写操作失败不应阻塞后续操作。
+        }
+      }
+      return await action();
+    } finally {
+      if (identical(_queues[key], current.future)) {
+        _queues.remove(key);
+      }
+      current.complete();
+    }
+  }
 
   /// 任务文件。
   File taskFile(String id) => File('$directory/$id.json');
@@ -32,8 +62,11 @@ class PipelineStorage {
     }
   }
 
-  /// 保存任务（原子写）。
-  Future<void> saveTask(AiPipelineTask task) async {
+  /// 保存任务（原子写，目录级串行）。
+  Future<void> saveTask(AiPipelineTask task) =>
+      _exclusive(() => _saveTaskUnlocked(task));
+
+  Future<void> _saveTaskUnlocked(AiPipelineTask task) async {
     await ensureDir();
     final File file = taskFile(task.id);
     final File tmp = File('${file.path}.tmp');
@@ -50,8 +83,11 @@ class PipelineStorage {
     }
   }
 
-  /// 读取任务；不存在返回 null。
-  Future<AiPipelineTask?> loadTask(String id) async {
+  /// 读取任务；不存在返回 null（目录级串行）。
+  Future<AiPipelineTask?> loadTask(String id) =>
+      _exclusive(() => _loadTaskUnlocked(id));
+
+  Future<AiPipelineTask?> _loadTaskUnlocked(String id) async {
     final File file = taskFile(id);
     if (!await file.exists()) return null;
     try {
@@ -63,8 +99,11 @@ class PipelineStorage {
     }
   }
 
-  /// 列出全部任务（按创建时间倒序）。
-  Future<List<AiPipelineTask>> listTasks() async {
+  /// 列出全部任务（按创建时间倒序，目录级串行）。
+  Future<List<AiPipelineTask>> listTasks() =>
+      _exclusive(_listTasksUnlocked);
+
+  Future<List<AiPipelineTask>> _listTasksUnlocked() async {
     await ensureDir();
     final File index = indexFile;
     if (!await index.exists()) return <AiPipelineTask>[];
@@ -75,7 +114,7 @@ class PipelineStorage {
       for (final dynamic e in list) {
         final Map<String, dynamic> m = e as Map<String, dynamic>;
         final AiPipelineTask? task =
-            await loadTask(m['id'] as String? ?? '');
+            await _loadTaskUnlocked(m['id'] as String? ?? '');
         if (task != null) tasks.add(task);
       }
       tasks.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -85,8 +124,11 @@ class PipelineStorage {
     }
   }
 
-  /// 保存最近一次任务配置（原子写）。
-  Future<void> saveRecentConfig(AiPipelineConfig config) async {
+  /// 保存最近一次任务配置（原子写，目录级串行）。
+  Future<void> saveRecentConfig(AiPipelineConfig config) =>
+      _exclusive(() => _saveRecentConfigUnlocked(config));
+
+  Future<void> _saveRecentConfigUnlocked(AiPipelineConfig config) async {
     await ensureDir();
     final File file = recentConfigFile;
     final File tmp = File('${file.path}.tmp');
@@ -99,8 +141,11 @@ class PipelineStorage {
     }
   }
 
-  /// 读取最近一次任务配置；无则返回 null。
-  Future<AiPipelineConfig?> loadRecentConfig() async {
+  /// 读取最近一次任务配置；无则返回 null（目录级串行）。
+  Future<AiPipelineConfig?> loadRecentConfig() =>
+      _exclusive(_loadRecentConfigUnlocked);
+
+  Future<AiPipelineConfig?> _loadRecentConfigUnlocked() async {
     final File file = recentConfigFile;
     if (!await file.exists()) return null;
     try {
@@ -112,13 +157,16 @@ class PipelineStorage {
     }
   }
 
-  /// 删除任务（含索引记录）。
-  Future<void> deleteTask(String id) async {
+  /// 删除任务（含索引记录，目录级串行）。
+  Future<void> deleteTask(String id) =>
+      _exclusive(() => _deleteTaskUnlocked(id));
+
+  Future<void> _deleteTaskUnlocked(String id) async {
     final File file = taskFile(id);
     if (await file.exists()) await file.delete().ignore();
     // 重建索引（去掉该任务）。
     try {
-      final List<AiPipelineTask> all = await listTasks();
+      final List<AiPipelineTask> all = await _listTasksUnlocked();
       final List<Map<String, dynamic>> index = all
           .map((AiPipelineTask t) => <String, dynamic>{'id': t.id})
           .toList();

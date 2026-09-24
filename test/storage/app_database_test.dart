@@ -202,6 +202,34 @@ void main() {
     });
   });
 
+  group('clearAllData', () {
+    test('清除项目、流水线、快照、设置和诊断数据', () async {
+      final Directory scopedRoot = Directory('${tempDir.path}/support');
+      final Directory scopedNovels = Directory('${scopedRoot.path}/novels');
+      final AppDatabase scopedDb = AppDatabase.initForTest(scopedNovels.path);
+      await scopedDb.writeNovel(_buildSampleNovel('待清除'));
+      await scopedDb.writeIndex(const <NovelSummary>[]);
+      await File('${scopedNovels.path}/llm_settings.json').writeAsString('{}');
+      await File('${scopedNovels.path}/goal.json').writeAsString('{}');
+      await File('${scopedRoot.path}/machine_id').writeAsString('machine');
+      final Directory pipelineDir = Directory('${scopedNovels.path}/ai_pipeline');
+      await pipelineDir.create(recursive: true);
+      await File('${pipelineDir.path}/task.json').writeAsString('{}');
+      final Directory snapshotsDir = Directory('${scopedNovels.path}/snapshots');
+      await snapshotsDir.create(recursive: true);
+
+      await scopedDb.clearAllData();
+
+      expect(scopedNovels.existsSync(), isTrue);
+      expect(File('${scopedNovels.path}/llm_settings.json').existsSync(), isFalse);
+      expect(File('${scopedNovels.path}/goal.json').existsSync(), isFalse);
+      expect(File('${scopedRoot.path}/machine_id').existsSync(), isFalse);
+      expect(pipelineDir.existsSync(), isFalse);
+      expect(snapshotsDir.existsSync(), isFalse);
+      expect(await scopedDb.readIndex(), isEmpty);
+    });
+  });
+
   group('readIndex 容错', () {
     test('无索引文件时返回空列表', () async {
       final items = await db.readIndex();

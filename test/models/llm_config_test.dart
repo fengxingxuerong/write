@@ -87,6 +87,51 @@ void main() {
       );
       expect(config.isConfigured, isFalse);
     });
+
+    test('远程明文 HTTP 地址未配置', () {
+      const config = LlmConfig(
+        provider: LlmProvider.openaiCompatible,
+        baseUrl: 'http://api.example.com/v1',
+        apiKey: 'sk-xxx',
+      );
+      expect(config.isConfigured, isFalse);
+    });
+
+    test('伪造 localhost 前缀的远程地址未配置', () {
+      const config = LlmConfig(
+        provider: LlmProvider.openaiCompatible,
+        baseUrl: 'http://localhost.evil.example/v1',
+        apiKey: 'sk-xxx',
+      );
+      expect(config.isConfigured, isFalse);
+    });
+
+    test('URL 携带凭据、查询或片段时未配置', () {
+      for (final String url in <String>[
+        'https://user:pass@example.com/v1',
+        'https://example.com/v1?token=x',
+        'https://example.com/v1#fragment',
+      ]) {
+        expect(
+          LlmConfig(
+            provider: LlmProvider.openaiCompatible,
+            baseUrl: url,
+            apiKey: 'sk-xxx',
+          ).isConfigured,
+          isFalse,
+          reason: url,
+        );
+      }
+    });
+
+    test('HTTPS 远程地址有 Key 时已配置', () {
+      const config = LlmConfig(
+        provider: LlmProvider.openaiCompatible,
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'sk-xxx',
+      );
+      expect(config.isConfigured, isTrue);
+    });
   });
 
   group('LlmConfig.isLocal', () {
@@ -100,9 +145,10 @@ void main() {
       expect(config.isLocal, isTrue);
     });
 
-    test('0.0.0.0 为本地', () {
+    test('0.0.0.0 不是可用的回环地址', () {
       const config = LlmConfig(baseUrl: 'http://0.0.0.0:8080');
-      expect(config.isLocal, isTrue);
+      expect(config.isLocal, isFalse);
+      expect(config.isConfigured, isFalse);
     });
 
     test('远程地址非本地', () {

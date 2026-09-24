@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -61,6 +60,12 @@ void main() {
       expect(next.enabled, isTrue);
       expect(config.uploadUrl, isEmpty); // 原对象不变
     });
+
+    test('非 HTTPS 旧配置不会启用上报', () {
+      const CrashReporterConfig config =
+          CrashReporterConfig(uploadUrl: 'http://example.com/crash');
+      expect(config.enabled, isFalse);
+    });
   });
 
   group('配置读写', () {
@@ -102,39 +107,46 @@ void main() {
       );
     });
 
-    test('成功上报到本地服务器（HTTP 200）', () async {
-      // 本地假服务器：接收 POST，返回 200。
+    test('HTTP 地址被拒绝（不发送请求）', () async {
+      // HTTP 不能用于远程诊断，即使目标是本机假服务器。
       final HttpServer server = await HttpServer.bind('127.0.0.1', 0);
       final int port = server.port;
-      final List<Map<String, dynamic>> received = <Map<String, dynamic>>[];
+      bool received = false;
       server.listen((HttpRequest req) async {
-        final String body = await utf8.decoder.bind(req).join();
-        received.add(<String, dynamic>{
-          'path': req.uri.path,
-          'body': jsonDecode(body) as Map<String, dynamic>,
-        });
+        received = true;
         req.response.statusCode = 200;
         await req.response.close();
       });
       addTearDown(() => server.close(force: true));
 
-      File('${crashDir.path}/crash-y.log').writeAsStringSync('boom stack');
-      final bool ok = await uploadCrashLog(
-        crashDir: crashDir,
-        fileName: 'crash-y.log',
-        config: CrashReporterConfig(
-          uploadUrl: 'http://127.0.0.1:$port/api/crash',
+      File('${crashDir.path}/crash-http.log').writeAsStringSync('boom');
+      expect(
+        uploadCrashLog(
+          crashDir: crashDir,
+          fileName: 'crash-http.log',
+          config: CrashReporterConfig(
+            uploadUrl: 'http://127.0.0.1:$port/api/crash',
+          ),
+          machineId: 'machine-123',
         ),
-        machineId: 'machine-123',
+        throwsA(isA<CrashReportException>()),
       );
-      expect(ok, isTrue);
-      expect(received, hasLength(1));
-      expect(received[0]['path'], '/api/crash');
-      final Map<String, dynamic> body = received[0]['body'] as Map<String, dynamic>;
-      expect(body['machineId'], 'machine-123');
-      expect(body['file'], 'crash-y.log');
-      expect(body['content'], contains('boom stack'));
-      expect(body['version'], isNotEmpty);
+      expect(received, isFalse);
+    });
+
+    test('非 HTTPS 协议被拒绝', () {
+      expect(
+        const CrashReporterConfig(
+          uploadUrl: 'file:///tmp/crash',
+        ).enabled,
+        isFalse,
+      );
+      expect(
+        const CrashReporterConfig(
+          uploadUrl: 'https://example.com/crash?token=x',
+        ).enabled,
+        isFalse,
+      );
     });
 
     test('服务器返回 500 抛异常', () async {

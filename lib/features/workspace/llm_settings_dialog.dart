@@ -77,6 +77,13 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
       temperature: _temperature,
       maxTokens: _maxTokens,
     );
+    if (!config.isConfigured) {
+      setState(() {
+        _saving = false;
+        _testResult = '❌ 请填写合法的模型、地址和 API Key；远程地址必须使用 HTTPS';
+      });
+      return;
+    }
     await ref.read(llmSettingsProvider.notifier).updateConfig(config);
     await ref.read(llmSettingsProvider.notifier).setAutoMemory(_autoMemory);
     if (mounted) {

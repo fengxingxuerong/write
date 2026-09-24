@@ -15,8 +15,17 @@ class CrashReporterConfig {
   /// 崩溃上报 URL（空 = 不上报）。
   final String uploadUrl;
 
-  /// 是否已配置上报。
-  bool get enabled => uploadUrl.trim().isNotEmpty;
+  /// 是否已配置合法上报地址（远程诊断只允许 HTTPS）。
+  bool get enabled => isValidUploadUrl(uploadUrl);
+
+  /// 校验上报 URL：只允许 HTTPS、合法主机，且拒绝凭据/查询/片段。
+  static bool isValidUploadUrl(String raw) {
+    final Uri? uri = Uri.tryParse(raw.trim());
+    if (uri == null || uri.host.isEmpty) return false;
+    if (uri.scheme.toLowerCase() != 'https') return false;
+    if (uri.userInfo.isNotEmpty || uri.hasQuery || uri.hasFragment) return false;
+    return true;
+  }
 
   /// 从 JSON 解析（容错：缺字段/坏 JSON 回退空配置）。
   factory CrashReporterConfig.fromJson(Map<String, dynamic>? json) {
@@ -110,8 +119,13 @@ Future<bool> uploadCrashLog({
   required String machineId,
 }) async {
   if (!config.enabled) {
-    throw const CrashReportException('未配置上报 URL');
+    throw CrashReportException(
+      config.uploadUrl.trim().isEmpty
+          ? '未配置上报 URL'
+          : '崩溃上报仅允许 HTTPS URL',
+    );
   }
+  final Uri uploadUri = Uri.parse(config.uploadUrl.trim());
   final File file = File('${crashDir.path}${Platform.pathSeparator}$fileName');
   if (!await file.exists()) {
     throw const CrashReportException('日志文件不存在');
@@ -121,8 +135,9 @@ Future<bool> uploadCrashLog({
       const Duration(seconds: 5);
   try {
     final HttpClientRequest request = await client
-        .postUrl(Uri.parse(config.uploadUrl))
+        .postUrl(uploadUri)
         .timeout(const Duration(seconds: 5));
+    request.followRedirects = false;
     request.headers.contentType = ContentType.json;
     request.headers.set(HttpHeaders.userAgentHeader, 'MojiangInkSmith/0.1');
     request.write(

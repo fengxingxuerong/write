@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/widgets/app_feedback.dart';
 
@@ -56,7 +57,7 @@ class PrivacyPage extends ConsumerWidget {
             icon: Icons.storage_outlined,
             title: '本地数据自主',
             content:
-                '所有项目以单项目 JSON 文件形式保存在您本机的应用支持目录中。您可随时通过资源管理器自行备份、迁移或销毁数据。清除应用缓存将彻底删除所有项目，请提前备份。',
+                '所有项目以单项目 JSON 文件形式保存在您本机的应用支持目录中。您可随时通过资源管理器自行备份、迁移或销毁数据。点击“清除所有本地数据”会删除项目、流水线、快照、设置和诊断数据，请提前备份。',
             color: AppInk.of(context).warn,
           ),
           _principleCard(
@@ -185,9 +186,21 @@ class PrivacyPage extends ConsumerWidget {
         ],
       ),
     );
-      if (ok == true && context.mounted) {
-      // 这里触发数据库全清（简化：仅导航到项目列表由用户手动删除）。
-      AppToast.info(context, '请前往项目列表手动删除各项目。');
+    if (ok == true && context.mounted) {
+      try {
+        await ref.read(appDatabaseProvider).clearAllData();
+        ref.invalidate(projectListViewModelProvider);
+        ref.invalidate(llmSettingsProvider);
+        ref.invalidate(readerSettingsProvider);
+        ref.invalidate(sensitiveWordsProvider);
+        if (context.mounted) {
+          AppToast.success(context, '本地数据已清除');
+        }
+      } catch (e) {
+        if (context.mounted) {
+          AppToast.error(context, '清除失败：$e');
+        }
+      }
     }
   }
 }

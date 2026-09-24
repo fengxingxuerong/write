@@ -67,5 +67,11 @@ void main() {
       expect(find.text('确认清除？'), findsNothing);
       expect(find.text('墨匠隐私守则'), findsOneWidget);
     });
+
+  testWidgets('clear data text describes the destructive scope', (tester) async {
+    await pumpPage(tester);
+    expect(find.textContaining('项目、流水线、快照、设置和诊断数据'), findsOneWidget);
+  });
+
   });
 }

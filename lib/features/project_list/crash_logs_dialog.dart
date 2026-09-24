@@ -160,9 +160,15 @@ class _CrashLogsDialogState extends State<CrashLogsDialog> {
       ),
     );
     if (ok == true) {
-      final CrashReporterConfig next = CrashReporterConfig(
-        uploadUrl: urlCtrl.text.trim(),
-      );
+      final String raw = urlCtrl.text.trim();
+      if (raw.isNotEmpty && !CrashReporterConfig.isValidUploadUrl(raw)) {
+        if (mounted) {
+          AppToast.error(context, '崩溃上报地址必须是有效的 HTTPS URL');
+        }
+        return;
+      }
+      final CrashReporterConfig next =
+          CrashReporterConfig(uploadUrl: raw);
       saveCrashReporterConfigSync(widget.supportDir, next);
       if (mounted) {
         setState(() {

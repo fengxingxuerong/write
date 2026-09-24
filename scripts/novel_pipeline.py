@@ -1392,6 +1392,7 @@ def load_state_track(path):
     """从进度文件恢复跨章状态清单（无则返回空串）。"""
     if not os.path.exists(path):
         return ""
+    latest = ""
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -1402,8 +1403,9 @@ def load_state_track(path):
             except Exception:
                 continue
             if rec.get("type") == "state_track":
-                return rec.get("data", "")
-    return ""
+                # 同名状态记录按最后一条恢复，避免续跑回退到第一章状态。
+                latest = rec.get("data", "")
+    return latest
 
 
 # ============================================================
@@ -1442,6 +1444,7 @@ def load_foreshadow(path):
     """从进度文件恢复伏笔台账（JSON 字符串，无则返回 '[]'）。"""
     if not os.path.exists(path):
         return "[]"
+    latest = "[]"
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -1452,8 +1455,9 @@ def load_foreshadow(path):
             except Exception:
                 continue
             if rec.get("type") == "foreshadow":
-                return rec.get("data", "[]")
-    return "[]"
+                # 伏笔台账按最后一条恢复，避免续跑使用早期未完成台账。
+                latest = rec.get("data", "[]")
+    return latest
 
 
 def save_foreshadow(path, data):

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
@@ -30,9 +31,6 @@ class AiPipelineService {
   /// 角色 → 模型的路由器（链式 failover + 健康池冷却）。
   final LlmRouter _router;
 
-  /// 当前任务（run 期间有效）。
-  AiPipelineTask? _task;
-
   /// 链上是否至少一个端点已配置（主或任一备用）。
   static bool _chainConfigured(AiRoleConfig cfg) =>
       cfg.chain.any((LlmConfig c) => c.isConfigured);
@@ -40,12 +38,12 @@ class AiPipelineService {
   /// 调用某角色模型（链式 failover：冷却跳过/失败/空响应自动切下一个可用端点）。
   /// 链上全部失败返回空串。统一在任务日志里记录 `[角色]` 前缀的路由过程。
   Future<String> _call(
+    AiPipelineTask task,
     AiRole role,
     String system,
     String user, {
     double? temperature,
   }) async {
-    final AiPipelineTask task = _task!;
     final AiRoleConfig cfg = task.config.roleOf(role);
     if (!cfg.enabled) return '';
     if (!_chainConfigured(cfg)) {
@@ -151,12 +149,66 @@ class AiPipelineService {
   /// 运行（或续跑）一个任务，直到完成/取消/失败。
   ///
   /// [isCancelled] 每章节循环节点检查；[onProgress] 每章节完成后回调。
+  /// 同一存储目录下所有服务实例共用的 FIFO 运行队列。
+  static final Map<String, Future<void>> _runTails = <String, Future<void>>{};
+
+  /// 运行任务（外部入口，跨服务实例串行执行）。
   Future<void> run(
     AiPipelineTask task, {
     required bool Function() isCancelled,
     required void Function() onProgress,
+  }) {
+    final String key = _storage.directory.replaceAll('\\', '/').toLowerCase();
+    final Future<void>? previous = _runTails[key];
+    final Completer<void> done = Completer<void>();
+    _runTails[key] = done.future;
+    return () async {
+      try {
+        try {
+          await previous;
+        } catch (_) {
+          // 前一个任务失败不应阻塞后续任务。
+        }
+        await _runUnlocked(
+          task,
+          isCancelled: isCancelled,
+          onProgress: onProgress,
+        );
+      } catch (error, stack) {
+        task.status = PipelineTaskStatus.failed;
+        task.finishedAt = DateTime.now();
+        task.error = error.toString();
+        task.addLog('  [异常] 流水线失败：$error');
+        try {
+          await _storage.saveTask(task);
+        } catch (saveError, saveStack) {
+          task.addLog('  [异常] 失败状态保存也失败：$saveError');
+          Error.throwWithStackTrace(saveError, saveStack);
+        }
+        Error.throwWithStackTrace(error, stack);
+      } finally {
+        if (identical(_runTails[key], done.future)) {
+          _runTails.remove(key);
+        }
+        done.complete();
+      }
+    }();
+  }
+
+  /// 实际执行逻辑；只能由串行的 [run] 调用。
+  Future<void> _runUnlocked(
+    AiPipelineTask task, {
+    required bool Function() isCancelled,
+    required void Function() onProgress,
   }) async {
-    _task = task;
+    Future<String> call(
+      AiRole role,
+      String system,
+      String user, {
+      double? temperature,
+    }) =>
+        _call(task, role, system, user, temperature: temperature);
+
     task.status = PipelineTaskStatus.running;
     task.error = null;
     task.finishedAt = null;
@@ -166,7 +218,7 @@ class AiPipelineService {
     // ===== Phase 1：总规划官规划全书大纲 =====
     if (task.outline.isEmpty) {
       task.addLog('[规划官] 规划全书大纲...');
-      final String raw = await _call(
+      final String raw = await call(
         AiRole.planner,
         plannerSystemPrompt,
         planningPrompt(
@@ -251,7 +303,7 @@ class AiPipelineService {
         }
       } catch (_) {}
       for (int attempt = 0; attempt < 2; attempt++) {
-        final String raw = await _call(
+        final String raw = await call(
           AiRole.planner,
           plannerSystemPrompt,
           scenePlanningPrompt(
@@ -293,7 +345,7 @@ class AiPipelineService {
             : <String>[];
         final int tw = ((sc['targetWords'] as num?)?.toInt() ?? 600).clamp(300, 1500);
         task.addLog('  [场景 ${si + 1}/${scenes.length}] $stage：$goalS（目标 $tw 字）');
-        String text = await _call(
+        String text = await call(
           AiRole.writer,
           writerSystemPrompt,
           scenePrompt(
@@ -327,7 +379,7 @@ class AiPipelineService {
         }
         // 字数不足补充续写
         if (w > 50 && w < tw * 0.4) {
-          final String add = await _call(
+          final String add = await call(
             AiRole.writer,
             writerSystemPrompt,
             '请续写 300 字，承接：\n${_tail(text, 100)}\n\n只输出续写正文：',
@@ -350,7 +402,7 @@ class AiPipelineService {
       int w = _countWords(fullText);
       if (w < target * 0.5) {
         task.addLog('  [WARN] 仅 $w 字，整章续写...');
-        final String add = await _call(
+        final String add = await call(
           AiRole.writer,
           writerSystemPrompt,
           '请将下面章节内容扩充到 $target 字以上，保留原意，只输出正文：\n${_tail(fullText, 500)}...',
@@ -366,7 +418,7 @@ class AiPipelineService {
       // 曾把 3805 字章润色成 1921 字砍半，过度压缩视为无效产出，保留原文并告警
       int rawWords = w;
       if (task.config.useEditor) {
-        final String edited = await _call(
+        final String edited = await call(
           AiRole.editor,
           editorSystemPrompt,
           editorPrompt(fullText),
@@ -390,7 +442,7 @@ class AiPipelineService {
       //      另一章补出「手机屏幕亮了。不是短信。」把玄幻书写成了都市悬疑。
       if (fullText.trim().isNotEmpty && !PipelineQa.hasEndingHook(fullText)) {
         task.addLog('  [钩子] 章末缺钩，自动补写钩子...');
-        final String add = await _call(
+        final String add = await call(
           AiRole.writer,
           writerSystemPrompt,
           '下面是本章结尾，最后 1~2 句太平淡，没有留下让读者必须看下一章的悬念。'
@@ -427,7 +479,7 @@ class AiPipelineService {
       // 4) 章节标题（标题官）
       final String titleHint = outlineText(ch['title']);
       String title = titleHint.isEmpty ? '第$idx章' : titleHint;
-      final String t = await _call(
+      final String t = await call(
         AiRole.titler,
         titlerSystemPrompt,
         titlerPrompt(fullText),
@@ -444,7 +496,7 @@ class AiPipelineService {
             .where((PipelineChapter c) => c.idx >= idx - 4)
             .map((PipelineChapter c) => '第${c.idx}章《${c.title}》')
             .join('\n');
-        final String v = await _call(
+        final String v = await call(
           AiRole.verifier,
           verifierSystemPrompt,
           verifierPrompt(jsonEncode(task.outline), chapList),
@@ -501,7 +553,7 @@ class AiPipelineService {
             '章末钩子检测：${PipelineQa.hasEndingHook(fullText) ? '命中 ✅' : '未命中 ❌（hook 维度不应高于 40 分）'}；'
             '直白爽点 ${PipelineQa.thrillPerThousand(fullText).toStringAsFixed(2)}/千字；'
             '变强异动 ${PipelineQa.surgePerThousand(fullText).toStringAsFixed(2)}/千字';
-        final String qr = await _call(
+        final String qr = await call(
           AiRole.verifier,
           verifierSystemPrompt,
           qualityReviewPrompt(fullText, qaEvidence: qaEv),
@@ -524,7 +576,7 @@ class AiPipelineService {
           if (task.config.autoRewriteLowScore &&
               overall < task.config.rewriteThreshold) {
             task.addLog('  [重写] 第 $idx 章 $overall 分 < ${task.config.rewriteThreshold}，触发自动重写...');
-            final String rewritten = await _call(
+            final String rewritten = await call(
               AiRole.editor,
               editorSystemPrompt,
               rewritePrompt(
@@ -564,7 +616,7 @@ class AiPipelineService {
 
       // 8) 跨章状态提取：维护状态清单供下一章写作遵守（失败保留旧状态）
       if (task.config.useStateTrack) {
-        final String st = await _call(
+        final String st = await call(
           AiRole.verifier,
           verifierSystemPrompt,
           stateExtractPrompt(fullText, task.stateTrack),
@@ -579,7 +631,7 @@ class AiPipelineService {
       }
 
       // 8.5) 伏笔台账提取：记录新埋伏笔/标记回收（失败保留旧台账，不阻断）
-      final String fs = await _call(
+      final String fs = await call(
         AiRole.verifier,
         verifierSystemPrompt,
         foreshadowExtractPrompt(fullText, task.foreshadowLedger, idx),
