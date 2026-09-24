@@ -63,19 +63,19 @@ void main() {
           FixedWorkflowPreset.roles(FixedWorkflowPreset.parseKeys(_sample));
       expect(roles.keys, containsAll(AiRole.values));
 
-      // 写手用最稳的 AMD 打头；策划/审校用响应更快的 SenseNova。
+      // 写手、规划官和审校都先走 AMD；SenseNova 作为备用。
       expect(roles[AiRole.writer]!.llm.model, 'DeepSeek-V4-Flash');
       expect(roles[AiRole.writer]!.llm.baseUrl, contains('developer.amd.com.cn'));
       expect(roles[AiRole.writer]!.fallbacks, isNotEmpty);
-      expect(roles[AiRole.planner]!.llm.baseUrl, contains('sensenova'));
+      expect(roles[AiRole.planner]!.llm.baseUrl, contains('developer.amd.com.cn'));
       expect(roles[AiRole.verifier]!.llm.temperature, 0.2);
 
       // 2026-09-22 全端点实测定稿：规划/审校主力 glm-5.2（需 temp=1.0），
       // 编辑主力 kimi-k3，写手备选为 K2 的 deepseek-v4-flash。
-      expect(roles[AiRole.planner]!.llm.model, 'glm-5.2');
+      expect(roles[AiRole.planner]!.llm.model, 'DeepSeek-V4-Flash');
       expect(roles[AiRole.planner]!.llm.temperature, 1.0);
       expect(roles[AiRole.editor]!.llm.model, 'kimi-k3');
-      expect(roles[AiRole.verifier]!.llm.model, 'glm-5.2');
+      expect(roles[AiRole.verifier]!.llm.model, 'DeepSeek-V4-Flash');
       expect(roles[AiRole.writer]!.fallbacks.first.model, 'deepseek-v4-flash');
 
       // 标题官复用第 3 个 Key，避免与策划/编辑抢同一配额。
@@ -104,7 +104,7 @@ void main() {
       expect(verifier.chain.last.baseUrl, anyOf(
           contains('openrouter'), contains('nvidia')));
       // 主力不受候选影响。
-      expect(verifier.llm.baseUrl, contains('sensenova'));
+      expect(verifier.llm.baseUrl, contains('developer.amd.com.cn'));
     });
 
     test('链内不出现重复端点', () {

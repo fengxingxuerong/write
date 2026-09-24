@@ -76,7 +76,7 @@ def run_book(output, total_words, max_chapters, genre="玄幻"):
         proc = subprocess.run(cmd, cwd=ROOT, env=env, stdout=lf,
                               stderr=subprocess.STDOUT)
     print(f"  [跑书] 退出码 {proc.returncode}")
-    return log
+    return log, proc.returncode
 
 
 def check(output, max_chapters, review_pass=78.0, genre="玄幻"):
@@ -294,9 +294,13 @@ def main():
     if not ok:
         print("\nSMOKE GATE: FAIL（编译阶段）")
         sys.exit(1)
+    run_ok = True
     if not a.check_only:
-        run_book(a.output, a.total_words, a.max_chapters, a.genre)
-    passed = check(a.output, a.max_chapters, genre=a.genre)
+        _log, run_code = run_book(a.output, a.total_words, a.max_chapters, a.genre)
+        run_ok = run_code == 0
+        if not run_ok:
+            print(f"  [FAIL] 流水线进程退出码 {run_code}，禁止使用旧产物继续验收")
+    passed = check(a.output, a.max_chapters, genre=a.genre) and run_ok
     print(f"总耗时 {time.time() - t0:.0f}s")
     sys.exit(0 if passed else 1)
 

@@ -63,13 +63,13 @@ void main() {
     }
   });
 
-  test('200 + 空正文 → ok（服务端接受，但提示未返回正文）', () async {
+  test('200 + 空正文 → 失败（连接成功但模型不可用）', () async {
     final HttpServer server = await startServer(statusCode: 200, content: '');
     try {
       final LlmChatClient client =
           LlmChatClient(config: cfgFor(server.port), retry: instantSingle);
       final LlmPingResult r = await client.ping();
-      expect(r.ok, isTrue);
+      expect(r.ok, isFalse);
       expect(r.message, contains('未返回正文'));
     } finally {
       await server.close(force: true);

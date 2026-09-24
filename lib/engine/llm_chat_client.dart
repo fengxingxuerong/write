@@ -111,9 +111,9 @@ class LlmChatClient {
       );
       final String content = r.content.trim();
       return LlmPingResult(
-        true,
+        content.isNotEmpty,
         content.isEmpty
-            ? '连接成功（服务端已接受请求，但未返回正文）'
+            ? '连接成功，但模型未返回正文（请检查模型、参数或额度）'
             : '连接成功，模型已响应',
       );
     } on LlmTransportException catch (e) {

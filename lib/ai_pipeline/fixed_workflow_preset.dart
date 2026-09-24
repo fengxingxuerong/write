@@ -43,12 +43,13 @@ class FixedWorkflowPreset {
 
   /// 缺密钥端点不进入链；可选候选模型未经本轮验证，默认不启用。
   ///
-  /// 角色分配（2026-09-22 全端点实测定稿）：
-  /// - 规划官：SenseNova K1 `glm-5.2`（长 JSON 输出稳；需 temp=1.0 + maxTokens≥4000）
-  /// - 写手：AMD `DeepSeek-V4-Flash`（17~20 字/s 全量实测最稳，配额最宽）
-  /// - 编辑：K2 `kimi-k3`（去AI味效果最好，配额波动大，必须带降级链）
+  /// 角色分配（2026-09-24 真实链路回测）：
+  /// - 规划官：AMD `DeepSeek-V4-Flash`（实测能稳定返回长 JSON；temp=1.0）
+  /// - 写手：AMD `DeepSeek-V4-Flash`（正文实测完整、配额较宽）
+  /// - 编辑：K2 `kimi-k3`（去AI味效果较好，失败沿链降级）
   /// - 标题官：K3 `deepseek-v4-flash`（轻量高频，独占 K3 分散 RPM）
-  /// - 审校：K1 `glm-5.2`（低频，与规划共享 K1，温度压到 0.2）
+  /// - 审校：AMD `DeepSeek-V4-Flash`（低频，温度压到 0.2）
+  /// SenseNova `glm-5.2` 保留为规划/审校备用；本轮真实测试曾出现空正文。
   static Map<AiRole, AiRoleConfig> roles(Map<String, String> keys,
       {bool includeCandidates = false}) {
     LlmConfig endpoint(String key, String base, String model, double temp) =>
@@ -57,8 +58,10 @@ class FixedWorkflowPreset {
           temperature: temp, maxTokens: 4096);
     final amd = endpoint('NOVEL_KEY_AMD',
         'https://developer.amd.com.cn/radeon/api/v1', 'DeepSeek-V4-Flash', 0.8);
-    // 规划/审校主力（K1：低频角色专用）
-    final planner = endpoint('NOVEL_KEY_SENSE_K1',
+    // 规划/审校主力（2026-09-24 真实回测：glm-5.2 空正文，AMD 正常）
+    final planner = amd.copyWith(temperature: 1.0);
+    // 规划/审校备用：SenseNova glm-5.2，仅在 AMD 失败时启用
+    final sensePlanner = endpoint('NOVEL_KEY_SENSE_K1',
         'https://token.sensenova.cn/v1', 'glm-5.2', 1.0);
     // 写手备选 / 标题官备选（K2：与编辑同 Key 的轻量模型）
     final dsfK2 = endpoint('NOVEL_KEY_SENSE_K2',
@@ -79,12 +82,12 @@ class FixedWorkflowPreset {
           'z-ai/glm-5.3-flash', 0.8),
     ] : <LlmConfig>[];
     final chains = <AiRole, List<LlmConfig>>{
-      AiRole.planner: [planner, amd, ...candidates],
-      AiRole.writer: [amd, dsfK2, planner, ...candidates],
-      AiRole.editor: [editor, planner, amd, ...candidates],
+      AiRole.planner: [planner, sensePlanner, ...candidates],
+      AiRole.writer: [amd, dsfK2, sensePlanner, ...candidates],
+      AiRole.editor: [editor, sensePlanner, amd, ...candidates],
       AiRole.titler: [title, dsfK2, amd],
       AiRole.verifier: [planner.copyWith(temperature: 0.2),
-        dsfK2.copyWith(temperature: 0.2), amd, ...candidates],
+        sensePlanner.copyWith(temperature: 0.2), amd, ...candidates],
     };
     return chains.map((role, chain) {
       final seen = <(String, String, String)>{};

@@ -16,7 +16,9 @@ import 'package:novel_writer/ai_pipeline/fixed_workflow_preset.dart';
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 import 'package:novel_writer/ai_pipeline/services/ai_pipeline_service.dart';
 import 'package:novel_writer/ai_pipeline/services/llm_router.dart';
+import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
+import 'package:novel_writer/engine/quality/fanqie_gate_checker.dart';
 
 void main() {
   final bool live = Platform.environment['NOVEL_LIVE'] == '1';
@@ -50,19 +52,20 @@ void main() {
         expect(c.llm.isConfigured, isTrue, reason: '${r.label} 主模型未配置');
       }
 
-      // 3) 跑内置流水线：2 章、约 1500 字，开润色与审校。
+      // 3) 跑内置流水线：3 章、约 4500 字，开启编辑、审校、质量评分和低分重写。
       final Directory out = Directory('verify-logs')..createSync(recursive: true);
       final PipelineStorage storage =
           PipelineStorage('${out.path}${Platform.pathSeparator}live_pipeline');
       final AiPipelineConfig config = AiPipelineConfig(
-        totalWords: 900,
-        maxChapters: 1,
+        totalWords: 4500,
+        maxChapters: 3,
         genre: '玄幻',
         protagonist: '林舟',
         useEditor: true,
-        useVerifier: false,
-        useQualityReview: false,
-        autoRewriteLowScore: false,
+        useVerifier: true,
+        useQualityReview: true,
+        qualityReviewEvery: 1,
+        autoRewriteLowScore: true,
         useStateTrack: true,
         roles: roles,
       );
@@ -99,8 +102,23 @@ void main() {
 
       // 4) 断言：跑完、有稿、成稿达到基本体量。
       expect(task.status, PipelineTaskStatus.done);
-      expect(task.chapters, isNotEmpty);
-      expect(task.totalWords, greaterThanOrEqualTo(500));
+      expect(task.chapters, hasLength(3));
+      expect(task.totalWords, greaterThanOrEqualTo(3000));
+      for (final PipelineChapter c in task.chapters) {
+        final FanqieGateReport gate = FanqieGateChecker(
+          genre: config.genre,
+          protagonist: config.protagonist,
+        ).check(c.content, chapterIndex: c.idx);
+        final List<String> commercialIssues = PipelineQa.chapterIssues(c);
+        print('质量：第${c.idx}章 ${c.words} 字｜'
+            '综合分 ${gate.score.toStringAsFixed(0)}｜'
+            '钩子 ${PipelineQa.hasEndingHook(c.content)}｜'
+            '商业问题 ${commercialIssues.length}');
+        expect(c.content.trim(), isNotEmpty);
+        expect(c.content.contains('```'), isFalse);
+        expect(gate.hasVeto, isFalse,
+            reason: '第${c.idx}章命中阻断级合规问题：${gate.issues}');
+      }
 
       final StringBuffer buf = StringBuffer()
         ..writeln('《${task.title}》')

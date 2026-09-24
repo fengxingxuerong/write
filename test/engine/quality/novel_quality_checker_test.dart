@@ -12,7 +12,7 @@ void main() {
       expect(r.totalWords, 0);
       expect(r.aiEchoScore, 0.0);
       expect(r.hardViolations, isEmpty);
-      expect(r.overallScore, 100);
+      expect(r.overallScore, 0);
       expect(r.needsPolish, isFalse);
     });
 

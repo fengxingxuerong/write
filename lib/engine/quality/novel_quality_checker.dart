@@ -387,6 +387,7 @@ class QualityReport {
 
   /// 综合质量评分（0~100，越高越好）。
   double get overallScore {
+    if (totalWords == 0) return 0;
     final double echoPenalty = (aiEchoScore * 20).clamp(0, 30);
     final double repPenalty = (repetitionScore * 30).clamp(0, 25);
     final double rhythmPenalty = (rhythmScore * 15).clamp(0, 15);
