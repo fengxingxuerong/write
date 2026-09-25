@@ -39,6 +39,7 @@ jobs:
           python3 -m scripts.novel_pipeline --help >/dev/null
           python3 -m scripts.fanqie_review --help >/dev/null
           python3 -m scripts.qa_semantic_check --help >/dev/null
+          python3 -m scripts.md_projection --help >/dev/null
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2

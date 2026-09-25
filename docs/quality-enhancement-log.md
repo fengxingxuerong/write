@@ -520,3 +520,47 @@
 - **门禁不修手/脑修不执**：若 09-17 提交后按惯例跑一次冒烟门禁，这个回归当天就会暴露（门禁第 1 项章节数即 FAIL）；6 天空窗源于「改了管线没跑门禁」
 - 排查方法论有效：不满足于「配额问题」表面解释，用日志结构异常（场景行缺失）→ 代码审查 → git 二分定位到提交
 
+
+## 十五、2026-09-26 竞品调研落地：P0-1 合规文案 + P0-3 Markdown 投影
+
+### 背景
+
+2026-09-24 竞品调研（research-reports/ai-novel-writing-tools-2026-09-24/）产出借鉴落地清单，
+本轮落地两项 P0：P0-1 产品文案合规化（零成本）、P0-3 随书 Markdown 人类可读投影
+（借鉴 InkOS truth files 双层设计：jsonl 权威账本 + 人读投影）。
+
+### P0-1 合规文案（三处同步）
+
+- **README.md**：首屏新增定位声明——「AI 辅助创作 · 作者主权 · 人工把关。墨匠是写作
+  辅助编辑器，不是全自动代笔：生成初稿 → 机器门禁 → 人工试读复核 → 签约评估，
+  成稿发表前须由作者完成人工复核与修改」
+- **landing.html**：hero 区新增 `.hero-compliance` 定位句（同口径）
+- **docs/交付文档.md**：项目概述新增「定位声明（合规）」段，点名对应 2026 年平台
+  「AI 占比红线、禁纯 AI 直出正文」治理要求；核心目录同步补 md_projection.py
+- 依据：2026-04 反洗稿自律公约 + 2026-07 番茄治理 + 2026-08 起点 10% 红线
+
+### P0-3 Markdown 投影（scripts/md_projection.py，纯本地零 LLM）
+
+- 三份投影（sidecar 命名 `<书>.<名>.md`，复用 `_sidecar_path`，绝不覆盖 jsonl）：
+  1. **当前状态.md**：跨章状态清单（分号拆 bullet）+ 户籍表人物 + 数字台账
+  2. **伏笔台账.md**：open/closed 分列 + 埋设/回收章号 + 超时告警（≥5 章未收，
+     与 check_open_foreshadows 同口径）
+  3. **控制面.md**：作者意图（type=author_intent last-wins；无记录回落大纲
+     hook/blurb/tags/主角作「大纲意图摘要」）+ 近 3 章关注点（规划目标/评审问题/
+     阻断项/读者官反馈）+ 下一章提醒（大纲下一章目标 + 超时伏笔）
+- 只读回放 jsonl（坏行跳过、data 双形态 dict/JSON 串兼容、章节 idx 非法过滤）；
+  任何投影失败只 WARN 绝不阻塞成书
+- **接入**：novel_pipeline Phase 4.5（导出 txt 后），开关 `--no-projection`；
+  独立 CLI `python scripts/md_projection.py <jsonl>` 可对历史成书补导出
+- **CI**：`python3 -m scripts.md_projection --help` 加入运行时导入回归清单
+- **验证**：v6 真书（《废柴逆袭之噬灵剑主》4 章）三份投影导出成功且与 jsonl 一致；
+  新增 `test_md_projection.py` 7 例（回放/渲染/导出/意图覆盖/坏行安全），
+  scripts unittest 24/24 通过，ruff F 类全绿
+
+### 验证
+
+- py_compile 两文件通过；`novel_pipeline --help` 显示 `--no-projection`
+- `python -m scripts.md_projection --help` 导入回归通过
+- v6 真书投影肉眼核对：状态清单 8 条 bullet、户籍表 5 人、数字台账 23 条、
+  伏笔 open 5 条（与 jsonl 台账一致）、控制面含评审 82 分与读者官三问反馈
+

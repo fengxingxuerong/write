@@ -1625,6 +1625,8 @@ def main():
                    help="前 N 章额外做首屏 300 字强化（番茄完读率命门）")
     p.add_argument("--no-fanqie-pack", action="store_true",
                    help="不生成上架包（书名/简介/标签）与评估卡文件")
+    p.add_argument("--no-projection", action="store_true",
+                   help="不导出随书 Markdown 投影（当前状态/伏笔台账/控制面）")
     p.add_argument("--skip-amd", action="store_true",
                    help="跳过 AMD/NVIDIA 链路，直接走商汤（AMD 持续限流时用）")
     p.add_argument("--no-chief-review", action="store_true",
@@ -2416,6 +2418,16 @@ def main():
     txt_path = export_txt(args.output, outline.get("title", "未命名"), state["chapters"])
     print(f"\n[OK] 文本输出：{txt_path}")
     print(f"[OK] 总字数：{sum(c.get('words', 0) for c in state['chapters'])}")
+
+    # ===== Phase 4.5：Markdown 人类可读投影（当前状态/伏笔台账/控制面）=====
+    # jsonl 是权威账本，投影是只读快照；导出失败只告警，绝不阻塞成书。
+    if not args.no_projection:
+        try:
+            from md_projection import export_projections
+            for proj in export_projections(args.output):
+                print(f"[OK] 投影：{proj}")
+        except Exception as exc:
+            print(f"  [WARN] Markdown 投影导出失败（不影响成书）：{exc}")
 
     # ===== Phase 5：番茄评估卡 + 上架包 =====
     if not args.no_fanqie_pack:
