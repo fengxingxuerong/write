@@ -1,11 +1,24 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
 /// LlmConfig 模型 + LlmSettingsRepository 单元测试
 ///
 /// 覆盖：序列化/反序列化、isConfigured 各种场景、本地 URL 判断、LlmSettingsRepository 原子读写。
+
+class _FailingSecretStore implements SecretStore {
+  const _FailingSecretStore();
+
+  @override
+  Future<String> protect(String plaintext) async =>
+      throw StateError('simulated secret-store failure');
+
+  @override
+  Future<String> unprotect(String protectedValue) async => '';
+}
 
 void main() {
   group('LlmConfig 默认值', () {
@@ -17,6 +30,24 @@ void main() {
       expect(config.baseUrl, '');
       expect(config.maxTokens, 8192);
       expect(config.temperature, 0.8);
+    });
+  });
+
+  group('LlmConfig 脱敏', () {
+    test('toRedactedJson 与 toString 不泄露 API Key', () {
+      const config = LlmConfig(
+        provider: LlmProvider.openaiCompatible,
+        model: 'model-x',
+        apiKey: 'sk-super-secret',
+        baseUrl: 'https://api.example.com/v1',
+      );
+      expect(config.toString(), isNot(contains('sk-super-secret')));
+      expect(config.toString(), contains('********'));
+      expect(
+        jsonEncode(config.toRedactedJson()),
+        isNot(contains('sk-super-secret')),
+      );
+      expect(config.toRedactedJson()['apiKey'], '********');
     });
   });
 
@@ -262,7 +293,10 @@ void main() {
 
     setUp(() {
       tempDir = Directory.systemTemp.createTempSync('llm_config_test_');
-      repo = LlmSettingsRepository(tempDir.path);
+      repo = LlmSettingsRepository(
+        tempDir.path,
+        secretStore: InMemorySecretStore(),
+      );
     });
 
     tearDown(() {
@@ -296,6 +330,74 @@ void main() {
       expect(loaded.temperature, original.temperature);
     });
 
+    test('保存后配置文件不包含明文 API Key', () async {
+      await repo.save(
+        const LlmConfig(
+          provider: LlmProvider.openaiCompatible,
+          model: 'deepseek-chat',
+          apiKey: 'sk-plain-must-not-persist',
+          baseUrl: 'https://api.example.com/v1',
+        ),
+      );
+      final String raw = File(repo.filePath).readAsStringSync();
+      expect(raw, isNot(contains('sk-plain-must-not-persist')));
+      expect(raw, contains('apiKeyEncrypted'));
+    });
+
+    test('旧版明文配置读取后迁移为受保护字段', () async {
+      File(repo.filePath).writeAsStringSync(
+        jsonEncode(<String, dynamic>{
+          'provider': 'openaiCompatible',
+          'model': 'legacy-model',
+          'apiKey': 'sk-legacy-migrate',
+          'baseUrl': 'https://api.example.com/v1',
+        }),
+      );
+      final LlmConfig loaded = await repo.load();
+      expect(loaded.apiKey, 'sk-legacy-migrate');
+      final String raw = File(repo.filePath).readAsStringSync();
+      expect(raw, isNot(contains('sk-legacy-migrate')));
+      expect(raw, contains('apiKeyEncrypted'));
+    });
+
+    test('仅保存引擎开关也会迁移旧版明文 API Key', () async {
+      File(repo.filePath).writeAsStringSync(
+        jsonEncode(<String, dynamic>{
+          'provider': 'openaiCompatible',
+          'model': 'legacy-model',
+          'apiKey': 'sk-flags-migrate',
+          'baseUrl': 'https://api.example.com/v1',
+        }),
+      );
+      await repo.saveFlags(const LlmEngineFlags(useLlm: true));
+      final String raw = File(repo.filePath).readAsStringSync();
+      expect(raw, isNot(contains('sk-flags-migrate')));
+      expect(raw, contains('apiKeyEncrypted'));
+      expect((await repo.loadFlags()).useLlm, isTrue);
+      expect((await repo.load()).apiKey, 'sk-flags-migrate');
+    });
+
+    test('迁移失败仍返回旧配置并保留原文件', () async {
+      File(repo.filePath).writeAsStringSync(
+        jsonEncode(<String, dynamic>{
+          'provider': 'openaiCompatible',
+          'model': 'legacy-model',
+          'apiKey': 'sk-migration-failure',
+          'baseUrl': 'https://api.example.com/v1',
+        }),
+      );
+      final LlmSettingsRepository failing = LlmSettingsRepository(
+        tempDir.path,
+        secretStore: const _FailingSecretStore(),
+      );
+      final LlmConfig loaded = await failing.load();
+      expect(loaded.apiKey, 'sk-migration-failure');
+      expect(
+        File(repo.filePath).readAsStringSync(),
+        contains('sk-migration-failure'),
+      );
+    });
+
     test('save 是原子写（无 .tmp 残留）', () async {
       const config = LlmConfig(model: 'test');
       await repo.save(config);
@@ -319,7 +421,10 @@ void main() {
 
     setUp(() {
       tempDir = Directory.systemTemp.createTempSync('llm_flags_test_');
-      repo = LlmSettingsRepository(tempDir.path);
+      repo = LlmSettingsRepository(
+        tempDir.path,
+        secretStore: InMemorySecretStore(),
+      );
     });
 
     tearDown(() {
@@ -335,7 +440,9 @@ void main() {
     });
 
     test('saveFlags/loadFlags 往返一致', () async {
-      await repo.saveFlags(const LlmEngineFlags(useLlm: true, autoMemory: false));
+      await repo.saveFlags(
+        const LlmEngineFlags(useLlm: true, autoMemory: false),
+      );
       final flags = await repo.loadFlags();
       expect(flags.useLlm, isTrue);
       expect(flags.autoMemory, isFalse);
@@ -350,7 +457,9 @@ void main() {
     });
 
     test('saveFlags 不清掉已落盘的连接配置', () async {
-      await repo.save(const LlmConfig(model: 'deepseek-chat', apiKey: 'sk-test'));
+      await repo.save(
+        const LlmConfig(model: 'deepseek-chat', apiKey: 'sk-test'),
+      );
       await repo.saveFlags(const LlmEngineFlags(useLlm: true));
       final config = await repo.load();
       expect(config.model, 'deepseek-chat');

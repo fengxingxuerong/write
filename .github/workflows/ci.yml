@@ -30,9 +30,15 @@ jobs:
         # 历史教训：StateError 错用就是纯语法检查漏掉的 NameError）。
         run: |
           python3 -m compileall -q scripts
-          python3 -m pip install --quiet ruff
+          python3 -m pip install --quiet 'ruff==0.16.2'
           # 只对「已入库的脚本」做 F 类检查：临时探针/诊断脚本不入库也不设防
           git ls-files 'scripts/*.py' | xargs -r python3 -m ruff check --select=F --output-format=concise
+          python3 -m unittest discover -s scripts -p 'test_*.py' -v
+          # compileall 不会发现同目录导入/模块入口错误，补运行时导入回归。
+          python3 -m scripts.generate_novel --help >/dev/null
+          python3 -m scripts.novel_pipeline --help >/dev/null
+          python3 -m scripts.fanqie_review --help >/dev/null
+          python3 -m scripts.qa_semantic_check --help >/dev/null
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -77,15 +83,43 @@ jobs:
       - name: Enforce coverage threshold
         # 覆盖率低于阈值时失败，防止测试退化
         run: |
-          COV=$(grep -oP 'LF:\d+' coverage/lcov.info | awk -F: '{s+=$2} END {print s}')
-          LH=$(grep -oP 'LH:\d+' coverage/lcov.info | awk -F: '{s+=$2} END {print s}')
-          echo "Lines hit: $LH / $COV"
-          PERCENT=$(python3 -c "print(round(100.0*$LH/$COV, 1))" 2>/dev/null || echo "unknown")
-          echo "Coverage: $PERCENT%"
-          if [ "$PERCENT" != "unknown" ] && [ "$(python3 -c "print(1 if $PERCENT >= 80 else 0)")" = "0" ]; then
-            echo "::error::Coverage $PERCENT% below threshold 80%"
+          test -s coverage/lcov.info || { echo "::error::coverage/lcov.info missing or empty"; exit 1; }
+          COV=$(grep -oP 'LF:\d+' coverage/lcov.info | awk -F: '{s+=$2} END {print s+0}')
+          LH=$(grep -oP 'LH:\d+' coverage/lcov.info | awk -F: '{s+=$2} END {print s+0}')
+          if [ "$COV" -le 0 ]; then
+            echo "::error::Coverage denominator is zero"
             exit 1
           fi
+          echo "Lines hit: $LH / $COV"
+          PERCENT=$(python3 -c "print(round(100.0*$LH/$COV, 1))")
+          echo "Coverage: $PERCENT%"
+          python3 - "$LH" "$COV" <<'PY'
+          import sys
+          hit, total = map(int, sys.argv[1:])
+          if total <= 0 or hit / total * 100 < 80:
+              raise SystemExit(1)
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+          lcov = Path('coverage/lcov.info').read_text(encoding='utf-8')
+          covered = {
+              line[3:].replace(chr(92), '/')
+              for line in lcov.splitlines()
+              if line.startswith('SF:')
+          }
+          required = {
+              'lib/core/security/secret_store.dart',
+              'lib/models/llm_config.dart',
+              'lib/ai_pipeline/services/pipeline_storage.dart',
+          }
+          missing = sorted(required - covered)
+          source_count = len(list(Path('lib').rglob('*.dart')))
+          print(f'LCOV source files: {len(covered)} / {source_count}')
+          if missing:
+              print('::error::Required production files missing from coverage:')
+              print('::error::' + ', '.join(missing))
+              raise SystemExit(1)
+          PY
 
       - name: Upload coverage
         uses: actions/upload-artifact@v4
@@ -133,7 +167,7 @@ jobs:
 
   build-windows:
     name: Build Windows Release
-    needs: analyze-test
+    needs: [analyze-test, verify-web]
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -163,9 +197,23 @@ jobs:
       - name: Build Windows Release
         run: flutter build windows --release
 
+      - name: Package portable Windows build
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path pubspec.yaml -Pattern '^version:\s*([^+]+)').Matches[0].Groups[1].Value
+          $release = Join-Path $PWD 'build/windows/x64/runner/Release'
+          $dist = Join-Path $PWD 'dist'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          $zip = Join-Path $dist "InkSmith-$version-windows-x64.zip"
+          Compress-Archive -Path (Join-Path $release '*') -DestinationPath $zip -Force
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path $zip -Leaf)" | Set-Content "$zip.sha256" -Encoding ascii
+          Write-Host "Portable artifact: $zip"
+          Write-Host "SHA256: $hash"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: novel-writer-windows
-          path: build/windows/x64/runner/Release/
+          name: novel-writer-windows-portable
+          path: dist/
           retention-days: 14

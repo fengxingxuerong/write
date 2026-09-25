@@ -78,15 +78,29 @@ class LlmChatClient {
       double? temperature,
       int? maxTokens,
       Duration? timeoutOverride,
-      void Function(int attempt, Duration delay, Object error)? onRetry}) async {
+      void Function(int attempt, Duration delay, Object error)? onRetry,
+      bool Function()? isCancelled,
+    }) async {
+    if (isCancelled?.call() ?? false) {
+      throw const GenerationCancelledException();
+    }
     if (!config.isConfigured) {
       throw const EngineException('LLM 未配置：请先在设置页填写模型与地址');
     }
     final Duration budget = timeoutOverride ?? timeout;
     return retry.run(
-      (int attempt) => _doChat(system, user, role, temperature, maxTokens, budget),
+      (int attempt) => _doChat(
+        system,
+        user,
+        role,
+        temperature,
+        maxTokens,
+        budget,
+        isCancelled,
+      ),
       isRetryable: LlmHttpErrors.retryable,
       onRetry: onRetry,
+      isCancelled: isCancelled,
     );
   }
 
@@ -131,8 +145,15 @@ class LlmChatClient {
   /// 强断底层连接（挂起的读写立刻失败），再向 completeError 抛超时异常。
   /// 此前用 `Future.timeout` 只结束了外层 future，底层的 HttpClient + socket
   /// 仍挂到服务端响应为止——每次超时泄漏一个持活连接。
-  Future<LlmChatResult> _doChat(String system, String user, String? role,
-      double? temperature, int? maxTokensOverride, Duration budget) {
+  Future<LlmChatResult> _doChat(
+    String system,
+    String user,
+    String? role,
+    double? temperature,
+    int? maxTokensOverride,
+    Duration budget,
+    bool Function()? isCancelled,
+  ) {
     final HttpClient client = (clientFactory ?? HttpClient.new)()
       ..connectionTimeout = const Duration(seconds: 15);
     final Completer<LlmChatResult> completer = Completer<LlmChatResult>();
@@ -145,6 +166,16 @@ class LlmChatClient {
         ));
       }
     });
+    Timer? cancelTimer;
+    if (isCancelled != null) {
+      cancelTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+        if (!isCancelled()) return;
+        client.close(force: true);
+        if (!completer.isCompleted) {
+          completer.completeError(const GenerationCancelledException());
+        }
+      });
+    }
     // 真实请求在后台执行：任何 await 挂起都不会阻塞外层收尾。
     // 异常一律落到 completer（超时/连接错误/HTTP 状态码），绝不漏抛。
     Future<void>(() async {
@@ -213,13 +244,20 @@ class LlmChatClient {
         // 连接层失败（DNS/拒连/TLS）也要包装成可重试的传输异常，
         // 之前 SocketException 直接冒出，isRetryable 判定为 false→零重试。
         completer.completeError(
-          e is LlmTransportException ? e : LlmHttpErrors.transport(e),
+          e is GenerationCancelledException
+              ? e
+              : e is LlmTransportException
+                  ? e
+                  : LlmHttpErrors.transport(e),
         );
       } finally {
         client.close(force: true);
       }
     });
-    return completer.future.whenComplete(timer.cancel);
+    return completer.future.whenComplete(() {
+      timer.cancel();
+      cancelTimer?.cancel();
+    });
   }
 
   /// 构造 messages 数组（支持可选 assistant 前缀）。

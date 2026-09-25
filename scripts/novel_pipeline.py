@@ -13,6 +13,7 @@
 密钥经环境变量传入：NOVEL_KEY_AMD / NOVEL_KEY_SENSE_K1 / NOVEL_KEY_SENSE_K2 / NOVEL_KEY_SENSE_K3
 """
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -182,6 +183,8 @@ def setup_keys():
 # 健康 key 池（2026-09-10 配额感知路由）：记录每个 provider 的连续失败/冷却状态。
 # 冷却中的 provider 会被跳过，避免单 key 配额耗尽后反复撞 429 浪费时间；
 # 冷却期满自动恢复，运行中持续自愈。
+# 健康池按「端点 + 凭据」隔离。相同 URL/模型但不同 API Key 的配额状态相互独立；
+# 只把 Key 的 SHA-256 短指纹放进内存键，避免日志或调试输出泄露明文凭据。
 _HEALTH = {}  # key: {fails: 连续失败数, cooldown_until: 时间戳, hits: 成功数}
 COOLDOWN_SECONDS = 300  # 连续失败 N 次后冷却 5 分钟
 
@@ -191,8 +194,15 @@ COOLDOWN_SECONDS = 300  # 连续失败 N 次后冷却 5 分钟
 EDITOR_MIN_RATIO = 0.85
 
 
+def _health_key(provider):
+    """返回不含明文 API Key 的健康池身份。"""
+    raw_key = str(provider.get("key", "")).encode("utf-8")
+    fingerprint = hashlib.sha256(raw_key).hexdigest()[:12] if raw_key else "anonymous"
+    return (provider["url"], provider["model"], fingerprint)
+
+
 def _mark_fail(provider):
-    k = (provider["url"], provider["model"])
+    k = _health_key(provider)
     h = _HEALTH.setdefault(k, {"fails": 0, "cooldown_until": 0, "hits": 0})
     h["fails"] += 1
     if h["fails"] >= 3:
@@ -201,14 +211,14 @@ def _mark_fail(provider):
 
 
 def _mark_ok(provider):
-    k = (provider["url"], provider["model"])
+    k = _health_key(provider)
     h = _HEALTH.setdefault(k, {"fails": 0, "cooldown_until": 0, "hits": 0})
     h["fails"] = 0
     h["hits"] += 1
 
 
 def _in_cooldown(provider):
-    k = (provider["url"], provider["model"])
+    k = _health_key(provider)
     h = _HEALTH.get(k)
     if not h or h["cooldown_until"] <= time.time():
         return False
@@ -285,7 +295,9 @@ def call_chain(chain, system, user, max_tokens):
             print(f"    [chain] {p['model']} 冷却中，跳过")
             continue
         r = llm_call(p, system, user, max_tokens=max_tokens)
-        if r and len(r.strip()) > 20:
+        # 合法 JSON 可能很短（例如 {"issues":[]}），不能按字符数误判为空；
+        # 具体角色是否满足 schema 由各自解析器负责。
+        if r and r.strip():
             return r
         print(f"    [chain] {p['model']} 返回为空，切换下一个")
     return ""
@@ -568,9 +580,9 @@ def run_fact_check(registry, state_track, final_text, idx):
         parsed = parse_json_from_llm(raw)
     except Exception:
         return None
-    if parsed is None:
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("fabrications"), list):
         return None
-    return parsed.get("fabrications") or []
+    return [item for item in parsed["fabrications"] if isinstance(item, dict)]
 
 
 def update_registry(output, registry, final_text, idx):
@@ -1465,8 +1477,8 @@ def save_foreshadow(path, data):
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps({"type": "foreshadow", "data": data}, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"  [WARN] 伏笔台账保存失败：{exc}")
 
 
 def check_open_foreshadows(ledger_json, cur_idx, stale_after=5):
@@ -1638,6 +1650,14 @@ def main():
     p.add_argument("--prev-summary-file", default="",
                    help="前情提要文件（续写模式：规划官须承接该剧情）")
     args = p.parse_args()
+    if args.total_words <= 0 or args.max_chapters <= 0:
+        p.error("--total-words 与 --max-chapters 必须为正数")
+    if not args.output.strip():
+        p.error("--output 不能为空")
+    args.output = os.path.abspath(args.output)
+    if os.path.isdir(args.output):
+        p.error(f"--output 必须是文件路径：{args.output}")
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
     prev_summary = ""
     if args.prev_summary_file and os.path.exists(args.prev_summary_file):
@@ -1649,7 +1669,7 @@ def main():
         # 跳过 AMD：把 AMD 链路预标记为冷却（call_chain 自动跳过，纯商汤/NVIDIA 路由）
         amd_providers = [PLANNER_CHAIN[3], WRITER_CHAIN[2], EDITOR_CHAIN[2]]
         for p in amd_providers:
-            _HEALTH[(p["url"], p["model"])] = {"fails": 3, "cooldown_until": time.time() + 24 * 3600, "hits": 0}
+            _HEALTH[_health_key(p)] = {"fails": 3, "cooldown_until": time.time() + 24 * 3600, "hits": 0}
         print("[INFO] --skip-amd：跳过 AMD 链路，纯商汤路由")
     print(f"[INFO] 协作流水线启动 | 目标 {args.total_words} 字 | 输出 {args.output}")
 

@@ -27,6 +27,34 @@ class AppDatabase {
   /// per-novelId 异步锁，保证同一小说的读写串行化、不同小说可并发。
   static final Map<String, Completer<void>> _locks = <String, Completer<void>>{};
 
+  /// 进程间文件锁：同一项目的多个应用实例不能同时改写主文件/备份文件。
+  ///
+  /// 进程内 FIFO 锁负责本实例公平排队，文件锁负责跨实例互斥；两者缺一不可。
+  static Future<T> _withFileLock<T>(
+    String lockPath,
+    Future<T> Function() action,
+  ) async {
+    final File lockFile = File(lockPath);
+    await lockFile.parent.create(recursive: true);
+    final RandomAccessFile handle = await lockFile.open(mode: FileMode.append);
+    bool locked = false;
+    try {
+      await handle.lock(FileLock.blockingExclusive);
+      locked = true;
+      return await action();
+    } finally {
+      if (locked) {
+        try {
+          await handle.unlock();
+        } finally {
+          await handle.close();
+        }
+      } else {
+        await handle.close();
+      }
+    }
+  }
+
   /// 获取指定 novelId 的排他锁并执行 [action]。
   ///
   /// 锁粒度为 per-novelId：不同小说的 [action] 可并发，同一小说的 [action] 严格串行。
@@ -36,9 +64,11 @@ class AppDatabase {
   /// `_locks[novelId]`，先到先得，顺序并不保证。）避免 read-modify-write
   /// 竞争导致数据丢失。
   Future<T> withNovelLock<T>(String novelId, Future<T> Function() action) async {
-    final Completer<void>? prev = _locks[novelId];
+    final String lockPath =
+        '${directory.path}${Platform.pathSeparator}${Uri.encodeComponent(novelId)}.lock';
+    final Completer<void>? prev = _locks[lockPath];
     final Completer<void> current = Completer<void>();
-    _locks[novelId] = current;
+    _locks[lockPath] = current;
     try {
       if (prev != null) {
         try {
@@ -47,11 +77,11 @@ class AppDatabase {
           // 前一持锁者异常不应卡住队列。
         }
       }
-      return await action();
+      return await _withFileLock(lockPath, action);
     } finally {
       // 防御：只有自己仍是队尾时才移除，避免误删后来者的登记。
-      if (identical(_locks[novelId], current)) {
-        _locks.remove(novelId);
+      if (identical(_locks[lockPath], current)) {
+        _locks.remove(lockPath);
       }
       current.complete();
     }
@@ -78,7 +108,10 @@ class AppDatabase {
           // 前一个持锁者失败不应卡住排队者。
         }
       }
-      return await action();
+      return await _withFileLock(
+        '${directory.path}${Platform.pathSeparator}index.lock',
+        action,
+      );
     } finally {
       if (identical(_indexTail, done)) {
         _indexTail = null;

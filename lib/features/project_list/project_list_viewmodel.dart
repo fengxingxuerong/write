@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/models/novel.dart';
+import 'package:novel_writer/storage/novel_backup_service.dart';
 import 'package:novel_writer/storage/novel_repository.dart';
 
 /// 项目列表视图状态。
@@ -63,9 +66,14 @@ class ProjectListState {
 /// 负责首页项目的新建、删除、重命名、归档与列表加载，统一捕获 [AppException]。
 class ProjectListViewModel extends StateNotifier<ProjectListState> {
   /// 构造视图模型。
-  ProjectListViewModel(this._repo) : super(const ProjectListState());
+  ProjectListViewModel(
+    this._repo, {
+    NovelBackupService? backupService,
+  })  : _backupService = backupService ?? NovelBackupService(_repo),
+        super(const ProjectListState());
 
   final NovelRepository _repo;
+  final NovelBackupService _backupService;
 
   /// 加载项目列表。
   Future<void> load() async {
@@ -87,6 +95,23 @@ class ProjectListViewModel extends StateNotifier<ProjectListState> {
       await load();
     } on AppException catch (e) {
       state = state.copyWith(error: e.message);
+    } catch (e) {
+      state = state.copyWith(error: '创建作品失败：$e');
+    }
+  }
+
+  /// 从 JSON 备份恢复作品并刷新列表。取消或失败时返回 null。
+  Future<Novel?> importBackup(File file) async {
+    try {
+      final Novel imported = await _backupService.importFile(file);
+      await load();
+      return state.error == null ? imported : null;
+    } on AppException catch (e) {
+      state = state.copyWith(error: e.message);
+      return null;
+    } catch (e) {
+      state = state.copyWith(error: '导入备份失败：$e');
+      return null;
     }
   }
 
@@ -97,6 +122,8 @@ class ProjectListViewModel extends StateNotifier<ProjectListState> {
       await load();
     } on AppException catch (e) {
       state = state.copyWith(error: e.message);
+    } catch (e) {
+      state = state.copyWith(error: '删除作品失败：$e');
     }
   }
 

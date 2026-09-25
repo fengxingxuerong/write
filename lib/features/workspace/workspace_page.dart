@@ -725,14 +725,19 @@ class _ThemeToggle extends ConsumerWidget {
       ThemeMode.light => (Icons.light_mode, '浅色'),
       _ => (Icons.brightness_auto_outlined, '跟随系统'),
     };
-    return ToolButton(icon: icon, label: '主题：$label', tooltip: '切换主题', onPressed: () {
-      const List<ThemeMode> order = <ThemeMode>[
-        ThemeMode.light,
-        ThemeMode.dark,
-        ThemeMode.system,
-      ];
-      final int next = (order.indexOf(mode) + 1) % order.length;
-      ref.read(themeModeProvider.notifier).state = order[next];
-    });
+    return ToolButton(
+      icon: icon,
+      label: '主题：$label',
+      tooltip: '切换主题',
+      onPressed: () async {
+        const List<ThemeMode> order = <ThemeMode>[
+          ThemeMode.light,
+          ThemeMode.dark,
+          ThemeMode.system,
+        ];
+        final int next = (order.indexOf(mode) + 1) % order.length;
+        await setAppThemeMode(ref, order[next]);
+      },
+    );
   }
 }

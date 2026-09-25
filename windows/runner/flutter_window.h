@@ -1,12 +1,16 @@
 #ifndef RUNNER_FLUTTER_WINDOW_H_
 #define RUNNER_FLUTTER_WINDOW_H_
 
+#include <flutter/binary_messenger.h>
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
 
 #include <memory>
 
 #include "win32_window.h"
+
+/// Registers the Windows DPAPI channel used by Dart secret storage.
+void RegisterSecureStorageChannel(flutter::BinaryMessenger* messenger);
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {

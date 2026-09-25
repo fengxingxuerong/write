@@ -61,17 +61,21 @@ class ChapterRepository {
   }
 
   /// 列出章节（按 order 升序）。
-  Future<List<Chapter>> listChapters(String novelId) async {
-    final Novel novel = await db.readNovel(novelId);
-    final List<Chapter> chapters = List<Chapter>.from(novel.chapters)
-      ..sort((a, b) => a.order.compareTo(b.order));
-    return chapters;
+  Future<List<Chapter>> listChapters(String novelId) {
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      final List<Chapter> chapters = List<Chapter>.from(novel.chapters)
+        ..sort((a, b) => a.order.compareTo(b.order));
+      return chapters;
+    });
   }
 
   /// 读取单个章节。
-  Future<Chapter> getChapter(String novelId, String chapterId) async {
-    final Novel novel = await db.readNovel(novelId);
-    return novel.chapters.firstWhere((c) => c.id == chapterId);
+  Future<Chapter> getChapter(String novelId, String chapterId) {
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      return novel.chapters.firstWhere((c) => c.id == chapterId);
+    });
   }
 
   /// 新增空章节（排在末尾）。

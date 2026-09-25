@@ -13,7 +13,8 @@ lib/
 │   ├── router/                     # go_router 路由表
 │   ├── theme/                      # 主题
 │   ├── constants/                  # AppConstants（单章上限/防抖/字数统计）
-│   └── errors/                     # AppException 层级（sealed）
+│   ├── errors/                     # AppException 层级（sealed）
+│   └── security/                   # SecretStore + Windows DPAPI MethodChannel
 ├── models/                         # 纯数据模型（不可变 + copyWith + 序列化）
 │   ├── novel.dart                  # 聚合根（含 drafts/exportPrefs/preferredStyle/preferredProseStyle）
 │   ├── chapter.dart                # 章节（含 outline）
@@ -26,6 +27,7 @@ lib/
 │   └── reader_settings.dart         # 阅读设置（主题/字号/行距/衬线）+ Repository
 ├── storage/                        # 持久化
 │   ├── app_database.dart           # 单例（私有构造 + init），三层可靠性（原子写 + .bak.json 备份 + 读时自愈）
+│   ├── novel_backup_service.dart   # JSON 备份导入/导出
 │   └── *_repository.dart           # Novel/Chapter/Setting 仓库（具体类）
 ├── engine/                         # 生成引擎（核心抽象）
 │   ├── generation_engine.dart       # GenerationEngine 接口 + ContextBundle(+plotSummary)
@@ -272,7 +274,7 @@ test/
     └── export_service_test.dart      # txt/md/epub/docx/backup 结构（8 用例）
 ```
 
-**当前：864 个用例，覆盖率 85.6%**，CI 流水线设 60% 门槛。最近两轮补测：① 多角色 AI 流水线的 `AiPipelineService.run` 编排（`test/ai_pipeline/ai_pipeline_service_run_test.dart`，18 用例、零网络替身，该文件行覆盖率 94.5%）；② 本地质检链路洼地——`pipeline_qa` 99.5%、`llm_router`（链式路由日志 + 健康池自愈）100%、`composite_quality_gate` 98.4%、`scene_builder`（章纲→场景规划与骨架兜底）100%。
+**测试与覆盖率以 CI 实际输出为准**；CI 要求已进入 LCOV 的生产文件行覆盖率不低于 80%，并检查 `SecretStore`、LLM 配置和流水线存储等关键安全/存储文件必须有覆盖率记录。DPAPI 平台通道、旧明文迁移和 `InMemorySecretStore` 的测试位于 `test/core/security/secret_store_test.dart` 与模型/流水线存储测试中。
 
 ### ViewModel 测试要点
 

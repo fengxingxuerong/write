@@ -7,6 +7,7 @@ import 'package:novel_writer/ai_pipeline/services/llm_router.dart';
 import 'package:novel_writer/ai_pipeline/services/outline_text.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
+import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/quality/fanqie_gate_checker.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
@@ -43,6 +44,7 @@ class AiPipelineService {
     String system,
     String user, {
     double? temperature,
+    bool Function()? isCancelled,
   }) async {
     final AiRoleConfig cfg = task.config.roleOf(role);
     if (!cfg.enabled) return '';
@@ -56,6 +58,7 @@ class AiPipelineService {
       user: user,
       temperature: temperature,
       onLog: (String line) => task.addLog('  [${role.label}] $line'),
+      isCancelled: isCancelled,
     );
     final String content = result.content.trim();
     if (content.isEmpty) {
@@ -174,6 +177,9 @@ class AiPipelineService {
           isCancelled: isCancelled,
           onProgress: onProgress,
         );
+      } on GenerationCancelledException {
+        _finishCancel(task);
+        await _storage.saveTask(task);
       } catch (error, stack) {
         task.status = PipelineTaskStatus.failed;
         task.finishedAt = DateTime.now();
@@ -207,7 +213,14 @@ class AiPipelineService {
       String user, {
       double? temperature,
     }) =>
-        _call(task, role, system, user, temperature: temperature);
+        _call(
+          task,
+          role,
+          system,
+          user,
+          temperature: temperature,
+          isCancelled: isCancelled,
+        );
 
     task.status = PipelineTaskStatus.running;
     task.error = null;
@@ -265,7 +278,10 @@ class AiPipelineService {
       if (idx > task.config.maxChapters) break;
 
       final String goal = outlineText(ch['goal']);
-      final int target = (ch['target'] as num?)?.toInt() ?? 3000;
+      // LLM 大纲里的 target 也属于不可信输入：限制到可执行的最小/最大范围，
+      // 避免模型返回 0 或负数把质量门槛降到 1 字。
+      final int target =
+          ((ch['target'] as num?)?.toInt() ?? 3000).clamp(60, 20000);
       final String lastSummary = _lastChapterTail(task);
       task.addLog('===== 第 $idx 章（目标 $target 字）：$goal =====');
 
@@ -476,7 +492,20 @@ class AiPipelineService {
         }
       }
 
-      // 4) 章节标题（标题官）
+      // 4) 章节最低正文门槛：模型/端点全失败时不能把空章当成成功。
+      // 仍保留已有扩写与编辑链路作为正常降级路径；只有最终正文仍不足时才失败。
+      final int finalWords = _countWords(fullText);
+      final int minWords = target > 0 ? (target * 0.5).ceil() : 1;
+      if (fullText.trim().isEmpty || finalWords < minWords) {
+        task.status = PipelineTaskStatus.failed;
+        task.error = '第 $idx 章正文不足：仅 $finalWords 字，最低要求 $minWords 字';
+        task.finishedAt = DateTime.now();
+        task.addLog('  [失败] ${task.error}');
+        await _storage.saveTask(task);
+        return;
+      }
+
+      // 5) 章节标题（标题官）
       final String titleHint = outlineText(ch['title']);
       String title = titleHint.isEmpty ? '第$idx章' : titleHint;
       final String t = await call(
@@ -587,12 +616,16 @@ class AiPipelineService {
             );
             if (rewritten.trim().isNotEmpty) {
               final int wNew = _countWords(rewritten.trim());
-              task.addLog('  [重写] 第 $idx 章 $w 字 -> $wNew 字');
-              fullText = rewritten.trim();
-              w = wNew;
-              // 低分告警替换为「已重写」记录。
-              issues.removeWhere((String e) => e.contains('语义质量评分'));
-              issues.add('第 $idx 章 质量评分 $overall 分（<${task.config.rewriteThreshold}），已自动重写');
+              if (wNew < minWords) {
+                task.addLog('  [重写] 重写产出 $wNew 字，低于最低 $minWords 字，保留原文');
+              } else {
+                task.addLog('  [重写] 第 $idx 章 $w 字 -> $wNew 字');
+                fullText = rewritten.trim();
+                w = wNew;
+                // 低分告警替换为「已重写」记录。
+                issues.removeWhere((String e) => e.contains('语义质量评分'));
+                issues.add('第 $idx 章 质量评分 $overall 分（<${task.config.rewriteThreshold}），已自动重写');
+              }
             } else {
               task.addLog('  [重写] 第 $idx 章 重写失败，保留原文');
             }

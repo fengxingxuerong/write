@@ -311,15 +311,28 @@ class _ElapsedTickerState extends State<ElapsedTicker> {
   int _seconds = 0;
 
   @override
+  void initState() {
+    super.initState();
+    // 首次挂载即 running=true 时必须立刻计时；旧实现只在 didUpdateWidget
+    // 启动定时器，导致「AI 正在写」第一次出现时计时不走。
+    if (widget.running) _startTimer();
+  }
+
+  void _startTimer() {
+    if (_timer != null) return;
+    _timer = Timer.periodic(const Duration(seconds: 1), (Timer t) {
+      if (!mounted) return;
+      setState(() => _seconds = t.tick);
+      widget.onElapsed?.call(t.tick);
+    });
+  }
+
+  @override
   void didUpdateWidget(covariant ElapsedTicker old) {
     super.didUpdateWidget(old);
-    if (widget.running && _timer == null) {
-      _timer = Timer.periodic(const Duration(seconds: 1), (Timer t) {
-        if (!mounted) return;
-        setState(() => _seconds = t.tick);
-        widget.onElapsed?.call(t.tick);
-      });
-    } else if (!widget.running) {
+    if (widget.running) {
+      _startTimer();
+    } else {
       _timer?.cancel();
       _timer = null;
     }

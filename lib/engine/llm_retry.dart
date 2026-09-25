@@ -86,13 +86,40 @@ class RetryPolicy {
         final Duration delay =
             backoffFor(attempt, serverHint: retryAfterOf(e));
         onRetry?.call(attempt, delay, e);
-        await sleep(delay);
+        await _sleepOrCancel(delay, isCancelled);
       }
     }
     // 循环正常结束只会在 maxAttempts<=0 时发生。
     throw lastError is Exception
         ? lastError
         : EngineException('重试策略未产生结果', lastError ?? lastStack);
+  }
+
+  /// 等待退避；取消信号到达时立即结束，不等待完整 sleep。
+  Future<void> _sleepOrCancel(
+    Duration delay,
+    bool Function()? isCancelled,
+  ) async {
+    if (isCancelled == null) {
+      await sleep(delay);
+      return;
+    }
+    if (isCancelled()) {
+      throw const GenerationCancelledException();
+    }
+    final Completer<void> cancelled = Completer<void>();
+    final Timer poll = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (isCancelled() && !cancelled.isCompleted) {
+        cancelled.completeError(const GenerationCancelledException());
+      }
+    });
+    try {
+      await Future.any<void>(<Future<void>>[sleep(delay), cancelled.future]);
+      if (isCancelled()) throw const GenerationCancelledException();
+    } finally {
+      poll.cancel();
+      if (!cancelled.isCompleted) cancelled.complete();
+    }
   }
 
   /// HTTP 状态码是否值得重试。

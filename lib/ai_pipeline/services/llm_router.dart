@@ -42,13 +42,14 @@ abstract interface class LlmRouter {
     required String user,
     double? temperature,
     void Function(String logLine)? onLog,
+    bool Function()? isCancelled,
   });
 }
 
 /// 配额感知的链式路由默认实现。
 ///
 /// 与 Python 端 `_HEALTH` 健康池语义一致：
-/// - 以 `provider|baseUrl|model` 为粒度记录连续失败/冷却；
+/// - 以 `provider|baseUrl|model|apiKey 指纹` 为粒度记录连续失败/冷却；
 /// - 连续失败达到 [maxFailures] 次后进入 [cooldown] 冷却，冷却期间跳过该端点；
 /// - 命中一次非空正文即清零失败计数（自愈）。
 ///
@@ -96,14 +97,18 @@ class ChainLlmRouter implements LlmRouter {
     required String user,
     double? temperature,
     void Function(String logLine)? onLog,
+    bool Function()? isCancelled,
   }) async {
-    final List<LlmConfig> usable =
-        chain.where((LlmConfig c) => c.isConfigured).toList();
+    _throwIfCancelled(isCancelled);
+    final List<LlmConfig> usable = chain
+        .where((LlmConfig c) => c.isConfigured)
+        .toList();
     if (usable.isEmpty) {
       onLog?.call('链上无已配置端点');
       return const LlmRouteResult(content: '');
     }
     for (final LlmConfig cfg in usable) {
+      _throwIfCancelled(isCancelled);
       final String key = _key(cfg);
       if (_inCooldown(key)) {
         onLog?.call('${cfg.model} 冷却中，跳过');
@@ -123,6 +128,7 @@ class ChainLlmRouter implements LlmRouter {
           system,
           user,
           temperature: temperature ?? cfg.temperature,
+          isCancelled: isCancelled,
         );
         final String content = r.content.trim();
         if (content.isNotEmpty) {
@@ -130,10 +136,14 @@ class ChainLlmRouter implements LlmRouter {
           return LlmRouteResult(content: content, used: cfg);
         }
         onLog?.call('${cfg.model} 返回为空，尝试下一个');
+      } on GenerationCancelledException {
+        rethrow;
       } on LlmTransportException catch (e) {
         final bool enteredCooldown = _markFail(key);
-        onLog?.call('${cfg.model} 失败：${e.message}'
-            '${enteredCooldown ? '（进入冷却 ${cooldown.inMinutes} 分钟）' : ''}');
+        onLog?.call(
+          '${cfg.model} 失败：${e.message}'
+          '${enteredCooldown ? '（进入冷却 ${cooldown.inMinutes} 分钟）' : ''}',
+        );
       } catch (e) {
         final String s = e.toString();
         final String brief = s.length > 80 ? s.substring(0, 80) : s;
@@ -143,24 +153,31 @@ class ChainLlmRouter implements LlmRouter {
     return const LlmRouteResult(content: '');
   }
 
-  /// 端点身份 key（cooldown 按端点而非角色，跨角色共享健康状态）。
-  String _key(LlmConfig cfg) =>
-      '${cfg.provider.name}|${cfg.baseUrl}|${cfg.model}';
+  void _throwIfCancelled(bool Function()? isCancelled) {
+    if (isCancelled?.call() ?? false) {
+      throw const GenerationCancelledException();
+    }
+  }
+
+  /// 端点身份 key（cooldown 按端点与 API Key 隔离，跨角色共享健康状态）。
+  String _key(LlmConfig cfg) {
+    // 相同 URL/模型可能挂不同 API Key；冷却必须按凭据隔离，不能因一个 Key
+    // 配额耗尽而跳过整个模型。使用长度+hashCode 只作内存指纹，不把 Key 写入日志。
+    final String apiKeyFingerprint =
+        '${cfg.apiKey.length}:${cfg.apiKey.hashCode}';
+    return '${cfg.provider.name}|${cfg.baseUrl}|${cfg.model}|$apiKeyFingerprint';
+  }
 
   /// 是否处于冷却。
   bool _inCooldown(String key) {
     final _EndpointHealth? h = _health[key];
     if (h == null) return false;
-    return h.cooldownUntil != null &&
-        DateTime.now().isBefore(h.cooldownUntil!);
+    return h.cooldownUntil != null && DateTime.now().isBefore(h.cooldownUntil!);
   }
 
   /// 记录失败：达到阈值进入冷却并返回 true。
   bool _markFail(String key) {
-    final _EndpointHealth h = _health.putIfAbsent(
-      key,
-      () => _EndpointHealth(),
-    );
+    final _EndpointHealth h = _health.putIfAbsent(key, () => _EndpointHealth());
     h.failures++;
     if (h.failures >= maxFailures) {
       h.cooldownUntil = DateTime.now().add(cooldown);

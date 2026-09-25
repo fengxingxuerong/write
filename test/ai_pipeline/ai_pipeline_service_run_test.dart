@@ -8,6 +8,8 @@ import 'package:novel_writer/ai_pipeline/prompts/pipeline_prompts.dart';
 import 'package:novel_writer/ai_pipeline/services/ai_pipeline_service.dart';
 import 'package:novel_writer/ai_pipeline/services/llm_router.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
+import 'package:novel_writer/core/errors/app_exceptions.dart';
+import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
 /// AiPipelineService.run 编排全流程测试（_FakeRouter 替身，零网络）。
@@ -23,7 +25,7 @@ void main() {
 
   setUp(() {
     tempDir = Directory.systemTemp.createTempSync('pipeline_svc_test_');
-    storage = PipelineStorage(tempDir.path);
+    storage = PipelineStorage(tempDir.path, secretStore: InMemorySecretStore());
   });
 
   tearDown(() {
@@ -55,15 +57,13 @@ void main() {
   /// 平淡收尾（无钩子信号词）。
   const String blandTail = '林舟收拳而立，夜色归于平静。';
 
-  String body(String tag) =>
-      '林舟握紧拳头，迎着血煞盟的刀光冲了上去，$tag。' * 6;
+  String body(String tag) => '林舟握紧拳头，迎着血煞盟的刀光冲了上去，$tag。' * 6;
 
   /// 标准场景 1：钩子尾。
   final String scene1 = '${body('第一幕')}$hookTail';
 
   /// 标准场景 2：开头复述场景 1 结尾（触发衔接去重），结尾另带钩子。
-  final String scene2 =
-      '$hookTail${body('第二幕')}他抬头，竟然看见月亮变成了血色。';
+  final String scene2 = '$hookTail${body('第二幕')}他抬头，竟然看见月亮变成了血色。';
 
   // ---------------- 配置/任务构造 ----------------
 
@@ -83,21 +83,20 @@ void main() {
       AiRole.titler,
       AiRole.verifier,
     ],
-  }) =>
-      AiPipelineConfig(
-        totalWords: totalWords,
-        maxChapters: maxChapters,
-        genre: '玄幻',
-        protagonist: '林舟',
-        useEditor: useEditor,
-        useVerifier: useVerifier,
-        useQualityReview: useQualityReview,
-        qualityReviewEvery: qualityReviewEvery,
-        autoRewriteLowScore: autoRewriteLowScore,
-        rewriteThreshold: rewriteThreshold,
-        useStateTrack: useStateTrack,
-        roles: roles(activeRoles),
-      );
+  }) => AiPipelineConfig(
+    totalWords: totalWords,
+    maxChapters: maxChapters,
+    genre: '玄幻',
+    protagonist: '林舟',
+    useEditor: useEditor,
+    useVerifier: useVerifier,
+    useQualityReview: useQualityReview,
+    qualityReviewEvery: qualityReviewEvery,
+    autoRewriteLowScore: autoRewriteLowScore,
+    rewriteThreshold: rewriteThreshold,
+    useStateTrack: useStateTrack,
+    roles: roles(activeRoles),
+  );
 
   AiPipelineTask task(AiPipelineConfig cfg, {String id = 'task-1'}) =>
       AiPipelineTask(id: id, config: cfg, createdAt: DateTime(2026, 9, 1));
@@ -159,7 +158,7 @@ void main() {
 
   Future<AiPipelineTask> runTask(
     AiPipelineTask t,
-    _FakeRouter router, {
+    LlmRouter router, {
     bool Function()? isCancelled,
   }) async {
     int progress = 0;
@@ -185,12 +184,10 @@ void main() {
   String blandScene(String tag) => '${body(tag)}$blandTail';
 
   /// 过短场景（72 字：>50 且 < 场景阈值 120 → 触发写手续写补字）。
-  final String shortScene =
-      '${'林舟握紧拳头，迎着血煞盟的刀光冲了上去，短幕。' * 3}$blandTail';
+  final String shortScene = '${'林舟握紧拳头，迎着血煞盟的刀光冲了上去，短幕。' * 3}$blandTail';
 
   /// 整章扩充产出（>200 字且无钩子信号词）。
-  final String expansionText =
-      '扩写补丁：林舟提刀向前，脚步压过碎石，雾里的血煞盟退了一步。' * 12;
+  final String expansionText = '扩写补丁：林舟提刀向前，脚步压过碎石，雾里的血煞盟退了一步。' * 40;
 
   /// 多章大纲 JSON（断点续传 / 提前收官类用例）。
   String multiOutlineJson(List<int> idxs, {int target = 60}) =>
@@ -199,12 +196,14 @@ void main() {
         'world': '玄天大陆',
         'hook': '废柴觉醒',
         'chapter_outlines': idxs
-            .map((int i) => <String, dynamic>{
-                  'idx': i,
-                  'title': '第$i章标题',
-                  'target': target,
-                  'goal': '林舟觉醒武魂｜钩子=威胁逼近：血煞盟的人影一闪而逝',
-                })
+            .map(
+              (int i) => <String, dynamic>{
+                'idx': i,
+                'title': '第$i章标题',
+                'target': target,
+                'goal': '林舟觉醒武魂｜钩子=威胁逼近：血煞盟的人影一闪而逝',
+              },
+            )
             .toList(),
       });
 
@@ -226,8 +225,9 @@ void main() {
   group('AiPipelineService.run 编排', () {
     test('单章全流程：大纲 → 场景去重 → 标题 → 状态/伏笔台账落盘', () async {
       final AiPipelineConfig cfg = config(useStateTrack: true);
-      final _FakeRouter router =
-          _FakeRouter(baseRespond(outline: outlineJson()));
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(outline: outlineJson()),
+      );
       final AiPipelineTask t = await runTask(task(cfg), router);
 
       expect(t.status, PipelineTaskStatus.done);
@@ -255,17 +255,32 @@ void main() {
     });
 
     test('启动后取消：cancelled 且未生成任何章节', () async {
-      final _FakeRouter router =
-          _FakeRouter(baseRespond(outline: outlineJson()));
-      final AiPipelineTask t =
-          await runTask(task(config()), router, isCancelled: () => true);
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(outline: outlineJson()),
+      );
+      final AiPipelineTask t = await runTask(
+        task(config()),
+        router,
+        isCancelled: () => true,
+      );
 
       expect(t.status, PipelineTaskStatus.cancelled);
       expect(t.chapters, isEmpty);
       expect(joined(t), contains('[流水线] 已取消'));
       expect(router.systems, isNot(contains(writerSystemPrompt)));
-      expect((await storage.loadTask(t.id))?.status,
-          PipelineTaskStatus.cancelled);
+      expect(
+        (await storage.loadTask(t.id))?.status,
+        PipelineTaskStatus.cancelled,
+      );
+    });
+
+    test('路由取消异常会被流水线收敛为 cancelled', () async {
+      final AiPipelineTask t = await runTask(
+        task(config()),
+        _CancellingRouter(),
+      );
+      expect(t.status, PipelineTaskStatus.cancelled);
+      expect(joined(t), contains('[流水线] 已取消'));
     });
 
     test('大纲规划失败：failed 并记录原始产出', () async {
@@ -280,7 +295,8 @@ void main() {
 
     test('场景规划连续失败：默认「起承转合」骨架兜底', () async {
       final _FakeRouter router = _FakeRouter(
-          baseRespond(outline: outlineJson(), scenePlan: '规划官今天不在状态'));
+        baseRespond(outline: outlineJson(), scenePlan: '规划官今天不在状态'),
+      );
       final AiPipelineTask t = await runTask(task(config()), router);
 
       expect(t.status, PipelineTaskStatus.done);
@@ -289,12 +305,27 @@ void main() {
       expect(t.totalWords, greaterThan(400));
     });
 
+    test('写手全端点空响应：任务失败且不落空章', () async {
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(outline: outlineJson(), sceneTexts: const <String>['', '']),
+      );
+      final AiPipelineTask t = await runTask(task(config()), router);
+
+      expect(t.status, PipelineTaskStatus.failed);
+      expect(t.chapters, isEmpty);
+      expect(t.error, contains('正文不足'));
+      expect(joined(t), contains('[失败] 第 1 章正文不足'));
+      expect((await storage.loadTask(t.id))?.status, PipelineTaskStatus.failed);
+    });
+
     test('场景字数不足：写手续写补字拼进本章', () async {
-      final _FakeRouter router = _FakeRouter(baseRespond(
-        outline: outlineJson(),
-        sceneTexts: <String>[shortScene, scene2],
-        sceneAdd: '续写补丁：血煞盟的刀锋已抵在他喉前。',
-      ));
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          sceneTexts: <String>[shortScene, scene2],
+          sceneAdd: '续写补丁：血煞盟的刀锋已抵在他喉前。',
+        ),
+      );
       final AiPipelineTask t = await runTask(task(config()), router);
 
       expect(t.status, PipelineTaskStatus.done);
@@ -303,11 +334,13 @@ void main() {
     });
 
     test('整章字数不足半数：向目标字数扩充', () async {
-      final _FakeRouter router = _FakeRouter(baseRespond(
-        outline: outlineJson(target: 2000),
-        expansion: expansionText,
-        hookPatch: freshHook,
-      ));
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(target: 2000),
+          expansion: expansionText,
+          hookPatch: freshHook,
+        ),
+      );
       final AiPipelineTask t = await runTask(task(config()), router);
 
       expect(t.status, PipelineTaskStatus.done);
@@ -319,11 +352,13 @@ void main() {
     });
 
     test('章末缺钩：LLM 补写钩子被采纳', () async {
-      final _FakeRouter router = _FakeRouter(baseRespond(
-        outline: outlineJson(),
-        sceneTexts: <String>[blandScene('第一幕'), blandScene('第二幕')],
-        hookPatch: freshHook,
-      ));
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          sceneTexts: <String>[blandScene('第一幕'), blandScene('第二幕')],
+          hookPatch: freshHook,
+        ),
+      );
       final AiPipelineTask t = await runTask(task(config()), router);
 
       expect(t.status, PipelineTaskStatus.done);
@@ -334,11 +369,13 @@ void main() {
     });
 
     test('章末钩子补写被拒（指令残留）→ 章纲钩子本地兜底', () async {
-      final _FakeRouter router = _FakeRouter(baseRespond(
-        outline: outlineJson(),
-        sceneTexts: <String>[blandScene('第一幕'), blandScene('第二幕')],
-        hookPatch: '我拿到的指令是补写钩子，不是扩写正文。',
-      ));
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          sceneTexts: <String>[blandScene('第一幕'), blandScene('第二幕')],
+          hookPatch: '我拿到的指令是补写钩子，不是扩写正文。',
+        ),
+      );
       final AiPipelineTask t = await runTask(task(config()), router);
 
       expect(joined(t), contains('LLM 补写被拒'));
@@ -351,12 +388,16 @@ void main() {
 
     test('编辑润色：产出达标（≥85% 字数）即采纳', () async {
       final String polished = '${body('润色幕')}$hookTail';
-      final _FakeRouter router = _FakeRouter(baseRespond(
-        outline: outlineJson(),
-        editorOutputs: <String>['$polished\n\n$polished'],
-      ));
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          editorOutputs: <String>['$polished\n\n$polished'],
+        ),
+      );
       final AiPipelineTask t = await runTask(
-          task(config(useEditor: true, activeRoles: allRoles)), router);
+        task(config(useEditor: true, activeRoles: allRoles)),
+        router,
+      );
 
       expect(t.status, PipelineTaskStatus.done);
       expect(joined(t), contains('[编辑] 润色完成'));
@@ -365,12 +406,16 @@ void main() {
     });
 
     test('编辑润色：过度压缩（<85%）拒绝采纳并保留原文', () async {
-      final _FakeRouter router = _FakeRouter(baseRespond(
-        outline: outlineJson(),
-        editorOutputs: <String>['林舟握紧拳头，冲了上去。'],
-      ));
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          editorOutputs: <String>['林舟握紧拳头，冲了上去。'],
+        ),
+      );
       final AiPipelineTask t = await runTask(
-          task(config(useEditor: true, activeRoles: allRoles)), router);
+        task(config(useEditor: true, activeRoles: allRoles)),
+        router,
+      );
 
       expect(joined(t), contains('过度压缩（<85%），拒绝采纳保留原文'));
       final PipelineChapter ch = t.chapters.single;
@@ -380,14 +425,16 @@ void main() {
     });
 
     test('编辑无产出：保留原文并记录', () async {
-      final _FakeRouter router = _FakeRouter(baseRespond(
-        outline: outlineJson(),
-        editorOutputs: <String>[''],
-      ));
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(outline: outlineJson(), editorOutputs: <String>['']),
+      );
       final AiPipelineTask t = await runTask(
-          task(config(useEditor: true, activeRoles: allRoles),
-              id: 'task-editor-empty'),
-          router);
+        task(
+          config(useEditor: true, activeRoles: allRoles),
+          id: 'task-editor-empty',
+        ),
+        router,
+      );
 
       expect(t.status, PipelineTaskStatus.done);
       expect(joined(t), contains('[编辑] 润色失败，保留原文'));
@@ -395,21 +442,26 @@ void main() {
     });
 
     test('低分自动重写：评分 40 < 55 触发编辑定向重写并替换正文', () async {
-      const String lowScore = '{"scores":{"opening":30,"thrill":40,"hook":20,'
+      const String lowScore =
+          '{"scores":{"opening":30,"thrill":40,"hook":20,'
           '"motivation":50,"rhythm":60},"overall":40,"comment":"开篇迟缓"}';
       final String rewritten = '${body('重写幕')}$hookTail';
-      final _FakeRouter router = _FakeRouter(baseRespond(
-        outline: outlineJson(),
-        quality: lowScore,
-        editorOutputs: <String>[rewritten],
-      ));
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          quality: lowScore,
+          editorOutputs: <String>[rewritten],
+        ),
+      );
       final AiPipelineTask t = await runTask(
-        task(config(
-          useQualityReview: true,
-          autoRewriteLowScore: true,
-          rewriteThreshold: 55,
-          activeRoles: allRoles,
-        )),
+        task(
+          config(
+            useQualityReview: true,
+            autoRewriteLowScore: true,
+            rewriteThreshold: 55,
+            activeRoles: allRoles,
+          ),
+        ),
         router,
       );
 
@@ -417,22 +469,53 @@ void main() {
       expect(joined(t), contains('[评分] 第 1 章 综合 40 分'));
       expect(joined(t), contains('触发自动重写'));
       expect(t.chapters.single.content, contains('重写幕'));
-      expect(t.chapters.single.issues.any((String e) => e.contains('已自动重写')),
-          isTrue);
+      expect(
+        t.chapters.single.issues.any((String e) => e.contains('已自动重写')),
+        isTrue,
+      );
       // 低分告警被「已重写」记录替换，不留重复告警
       expect(
-          t.chapters.single.issues.any((String e) => e.contains('语义质量评分')),
-          isFalse);
+        t.chapters.single.issues.any((String e) => e.contains('语义质量评分')),
+        isFalse,
+      );
+    });
+
+    test('低分自动重写产出过短：拒绝替换并保留原文', () async {
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          editorOutputs: const <String>['过短'],
+          quality:
+              '{"scores":{"opening":40,"thrill":40,"hook":40,'
+              '"motivation":40,"rhythm":40},"overall":40,"comment":"需重写"}',
+        ),
+      );
+      final AiPipelineTask t = await runTask(
+        task(
+          config(
+            useEditor: true,
+            useQualityReview: true,
+            autoRewriteLowScore: true,
+            activeRoles: allRoles,
+          ),
+        ),
+        router,
+      );
+
+      expect(t.status, PipelineTaskStatus.done);
+      expect(t.chapters.single.content, contains(sceneHead));
+      expect(joined(t), contains('低于最低'));
+      expect(t.chapters.single.content, isNot(contains('过短')));
     });
 
     test('评分解析失败：跳过评分不阻断成书', () async {
-      final _FakeRouter router = _FakeRouter(baseRespond(
-        outline: outlineJson(),
-        quality: '模型今天不吐 JSON',
-      ));
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(outline: outlineJson(), quality: '模型今天不吐 JSON'),
+      );
       final AiPipelineTask t = await runTask(
-          task(config(useQualityReview: true, autoRewriteLowScore: true)),
-          router);
+        task(config(useQualityReview: true, autoRewriteLowScore: true)),
+        router,
+      );
 
       expect(t.status, PipelineTaskStatus.done);
       expect(joined(t), contains('评分解析失败，跳过（不影响生成）'));
@@ -440,13 +523,18 @@ void main() {
     });
 
     test('质量评审证据注入：verifier 评分 prompt 携带本地质检证据', () async {
-      final _FakeRouter router = _FakeRouter(baseRespond(
-        outline: outlineJson(),
-        quality: '{"scores":{"opening":80,"thrill":70,"hook":85,'
-            '"motivation":75,"rhythm":80},"overall":78,"comment":"稳健"}',
-      ));
-      final AiPipelineTask t =
-          await runTask(task(config(useQualityReview: true)), router);
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          quality:
+              '{"scores":{"opening":80,"thrill":70,"hook":85,'
+              '"motivation":75,"rhythm":80},"overall":78,"comment":"稳健"}',
+        ),
+      );
+      final AiPipelineTask t = await runTask(
+        task(config(useQualityReview: true)),
+        router,
+      );
 
       expect(t.status, PipelineTaskStatus.done);
       // 与 Python 端 qa_ev 同口径：钩子命中 + 爽点/异动密度注入评分 prompt，
@@ -465,13 +553,15 @@ void main() {
     test('断点续传：跳过已完成章节，并裁掉跨章衔接重叠', () async {
       final AiPipelineTask t0 = task(config())
         ..outline = outlineOf(<int>[1, 2])
-        ..chapters.add(const PipelineChapter(
-          idx: 1,
-          title: '旧章',
-          content: '旧正文。$sceneHead',
-          rawWords: 24,
-          words: 24,
-        ));
+        ..chapters.add(
+          const PipelineChapter(
+            idx: 1,
+            title: '旧章',
+            content: '旧正文。$sceneHead',
+            rawWords: 24,
+            words: 24,
+          ),
+        );
       t0.totalWords = 24;
       final _FakeRouter router = _FakeRouter(baseRespond());
       final AiPipelineTask t = await runTask(t0, router);
@@ -483,11 +573,14 @@ void main() {
       expect(joined(t), contains('章节衔接重叠，已裁剪'));
       // 大纲是预置的：全书规划官一次都不该被叫
       expect(
-          router.users.any((String u) => u.contains('chapter_outlines')), isFalse);
+        router.users.any((String u) => u.contains('chapter_outlines')),
+        isFalse,
+      );
       expect(t.chapterCount, 2);
       expect(
-          t.chapters.firstWhere((PipelineChapter c) => c.idx == 2).title,
-          '觉醒之夜');
+        t.chapters.firstWhere((PipelineChapter c) => c.idx == 2).title,
+        '觉醒之夜',
+      );
       expect(t.totalWords, greaterThan(200));
     });
 
@@ -517,20 +610,24 @@ void main() {
     test('每 5 章审校官介入：一致性问题入库 + 伏笔超时告警', () async {
       final AiPipelineTask t0 = task(config(useVerifier: true))
         ..outline = outlineOf(<int>[5])
-        ..chapters.add(const PipelineChapter(
-          idx: 4,
-          title: '旧章',
-          content: '旧正文。',
-          rawWords: 3,
-          words: 3,
-        ));
+        ..chapters.add(
+          const PipelineChapter(
+            idx: 4,
+            title: '旧章',
+            content: '旧正文。',
+            rawWords: 3,
+            words: 3,
+          ),
+        );
       t0.totalWords = 3;
-      final _FakeRouter router = _FakeRouter(baseRespond(
-        verifierIssues:
-            '{"issues":[{"chapter":5,"type":"设定矛盾","desc":"境界忽高忽低"}]}',
-        foreshadow:
-            '{"foreshadows":[{"desc":"血煞盟的追杀令","status":"open","planted":0}]}',
-      ));
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          verifierIssues:
+              '{"issues":[{"chapter":5,"type":"设定矛盾","desc":"境界忽高忽低"}]}',
+          foreshadow:
+              '{"foreshadows":[{"desc":"血煞盟的追杀令","status":"open","planted":0}]}',
+        ),
+      );
       final AiPipelineTask t = await runTask(t0, router);
 
       expect(t.status, PipelineTaskStatus.done);
@@ -538,19 +635,25 @@ void main() {
       expect(joined(t), contains('伏笔超时未收（已5章）')); // planted=0 → 第 5 章时已超期
       expect(joined(t), contains('血煞盟的追杀令'));
       expect(
-          t.chapters.last.issues.any((String e) => e.contains('第5章 设定矛盾')),
-          isTrue);
+        t.chapters.last.issues.any((String e) => e.contains('第5章 设定矛盾')),
+        isTrue,
+      );
     });
 
     test('未配置角色静默跳过：标题回退章纲标题', () async {
-      final _FakeRouter router =
-          _FakeRouter(baseRespond(outline: outlineJson()));
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(outline: outlineJson()),
+      );
       final AiPipelineTask t = await runTask(
-        task(config(activeRoles: <AiRole>[
-          AiRole.planner,
-          AiRole.writer,
-          AiRole.verifier,
-        ])),
+        task(
+          config(
+            activeRoles: <AiRole>[
+              AiRole.planner,
+              AiRole.writer,
+              AiRole.verifier,
+            ],
+          ),
+        ),
         router,
       );
 
@@ -583,6 +686,7 @@ class _FakeRouter implements LlmRouter {
     required String user,
     double? temperature,
     void Function(String logLine)? onLog,
+    bool Function()? isCancelled,
   }) async {
     systems.add(system);
     users.add(user);
@@ -594,3 +698,17 @@ class _FakeRouter implements LlmRouter {
   }
 }
 
+/// 取消路由替身：模拟 HTTP 层收到停止信号。
+class _CancellingRouter implements LlmRouter {
+  @override
+  Future<LlmRouteResult> call(
+    List<LlmConfig> chain, {
+    required String system,
+    required String user,
+    double? temperature,
+    void Function(String logLine)? onLog,
+    bool Function()? isCancelled,
+  }) async {
+    throw const GenerationCancelledException();
+  }
+}

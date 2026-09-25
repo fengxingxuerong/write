@@ -108,6 +108,38 @@ void saveCrashReporterConfigSync(
   } catch (_) {}
 }
 
+/// 上报前脱敏崩溃内容：去掉设备标识、API Key、Bearer Token 和常见密码字段。
+///
+/// 本地日志仍保留原始内容，方便用户自行排查；只有远程上报使用脱敏副本。
+String sanitizeCrashContent(String content) {
+  String sanitized = content;
+  // 先处理 Bearer，避免字段规则只吃掉 Bearer 而留下后面的 token。
+  sanitized = sanitized.replaceAll(
+    RegExp(r'\bBearer\s+[A-Za-z0-9._~+/=-]+', caseSensitive: false),
+    'Bearer [redacted]',
+  );
+  sanitized = sanitized.replaceAllMapped(
+    RegExp(
+      r'''(["']?(api[_-]?key|authorization|token|password|secret)["']?\s*[:=]\s*["']?)([^"',\s}]+)''',
+      caseSensitive: false,
+    ),
+    (Match match) => '${match.group(1)}[redacted]',
+  );
+  sanitized = sanitized.replaceAll(
+    RegExp(r'\b(sk|pk)-[A-Za-z0-9_-]{8,}\b', caseSensitive: false),
+    '[redacted-key]',
+  );
+  sanitized = sanitized.replaceAll(
+    RegExp(r'^(\s*machineId\s*:\s*).*$', multiLine: true),
+    r'$1[redacted]',
+  );
+  sanitized = sanitized.replaceAll(
+    RegExp(r'([a-z]:\\users\\)[^\\\r\n]+', caseSensitive: false),
+    r'$1[redacted]',
+  );
+  return sanitized;
+}
+
 /// 上报一条崩溃日志。
 ///
 /// 返回 true 表示服务器已接受（HTTP 2xx）；其它情况抛 [CrashReportException]。
@@ -142,10 +174,10 @@ Future<bool> uploadCrashLog({
     request.headers.set(HttpHeaders.userAgentHeader, 'MojiangInkSmith/0.1');
     request.write(
       jsonEncode(<String, dynamic>{
-        'machineId': machineId,
+        'machineId': '[redacted]',
         'version': '0.1.0',
         'file': fileName,
-        'content': content,
+        'content': sanitizeCrashContent(content),
         'uploadedAt': DateTime.now().toIso8601String(),
       }),
     );

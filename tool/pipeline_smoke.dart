@@ -6,6 +6,7 @@ import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 import 'package:novel_writer/ai_pipeline/services/ai_pipeline_service.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
+import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
 Future<void> main() async {
@@ -92,7 +93,10 @@ Future<void> main() async {
 
   final String dirPath =
       '${Directory.systemTemp.path}${Platform.pathSeparator}ink_smoke';
-  final PipelineStorage storage = PipelineStorage(dirPath);
+  final PipelineStorage storage = PipelineStorage(
+    dirPath,
+    secretStore: InMemorySecretStore(),
+  );
   final AiPipelineTask task = AiPipelineTask(
     id: 'smoke${DateTime.now().millisecondsSinceEpoch}',
     config: config,
@@ -102,22 +106,24 @@ Future<void> main() async {
 
   final StringBuffer log = StringBuffer()
     ..writeln('[SMOKE] 启动：目标 ${config.totalWords} 字')
-    ..writeln('[SMOKE] 角色：'
-        '规划=${config.roleOf(AiRole.planner).llm.model} '
-        '写手=${config.roleOf(AiRole.writer).llm.model} '
-        '编辑=${config.roleOf(AiRole.editor).llm.model} '
-        '标题=${config.roleOf(AiRole.titler).llm.model} '
-        '审校=${config.roleOf(AiRole.verifier).llm.model}');
+    ..writeln(
+      '[SMOKE] 角色：'
+      '规划=${config.roleOf(AiRole.planner).llm.model} '
+      '写手=${config.roleOf(AiRole.writer).llm.model} '
+      '编辑=${config.roleOf(AiRole.editor).llm.model} '
+      '标题=${config.roleOf(AiRole.titler).llm.model} '
+      '审校=${config.roleOf(AiRole.verifier).llm.model}',
+    );
 
   await service.run(
     task,
     isCancelled: () => false,
     onProgress: () {
-      log.writeln(
-          '[SMOKE] 进度：${task.chapterCount} 章 / ${task.totalWords} 字');
+      log.writeln('[SMOKE] 进度：${task.chapterCount} 章 / ${task.totalWords} 字');
       // 实时进度落盘（stdout 重定向有块缓冲，文件最可靠）
       final File progressFile = File(
-          '$dirPath${Platform.pathSeparator}smoke_progress.txt');
+        '$dirPath${Platform.pathSeparator}smoke_progress.txt',
+      );
       progressFile.writeAsStringSync(
         '${DateTime.now().toIso8601String().substring(11, 19)} '
         '${task.chapterCount} 章 / ${task.totalWords} 字\n',
@@ -126,8 +132,10 @@ Future<void> main() async {
     },
   );
 
-  log.writeln('[SMOKE] 状态：${task.status.name}'
-      '${task.status == PipelineTaskStatus.failed ? ' | 错误: ${task.error}' : ''}');
+  log.writeln(
+    '[SMOKE] 状态：${task.status.name}'
+    '${task.status == PipelineTaskStatus.failed ? ' | 错误: ${task.error}' : ''}',
+  );
   // 失败时附上任务日志尾部，便于诊断
   if (task.status == PipelineTaskStatus.failed) {
     final List<String> tail = task.log.length > 15
@@ -141,8 +149,9 @@ Future<void> main() async {
   for (final PipelineChapter ch in task.chapters) {
     final Map<String, dynamic> qa = PipelineQa.chapterReport(ch);
     log.writeln(
-        '  第${ch.idx}章《${ch.title}》${ch.words}字(raw=${ch.rawWords}) '
-        'AI味=${qa['aiEcho']}% 重复=${qa['repetition']} 节奏=${qa['rhythm']}');
+      '  第${ch.idx}章《${ch.title}》${ch.words}字(raw=${ch.rawWords}) '
+      'AI味=${qa['aiEcho']}% 重复=${qa['repetition']} 节奏=${qa['rhythm']}',
+    );
     if (ch.issues.isNotEmpty) {
       for (final String iss in ch.issues) {
         log.writeln('    ⚠ $iss');
@@ -167,5 +176,7 @@ Future<void> main() async {
   // 结果写入文件（避免控制台编码问题）
   final File result = File('$dirPath${Platform.pathSeparator}smoke_result.txt');
   await result.writeAsString(log.toString(), flush: true);
-  stdout.writeln('[SMOKE] 完成，详见 $dirPath${Platform.pathSeparator}smoke_result.txt');
+  stdout.writeln(
+    '[SMOKE] 完成，详见 $dirPath${Platform.pathSeparator}smoke_result.txt',
+  );
 }

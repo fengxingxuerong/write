@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 import 'package:novel_writer/ai_pipeline/services/novel_importer.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
+import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/models/llm_config.dart';
 import 'package:novel_writer/storage/app_database.dart';
 import 'package:novel_writer/storage/novel_repository.dart';
@@ -14,7 +15,7 @@ void main() {
 
   setUp(() {
     tmpDir = Directory.systemTemp.createTempSync('pipeline_test_');
-    storage = PipelineStorage(tmpDir.path);
+    storage = PipelineStorage(tmpDir.path, secretStore: InMemorySecretStore());
   });
 
   tearDown(() {
@@ -100,15 +101,29 @@ void main() {
         createdAt: DateTime(2026),
       );
 
+      // 同一任务 id 的并发导入共享结果，不能重复建书。
+      final AiPipelineTask duplicateTask = AiPipelineTask.fromJson(
+        task.toJson(),
+      );
+      final List<String> concurrentIds = await Future.wait(<Future<String>>[
+        importer.importTask(task),
+        importer.importTask(duplicateTask),
+      ]);
+      expect(concurrentIds, everyElement(concurrentIds.first));
+      expect(task.importedNovelId, concurrentIds.first);
+      expect(duplicateTask.importedNovelId, concurrentIds.first);
+
+      // 调用方未及时回写 importedNovelId 时，重复调用仍返回同一 id。
+      task.importedNovelId = null;
       final String id = await importer.importTask(task);
-      expect(id, isNotEmpty);
+      expect(id, concurrentIds.first);
       task.importedNovelId = id;
 
       // 幂等：再次导入返回同一 id，不重复建书
       final String id2 = await importer.importTask(task);
       expect(id2, id);
 
-      // 书架中项目存在且章节正确
+      // 书架中只存在一个项目，且章节正确
       final novel = await repo.getNovel(id);
       expect(novel.title, '测试之书');
       expect(novel.genre, '玄幻');
@@ -118,8 +133,44 @@ void main() {
 
       // 索引摘要同步
       final summaries = await repo.listNovels();
+      expect(summaries, hasLength(1));
       expect(summaries.first.id, id);
       expect(summaries.first.chapterCount, 2);
+    });
+
+    test('不同 NovelImporter 实例也能通过稳定 id 恢复幂等', () async {
+      final AppDatabase db = AppDatabase.initForTest(
+        '${tmpDir.path}${Platform.pathSeparator}db-cross-instance',
+      );
+      final NovelRepository repo = NovelRepository(db);
+      final AiPipelineTask task = AiPipelineTask(
+        id: 'cross-instance-task',
+        config: const AiPipelineConfig(genre: '玄幻'),
+        outline: const <String, dynamic>{'title': '跨实例测试'},
+        chapters: const <PipelineChapter>[
+          PipelineChapter(
+            idx: 1,
+            title: '第一章',
+            content: '跨实例正文',
+            rawWords: 5,
+            words: 5,
+          ),
+        ],
+        createdAt: DateTime(2026),
+      );
+
+      final String firstId = await NovelImporter(repo, db).importTask(task);
+      final AiPipelineTask reloaded = AiPipelineTask.fromJson(task.toJson())
+        ..importedNovelId = null;
+      final String secondId = await NovelImporter(
+        repo,
+        db,
+      ).importTask(reloaded);
+
+      expect(secondId, firstId);
+      expect(reloaded.importedNovelId, firstId);
+      expect(await repo.listNovels(), hasLength(1));
+      expect((await repo.getNovel(firstId)).chapters, hasLength(1));
     });
 
     test('空章节任务导入抛异常', () async {

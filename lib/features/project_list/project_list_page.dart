@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -31,6 +32,7 @@ class ProjectListPage extends ConsumerStatefulWidget {
 class _ProjectListPageState extends ConsumerState<ProjectListPage> {
   final TextEditingController _search = TextEditingController();
   String _sort = 'updated';
+  bool _importingBackup = false;
 
   @override
   void initState() {
@@ -56,6 +58,7 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
       body: Column(
         children: <Widget>[
           _Masthead(
+            onImport: _importBackup,
             novelCount: state.novels.length,
             totalWords:
                 state.novels.fold<int>(0, (int a, NovelSummary n) => a + n.wordCount),
@@ -75,6 +78,7 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
             onSort: (String s) => setState(() => _sort = s),
             onSearch: (String q) =>
                 ref.read(projectListViewModelProvider.notifier).setQuery(q),
+            onImport: _importBackup,
             onCreate: _showCreateDialog,
           ),
           Container(height: AppTokens.hairline, color: ink.divider),
@@ -91,6 +95,7 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
                         .read(projectListViewModelProvider.notifier)
                         .setArchived(n.id, !n.archived),
                     onDelete: _confirmDelete,
+                    onImport: _importBackup,
                     onCreate: _showCreateDialog,
                   ),
           ),
@@ -110,6 +115,36 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
         .create(draft.title, draft.genre, draft.tone);
     if (!mounted) return;
     AppToast.success(context, '《${draft.title}》已创建');
+  }
+
+  /// 从 JSON 备份恢复作品。备份中的 ID 会被重新生成，避免覆盖现有作品。
+  Future<void> _importBackup() async {
+    if (_importingBackup) return;
+    setState(() => _importingBackup = true);
+    try {
+      final FilePickerResult? picked = await FilePicker.platform.pickFiles(
+        dialogTitle: '选择墨匠 JSON 备份',
+        type: FileType.custom,
+        allowedExtensions: <String>['json'],
+      );
+      if (picked == null || picked.files.isEmpty) return;
+      final String? path = picked.files.single.path;
+      if (path == null || path.isEmpty) {
+        throw const FormatException('备份文件没有可用路径');
+      }
+      final Novel? imported = await ref
+          .read(projectListViewModelProvider.notifier)
+          .importBackup(File(path));
+      if (!mounted || imported == null) return;
+      AppToast.success(
+        context,
+        '《${imported.title}》已恢复为新作品，原备份文件未修改',
+      );
+    } catch (e) {
+      if (mounted) AppToast.error(context, '导入备份失败：$e');
+    } finally {
+      if (mounted) setState(() => _importingBackup = false);
+    }
   }
 
   /// 全书体检：加载完整项目后弹出报告（NovelSummary 不含正文，需先取全量）。
@@ -160,10 +195,15 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
 
 /// 顶部刊头：品牌 + 标题 + 总量 + 全局动作。
 class _Masthead extends ConsumerWidget {
-  const _Masthead({required this.novelCount, required this.totalWords});
+  const _Masthead({
+    required this.novelCount,
+    required this.totalWords,
+    required this.onImport,
+  });
 
   final int novelCount;
   final int totalWords;
+  final VoidCallback onImport;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -214,6 +254,11 @@ class _Masthead extends ConsumerWidget {
           ActionGroup(
             children: <Widget>[
               ToolButton(
+                icon: Icons.file_upload_outlined,
+                label: '导入 JSON 备份',
+                onPressed: onImport,
+              ),
+              ToolButton(
                 icon: Icons.auto_awesome,
                 label: 'AI 长篇小说流水线',
                 tone: ink.accent,
@@ -255,6 +300,7 @@ class _Toolbar extends StatelessWidget {
     required this.onFilter,
     required this.onSort,
     required this.onSearch,
+    required this.onImport,
     required this.onCreate,
   });
 
@@ -264,6 +310,7 @@ class _Toolbar extends StatelessWidget {
   final ValueChanged<String> onFilter;
   final ValueChanged<String> onSort;
   final ValueChanged<String> onSearch;
+  final VoidCallback onImport;
   final VoidCallback onCreate;
 
   @override
@@ -316,6 +363,12 @@ class _Toolbar extends StatelessWidget {
           const Spacer(),
           _SortMenu(sort: sort, onSort: onSort),
           const SizedBox(width: AppTokens.s3),
+          OutlinedButton.icon(
+            onPressed: onImport,
+            icon: const Icon(Icons.file_upload_outlined, size: 17),
+            label: const Text('导入备份'),
+          ),
+          const SizedBox(width: AppTokens.s2),
           FilledButton.icon(
             onPressed: onCreate,
             icon: const Icon(Icons.add, size: 17),
@@ -397,6 +450,7 @@ class _Bookshelf extends StatelessWidget {
     required this.onRename,
     required this.onArchive,
     required this.onDelete,
+    required this.onImport,
     required this.onCreate,
   });
 
@@ -407,6 +461,7 @@ class _Bookshelf extends StatelessWidget {
   final ValueChanged<NovelSummary> onRename;
   final ValueChanged<NovelSummary> onArchive;
   final ValueChanged<NovelSummary> onDelete;
+  final VoidCallback onImport;
   final VoidCallback onCreate;
 
   @override
@@ -422,6 +477,8 @@ class _Bookshelf extends StatelessWidget {
               hint: '新建一部作品，或让 AI 流水线从一句灵感开始铺出整本大纲。',
               actionLabel: '新建作品',
               onAction: onCreate,
+              secondaryLabel: '导入备份',
+              onSecondary: onImport,
             )
           : const EmptyState(
               icon: Icons.search_off,
@@ -583,14 +640,14 @@ class _ThemeToggle extends ConsumerWidget {
         ThemeMode.light => '浅色',
         _ => '跟随系统',
       }}）',
-      onPressed: () {
+      onPressed: () async {
         const List<ThemeMode> order = <ThemeMode>[
           ThemeMode.light,
           ThemeMode.dark,
           ThemeMode.system,
         ];
         final int next = (order.indexOf(mode) + 1) % order.length;
-        ref.read(themeModeProvider.notifier).state = order[next];
+        await setAppThemeMode(ref, order[next]);
       },
     );
   }

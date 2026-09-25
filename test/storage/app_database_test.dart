@@ -80,6 +80,29 @@ void main() {
       expect(order, [1, 2]);
     });
 
+    test('会创建跨进程锁文件并在释放后保留空锁文件', () async {
+      final File lockFile = File('${tempDir.path}/file-lock.lock');
+      await db.withNovelLock('file-lock', () async {
+        expect(lockFile.existsSync(), isTrue);
+      });
+      expect(lockFile.existsSync(), isTrue);
+    });
+
+    test('不同 AppDatabase 实例共享同一项目锁', () async {
+      final AppDatabase other = AppDatabase.initForTest(tempDir.path);
+      final List<int> order = <int>[];
+      await Future.wait(<Future<void>>[
+        db.withNovelLock('shared-id', () async {
+          order.add(1);
+          await Future<void>.delayed(const Duration(milliseconds: 30));
+        }),
+        other.withNovelLock('shared-id', () async {
+          order.add(2);
+        }),
+      ]);
+      expect(order, <int>[1, 2]);
+    });
+
     test('不同 novelId 的 action 可并发', () async {
       final Stopwatch stopwatch = Stopwatch()..start();
 

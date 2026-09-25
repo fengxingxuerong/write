@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -10,6 +13,7 @@ import 'package:novel_writer/features/generate/generate_viewmodel.dart';
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/character.dart';
 import 'package:novel_writer/models/generation_config.dart';
+import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/models/llm_config.dart';
 import 'package:novel_writer/models/world_setting.dart';
 import 'package:novel_writer/services/sensitive_words.dart';
@@ -31,10 +35,11 @@ class _EngineCall {
 
 /// 可编程的假引擎：记录每次调用的 continuation，返回固定内容。
 class _FakeEngine implements GenerationEngine {
-  _FakeEngine({this.failAt = -1, this.cancelledAt = -1});
+  _FakeEngine({this.failAt = -1, this.cancelledAt = -1, this.throwRawAt = -1});
 
   final int failAt;
   final int cancelledAt;
+  final int throwRawAt;
   final List<_EngineCall> calls = <_EngineCall>[];
   int _callCount = 0;
 
@@ -47,16 +52,17 @@ class _FakeEngine implements GenerationEngine {
   }) async {
     final int i = _callCount++;
     calls.add(_EngineCall(i, config.continuation, config, ctx));
-    onProgress?.call(const GenerationProgress(
-      charsWritten: 2,
-      targetWords: 4,
-      stage: '写中',
-    ));
+    onProgress?.call(
+      const GenerationProgress(charsWritten: 2, targetWords: 4, stage: '写中'),
+    );
     if (i == failAt) {
       throw const EngineException('引擎失败');
     }
     if (i == cancelledAt) {
       throw const GenerationCancelledException();
+    }
+    if (i == throwRawAt) {
+      throw StateError('非应用异常');
     }
     return GenerationResult(
       content: '第${i + 1}章正文',
@@ -81,16 +87,39 @@ class _StreamPreviewEngine implements GenerationEngine {
     for (int k = 0; k < 3; k++) {
       buf.write('段${k + 1}');
       sentPreviews.add(buf.toString());
-      onProgress?.call(GenerationProgress(
-        charsWritten: buf.length,
-        targetWords: 4,
-        stage: '写中',
-        previewText: buf.toString(),
-      ));
+      onProgress?.call(
+        GenerationProgress(
+          charsWritten: buf.length,
+          targetWords: 4,
+          stage: '写中',
+          previewText: buf.toString(),
+        ),
+      );
     }
     return GenerationResult(
       content: buf.toString(),
       actualWords: buf.length,
+      usedConfig: config,
+    );
+  }
+}
+
+/// 固定内容引擎：用于驱动 LLM 质量/标题/摘要分支。
+class _StaticEngine implements GenerationEngine {
+  _StaticEngine(this.content);
+
+  final String content;
+
+  @override
+  Future<GenerationResult> generate(
+    GenerationConfig config,
+    ContextBundle ctx, {
+    CancelToken? cancelToken,
+    void Function(GenerationProgress)? onProgress,
+  }) async {
+    return GenerationResult(
+      content: content,
+      actualWords: content.length,
       usedConfig: config,
     );
   }
@@ -130,6 +159,11 @@ class _FakeChapterRepo implements ChapterRepository {
   }
 
   @override
+  Future<List<Chapter>> listChapters(String novelId) async =>
+      List<Chapter>.from(saved)
+        ..sort((Chapter a, Chapter b) => a.order.compareTo(b.order));
+
+  @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('${invocation.memberName} 不应在测试中调用');
 }
@@ -157,12 +191,7 @@ void main() {
         _fakeRef(),
       );
 
-      await vm.generate(
-        _cfg(chapterCount: 3),
-        _bundle(),
-        1,
-        '第1章',
-      );
+      await vm.generate(_cfg(chapterCount: 3), _bundle(), 1, '第1章');
 
       expect(engine.calls.length, equals(3));
       expect(repo.saved.length, equals(3));
@@ -182,12 +211,7 @@ void main() {
         _fakeRef(),
       );
 
-      await vm.generate(
-        _cfg(chapterCount: 3),
-        _bundle(),
-        1,
-        '第1章',
-      );
+      await vm.generate(_cfg(chapterCount: 3), _bundle(), 1, '第1章');
 
       // 第 1 章：无承接（或传入的 config.continuation）。
       // 第 2 章起：承接上一章正文结尾。
@@ -210,12 +234,7 @@ void main() {
         _fakeRef(),
       );
 
-      await vm.generate(
-        _cfg(chapterCount: 3),
-        _bundle(),
-        1,
-        '第1章',
-      );
+      await vm.generate(_cfg(chapterCount: 3), _bundle(), 1, '第1章');
 
       expect(repo.saved.length, equals(1)); // 只保住第 1 章
       expect(vm.state.isGenerating, isFalse);
@@ -233,12 +252,7 @@ void main() {
         _fakeRef(),
       );
 
-      await vm.generate(
-        _cfg(chapterCount: 3),
-        _bundle(),
-        1,
-        '第1章',
-      );
+      await vm.generate(_cfg(chapterCount: 3), _bundle(), 1, '第1章');
 
       expect(repo.saved.length, equals(1));
       expect(vm.state.error, contains('已取消'));
@@ -276,12 +290,7 @@ void main() {
         _fakeRef(),
       );
 
-      await vm.generate(
-        _cfg(),
-        _bundle(),
-        1,
-        '第1章',
-      );
+      await vm.generate(_cfg(), _bundle(), 1, '第1章');
 
       expect(engine.calls.length, equals(1));
       expect(vm.state.isGenerating, isFalse);
@@ -297,12 +306,7 @@ void main() {
         _fakeRef(),
       );
 
-      await vm.generate(
-        _cfg(),
-        _bundle(),
-        1,
-        '第1章',
-      );
+      await vm.generate(_cfg(), _bundle(), 1, '第1章');
 
       // 引擎回报的 previewText 应出现在 state（供 UI 实时显示）。
       expect(engine.sentPreviews.length, greaterThan(0));
@@ -320,12 +324,7 @@ void main() {
       // 伪造上次残留预览。
       vm.state = vm.state.copyWith(previewText: '残留旧文');
 
-      await vm.generate(
-        _cfg(),
-        _bundle(),
-        1,
-        '第1章',
-      );
+      await vm.generate(_cfg(), _bundle(), 1, '第1章');
 
       // _FakeEngine 不回报 previewText：清除后应保持 null（无残留旧文）。
       expect(vm.state.previewText, isNull);
@@ -374,7 +373,10 @@ void main() {
       const summary = '第1章：林舟负伤离城，钥匙交给苏晚。';
 
       await vm.generate(
-        _cfg(), _bundle().copyWith(plotSummary: summary), 2, '返城',
+        _cfg(),
+        _bundle().copyWith(plotSummary: summary),
+        2,
+        '返城',
       );
       expect(vm.state.error, isNull);
       expect(engine.calls.single.plotSummary, summary);
@@ -395,9 +397,7 @@ void main() {
       );
       await vm.generate(
         _cfg(chapterCount: 2),
-        _bundle().copyWith(
-          plotSummary: '旧章甲\r\n\r\n旧章乙\n  旧章丙  \n旧章丁\n',
-        ),
+        _bundle().copyWith(plotSummary: '旧章甲\r\n\r\n旧章乙\n  旧章丙  \n旧章丁\n'),
         5,
         '重逢',
       );
@@ -450,14 +450,172 @@ void main() {
       expect(last, contains('第4章：'));
       expect(last, isNot(contains('第1章：')));
     });
+
+    test('chapterCount=0 按单章兜底，不进入负数循环', () async {
+      final engine = _FakeEngine();
+      final repo = _FakeChapterRepo();
+      final vm = GenerateViewModel(
+        engine,
+        repo,
+        _FakeSettingRepo(),
+        'n1',
+        _fakeRef(),
+      );
+
+      await vm.generate(_cfg(chapterCount: 0), _bundle(), 1, '第1章');
+
+      expect(engine.calls, hasLength(1));
+      expect(repo.saved, hasLength(1));
+      expect(vm.state.error, isNull);
+      expect(vm.state.progress, 1);
+    });
+
+    test('取消后再次生成会复位令牌并正常完成', () async {
+      final engine = _FakeEngine();
+      final repo = _FakeChapterRepo();
+      final vm = GenerateViewModel(
+        engine,
+        repo,
+        _FakeSettingRepo(),
+        'n1',
+        _fakeRef(),
+      );
+      vm.cancel();
+
+      await vm.generate(_cfg(), _bundle(), 1, '第1章');
+
+      expect(engine.calls, hasLength(1));
+      expect(repo.saved, hasLength(1));
+      expect(vm.state.isGenerating, isFalse);
+      expect(vm.state.error, isNull);
+      expect(vm.state.progress, 1);
+    });
+
+    test('引擎抛非 AppException：统一包装为“生成出错”且不落库', () async {
+      final engine = _FakeEngine(throwRawAt: 0);
+      final repo = _FakeChapterRepo();
+      final vm = GenerateViewModel(
+        engine,
+        repo,
+        _FakeSettingRepo(),
+        'n1',
+        _fakeRef(),
+      );
+
+      await vm.generate(_cfg(), _bundle(), 1, '第1章');
+
+      expect(repo.saved, isEmpty);
+      expect(vm.state.isGenerating, isFalse);
+      expect(vm.state.error, startsWith('生成出错：'));
+      expect(vm.state.error, contains('非应用异常'));
+    });
+
+    test('卷纲按行数均分，余数优先分配给靠前章节', () async {
+      final engine = _FakeEngine();
+      final repo = _FakeChapterRepo();
+      final vm = GenerateViewModel(
+        engine,
+        repo,
+        _FakeSettingRepo(),
+        'n1',
+        _fakeRef(),
+      );
+
+      await vm.generate(
+        _cfg(chapterCount: 2, volumeOutline: '第一句\n第二句\n第三句'),
+        _bundle(),
+        1,
+        '第1章',
+      );
+
+      expect(engine.calls, hasLength(2));
+      expect(engine.calls[0].ctx.outline, '第一句\n第二句');
+      expect(engine.calls[1].ctx.outline, '第三句');
+    });
+
+    test('LLM 已配置：质检润色 / 番茄闸门 / AI 标题 / 前情提要 / 一致性全链路', () async {
+      final List<String> systems = <String>[];
+      final HttpServer server = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      server.listen((HttpRequest req) async {
+        final String raw = await utf8.decoder.bind(req).join();
+        final Map<String, dynamic> body =
+            jsonDecode(raw) as Map<String, dynamic>;
+        final List<dynamic> messages = body['messages'] as List<dynamic>;
+        final String system = messages.first['content'] as String;
+        systems.add(system);
+        final String out;
+        if (system.contains('章节标题编辑')) {
+          out = '觉醒之夜';
+        } else if (system.contains('剧情记录员')) {
+          out = '主角觉醒武魂，退婚者当众失态。';
+        } else if (system.contains('资深中文小说编辑')) {
+          out = '林舟按住刀柄。院墙外的脚步停在门口，他没有回头。';
+        } else {
+          out = '林舟按住刀柄。';
+        }
+        req.response
+          ..headers.contentType = ContentType.json
+          ..write(
+            jsonEncode(<String, dynamic>{
+              'choices': <Map<String, dynamic>>[
+                <String, dynamic>{
+                  'message': <String, dynamic>{'content': out},
+                },
+              ],
+            }),
+          );
+        await req.response.close();
+      });
+
+      try {
+        final _StaticEngine engine = _StaticEngine(
+          '他深吸一口气，嘴角勾起一抹笑意。${'命运的车轮开始转动。' * 4}',
+        );
+        final _FakeChapterRepo repo = _FakeChapterRepo();
+        final GenerateViewModel vm = GenerateViewModel(
+          engine,
+          repo,
+          _FakeSettingRepo(),
+          'n1',
+          _InjectedRef(
+            llm: LlmSettingsState(
+              useLlm: true,
+              autoMemory: false,
+              config: LlmConfig(
+                provider: LlmProvider.openaiCompatible,
+                model: 'fake-model',
+                apiKey: 'sk-test',
+                baseUrl: 'http://127.0.0.1:${server.port}/v1',
+              ),
+            ),
+            sensitive: SensitiveWordsService(),
+          ),
+        );
+
+        await vm.generate(_cfg(chapterCount: 2), _bundle(), 1, '第1章');
+
+        expect(vm.state.error, isNull);
+        expect(vm.state.isGenerating, isFalse);
+        expect(repo.saved, hasLength(2));
+        expect(vm.state.qualityNote, isNotNull);
+        expect(vm.state.qualityNote!.polished, isTrue);
+        expect(repo.saved.first.title, contains('觉醒之夜'));
+        expect(repo.saved.first.content, isNot(contains('嘴角勾起')));
+        expect(vm.state.consistencyReport, isNotNull);
+        expect(systems.any((String s) => s.contains('章节标题编辑')), isTrue);
+        expect(systems.any((String s) => s.contains('剧情记录员')), isTrue);
+      } finally {
+        await server.close(force: true);
+      }
+    });
   });
 }
 
 /// 构造最小 GenerationConfig（genre/tone/targetWords/constraints 必填）。
-GenerationConfig _cfg({
-  int chapterCount = 1,
-  String volumeOutline = '',
-}) {
+GenerationConfig _cfg({int chapterCount = 1, String volumeOutline = ''}) {
   return GenerationConfig(
     genre: 'xuanhuan',
     tone: '热血',
@@ -486,10 +644,13 @@ Ref _fakeRef() {
   final container = ProviderContainer(
     overrides: [
       llmSettingsProvider.overrideWith(
-        (ref) => LlmSettingsController(LlmSettingsRepository(
-          // 测试不落盘：controller 只被 read，不触发持久化路径。
-          '.',
-        )),
+        (ref) => LlmSettingsController(
+          LlmSettingsRepository(
+            // 测试不落盘：controller 只被 read，不触发持久化路径。
+            '.',
+            secretStore: InMemorySecretStore(),
+          ),
+        ),
       ),
       sensitiveWordsProvider.overrideWithValue(SensitiveWordsService()),
     ],
@@ -498,7 +659,25 @@ Ref _fakeRef() {
   return _ContainerRef(container);
 }
 
-/// 最小 Ref 包装：只把 read 委托给 container（ViewModel 仅用 read）。
+/// 注入式 Ref：直接返回预构造的 LLM 设置与敏感词服务，绕开异步落盘加载。
+class _InjectedRef implements Ref {
+  _InjectedRef({required this.llm, required this.sensitive});
+
+  final LlmSettingsState llm;
+  final SensitiveWordsService sensitive;
+
+  @override
+  T read<T>(ProviderListenable<T> provider) {
+    if (identical(provider, llmSettingsProvider)) return llm as T;
+    if (identical(provider, sensitiveWordsProvider)) return sensitive as T;
+    throw UnimplementedError('测试不支持的 provider：$provider');
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName} 不应被调用');
+}
+
 class _ContainerRef implements Ref {
   _ContainerRef(this._container);
 

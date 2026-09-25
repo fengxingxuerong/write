@@ -15,10 +15,25 @@ enum ReaderTheme {
   dark,
 }
 
+/// 应用界面主题偏好。与阅读器主题分离，但共用 app_settings.json。
+enum AppThemeMode {
+  /// 跟随系统。
+  system,
+
+  /// 强制浅色。
+  light,
+
+  /// 强制深色。
+  dark,
+}
+
 /// 阅读器设置（字号 / 主题 / 行距 / 衬线字体），全局持久化。
 class ReaderSettings {
   /// 主题。
   final ReaderTheme theme;
+
+  /// 应用界面主题偏好。
+  final AppThemeMode appTheme;
 
   /// 正文字号（12~32）。
   final double fontSize;
@@ -32,6 +47,7 @@ class ReaderSettings {
   /// 构造设置。
   const ReaderSettings({
     this.theme = ReaderTheme.light,
+    this.appTheme = AppThemeMode.system,
     this.fontSize = 18,
     this.lineHeight = 1.9,
     this.serif = false,
@@ -40,12 +56,14 @@ class ReaderSettings {
   /// 复制并修改部分字段。
   ReaderSettings copyWith({
     ReaderTheme? theme,
+    AppThemeMode? appTheme,
     double? fontSize,
     double? lineHeight,
     bool? serif,
   }) {
     return ReaderSettings(
       theme: theme ?? this.theme,
+      appTheme: appTheme ?? this.appTheme,
       fontSize: fontSize ?? this.fontSize,
       lineHeight: lineHeight ?? this.lineHeight,
       serif: serif ?? this.serif,
@@ -55,6 +73,7 @@ class ReaderSettings {
   /// 序列化。
   Map<String, dynamic> toJson() => <String, dynamic>{
         'theme': theme.name,
+        'appTheme': appTheme.name,
         'fontSize': fontSize,
         'lineHeight': lineHeight,
         'serif': serif,
@@ -66,6 +85,10 @@ class ReaderSettings {
       theme: ReaderTheme.values.firstWhere(
         (ReaderTheme e) => e.name == json['theme'],
         orElse: () => ReaderTheme.light,
+      ),
+      appTheme: AppThemeMode.values.firstWhere(
+        (AppThemeMode e) => e.name == json['appTheme'],
+        orElse: () => AppThemeMode.system,
       ),
       fontSize: (json['fontSize'] as num?)?.toDouble() ?? 18,
       lineHeight: (json['lineHeight'] as num?)?.toDouble() ?? 1.9,

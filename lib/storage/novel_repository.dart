@@ -31,17 +31,23 @@ class NovelRepository {
   }
 
   /// 读取整本小说（含章节/角色/世界观）。
-  Future<Novel> getNovel(String id) => db.readNovel(id);
+  ///
+  /// 读取也进入同一项目锁，避免删除/自动保存进行中读到半替换文件，或
+  /// 删除后被备份自愈重新「复活」项目。
+  Future<Novel> getNovel(String id) {
+    return db.withNovelLock(id, () => db.readNovel(id));
+  }
 
   /// 新建项目（默认空章节/角色/世界观）。
   Future<Novel> createNovel({
     required String title,
     required String genre,
     required String tone,
+    String? id,
   }) async {
     final DateTime now = DateTime.now();
     final Novel novel = Novel(
-      id: const Uuid().v4(),
+      id: id ?? const Uuid().v4(),
       title: title.trim().isEmpty ? '未命名作品' : title.trim(),
       genre: genre,
       tone: tone,
@@ -52,10 +58,13 @@ class NovelRepository {
       characters: <Character>[],
       worldSettings: <WorldSetting>[],
     );
-    // 全新 id 不存在竞争，但索引写入必须与别的落库串行。
-    await db.writeNovel(novel);
-    await _upsertIndex(novel);
-    return novel;
+    // 新建也必须走文件锁：虽然 id 是新 UUID，但索引是跨项目共享文件，
+    // 另一个应用实例可能同时执行 read-modify-write。
+    return db.withNovelLock(novel.id, () async {
+      await db.writeNovel(novel);
+      await _upsertIndex(novel);
+      return novel;
+    });
   }
 
   /// 整体保存（会刷新 updatedAt 并更新索引）。
@@ -75,10 +84,7 @@ class NovelRepository {
   ///
   /// 任何「先 getNovel → copyWith → saveNovel」的写法在并发生成/自动保存下
   /// 都可能用旧快照抹掉别人的写入，请改用本方法。
-  Future<Novel> mutateNovel(
-    String id,
-    Novel Function(Novel novel) transform,
-  ) {
+  Future<Novel> mutateNovel(String id, Novel Function(Novel novel) transform) {
     return db.withNovelLock(id, () async {
       final Novel novel = await db.readNovel(id);
       return _saveLocked(transform(novel));
@@ -97,29 +103,31 @@ class NovelRepository {
   }
 
   /// 删除项目（删除 json / 备份 / 残留临时文件，并从索引移除）。
-  Future<void> deleteNovel(String id) async {
-    final File file = db.novelFile(id);
-    if (await file.exists()) {
-      await file.delete();
-    }
-    // 备份与临时文件必须一并清理：readNovel 有「主文件缺失时从备份自愈」
-    // 的兜底，若留下 .bak.json，已删除的项目会在下次读取时"复活"。
-    for (final File extra in <File>[
-      db.novelBackupFile(id),
-      File('${file.path}.tmp'),
-    ]) {
-      try {
-        if (await extra.exists()) {
-          await extra.delete();
-        }
-      } catch (_) {
-        // 清理失败不阻塞删除主流程（下次写同 id 时会被原子替换覆盖）。
+  Future<void> deleteNovel(String id) {
+    return db.withNovelLock(id, () async {
+      final File file = db.novelFile(id);
+      if (await file.exists()) {
+        await file.delete();
       }
-    }
-    await db.withIndexLock(() async {
-      final List<NovelSummary> index = await db.readIndex();
-      index.removeWhere((e) => e.id == id);
-      await db.writeIndex(index);
+      // 备份与临时文件必须一并清理：readNovel 有「主文件缺失时从备份自愈」
+      // 的兜底，若留下 .bak.json，已删除的项目会在下次读取时"复活"。
+      for (final File extra in <File>[
+        db.novelBackupFile(id),
+        File('${file.path}.tmp'),
+      ]) {
+        try {
+          if (await extra.exists()) {
+            await extra.delete();
+          }
+        } catch (_) {
+          // 清理失败不阻塞删除主流程（下次写同 id 时会被原子替换覆盖）。
+        }
+      }
+      await db.withIndexLock(() async {
+        final List<NovelSummary> index = await db.readIndex();
+        index.removeWhere((e) => e.id == id);
+        await db.writeIndex(index);
+      });
     });
   }
 

@@ -19,42 +19,43 @@ void main() {
     String title = '未命名',
     String content = '',
     String outline = '',
-  }) =>
-      Chapter(
-        id: id,
-        novelId: 'n1',
-        title: title,
-        order: order,
-        content: content,
-        outline: outline,
-        createdAt: DateTime(2026, 1, 1),
-        updatedAt: DateTime(2026, 1, 1),
-      );
+  }) => Chapter(
+    id: id,
+    novelId: 'n1',
+    title: title,
+    order: order,
+    content: content,
+    outline: outline,
+    createdAt: DateTime(2026, 1, 1),
+    updatedAt: DateTime(2026, 1, 1),
+  );
 
   Novel novelWith(List<Chapter> chapters) => Novel(
-        id: 'n1',
-        title: '测试书',
-        genre: 'kehuan',
-        tone: '冷峻',
-        targetWordsPerChapter: 2000,
-        createdAt: DateTime(2026, 1, 1),
-        updatedAt: DateTime(2026, 1, 1),
-        chapters: chapters,
-        characters: const <Character>[],
-        worldSettings: const <WorldSetting>[],
-      );
+    id: 'n1',
+    title: '测试书',
+    genre: 'kehuan',
+    tone: '冷峻',
+    targetWordsPerChapter: 2000,
+    createdAt: DateTime(2026, 1, 1),
+    updatedAt: DateTime(2026, 1, 1),
+    chapters: chapters,
+    characters: const <Character>[],
+    worldSettings: const <WorldSetting>[],
+  );
 
   group('SearchService.search', () {
     test('空查询与纯空白查询短路为空结果', () {
-      final Novel novel =
-          novelWith(<Chapter>[chapter(id: 'c1', order: 0, content: '星舰启航')]);
+      final Novel novel = novelWith(<Chapter>[
+        chapter(id: 'c1', order: 0, content: '星舰启航'),
+      ]);
       expect(service.search(novel, ''), isEmpty);
       expect(service.search(novel, '   '), isEmpty);
     });
 
     test('无命中时返回空结果', () {
-      final Novel novel = novelWith(
-          <Chapter>[chapter(id: 'c1', order: 0, content: '星舰启航，目标半人马座')]);
+      final Novel novel = novelWith(<Chapter>[
+        chapter(id: 'c1', order: 0, content: '星舰启航，目标半人马座'),
+      ]);
       expect(service.search(novel, '魔法'), isEmpty);
     });
 
@@ -67,7 +68,11 @@ void main() {
 
       final List<SearchHit> hits = service.search(novel, '火');
 
-      expect(hits.map((SearchHit h) => h.chapter!.order).toList(), <int>[0, 1, 2]);
+      expect(hits.map((SearchHit h) => h.chapter!.order).toList(), <int>[
+        0,
+        1,
+        2,
+      ]);
       expect(hits.first.chapter!.title, '第一章');
     });
 
@@ -84,10 +89,10 @@ void main() {
     });
 
     test('片段：换行归一为空格，命中位置靠后时加省略号且长度受控', () {
-      final String content =
-          '${'前' * 30}关键词${'后' * 45}';
-      final Novel novel = novelWith(
-          <Chapter>[chapter(id: 'c1', order: 0, content: content)]);
+      final String content = '${'前' * 30}关键词${'后' * 45}';
+      final Novel novel = novelWith(<Chapter>[
+        chapter(id: 'c1', order: 0, content: content),
+      ]);
 
       final SearchHit hit = service.search(novel, '关键词').single;
 
@@ -100,8 +105,9 @@ void main() {
     });
 
     test('片段：命中靠前时不加省略号', () {
-      final Novel novel = novelWith(
-          <Chapter>[chapter(id: 'c1', order: 0, content: '火势渐起，后面又提到火。')]);
+      final Novel novel = novelWith(<Chapter>[
+        chapter(id: 'c1', order: 0, content: '火势渐起，后面又提到火。'),
+      ]);
 
       final SearchHit hit = service.search(novel, '火').single;
 
@@ -188,6 +194,90 @@ void main() {
       expect(worldHits.single.scope, SearchScope.worldSetting);
       expect(worldHits.single.sourceId, 'world-1');
       expect(worldHits.single.chapter, isNull);
+    });
+  });
+
+  group('SearchHit 展示辅助', () {
+    test('scopeLabel 覆盖全部来源类型', () {
+      final Chapter chapter = Chapter(
+        id: 'c',
+        novelId: 'n',
+        title: '章',
+        order: 0,
+        content: '',
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 1),
+      );
+      final SearchHit body = SearchHit(
+        sourceId: 'c',
+        sourceTitle: '章',
+        scope: SearchScope.chapterBody,
+        snippet: '',
+        index: 0,
+        chapter: chapter,
+      );
+      expect(body.scopeLabel, '正文');
+      expect(
+        SearchHit(
+          sourceId: 'c',
+          sourceTitle: '章',
+          scope: SearchScope.chapterTitle,
+          snippet: '',
+          index: 0,
+          chapter: chapter,
+        ).scopeLabel,
+        '章节标题',
+      );
+      expect(
+        SearchHit(
+          sourceId: 'c',
+          sourceTitle: '章',
+          scope: SearchScope.chapterOutline,
+          snippet: '',
+          index: 0,
+          chapter: chapter,
+        ).scopeLabel,
+        '章节大纲',
+      );
+      expect(
+        const SearchHit(
+          sourceId: 'c',
+          sourceTitle: '章',
+          scope: SearchScope.character,
+          snippet: '',
+          index: 0,
+        ).scopeLabel,
+        '角色',
+      );
+      expect(
+        const SearchHit(
+          sourceId: 'c',
+          sourceTitle: '章',
+          scope: SearchScope.worldSetting,
+          snippet: '',
+          index: 0,
+        ).scopeLabel,
+        '世界观',
+      );
+    });
+
+    test('snippetStart 对靠前命中归零，靠后命中保留前文', () {
+      const SearchHit early = SearchHit(
+        sourceId: 'c',
+        sourceTitle: '章',
+        scope: SearchScope.chapterBody,
+        snippet: '',
+        index: 5,
+      );
+      const SearchHit late = SearchHit(
+        sourceId: 'c',
+        sourceTitle: '章',
+        scope: SearchScope.chapterBody,
+        snippet: '',
+        index: 80,
+      );
+      expect(early.snippetStart, 0);
+      expect(late.snippetStart, 60);
     });
   });
 }

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:novel_writer/core/errors/app_exceptions.dart';
+import 'package:novel_writer/core/security/secret_store.dart';
 
 /// LLM 提供商类型。
 enum LlmProvider {
@@ -60,7 +61,9 @@ class LlmConfig {
     if (uri == null || uri.host.isEmpty) return false;
     final String scheme = uri.scheme.toLowerCase();
     if (scheme != 'http' && scheme != 'https') return false;
-    if (uri.userInfo.isNotEmpty || uri.hasQuery || uri.hasFragment) return false;
+    if (uri.userInfo.isNotEmpty || uri.hasQuery || uri.hasFragment) {
+      return false;
+    }
     if (scheme == 'https') return true;
     return _isLocalUrl(raw);
   }
@@ -92,15 +95,25 @@ class LlmConfig {
     return '$p · $model';
   }
 
-  /// 序列化。
+  /// 序列化为 JSON（本地配置/断点恢复会包含 API Key）。
   Map<String, dynamic> toJson() => <String, dynamic>{
-        'provider': provider.name,
-        'model': model,
-        'apiKey': apiKey,
-        'baseUrl': baseUrl,
-        'maxTokens': maxTokens,
-        'temperature': temperature,
-      };
+    'provider': provider.name,
+    'model': model,
+    'apiKey': apiKey,
+    'baseUrl': baseUrl,
+    'maxTokens': maxTokens,
+    'temperature': temperature,
+  };
+
+  /// 生成用于日志、诊断和 UI 预览的安全 JSON，不包含真实 API Key。
+  Map<String, dynamic> toRedactedJson() => <String, dynamic>{
+    ...toJson(),
+    'apiKey': apiKey.isEmpty ? '' : '********',
+  };
+
+  @override
+  String toString() =>
+      'LlmConfig($label, key: ${apiKey.isEmpty ? '无' : '********'})';
 
   /// 反序列化（兼容缺失字段）。
   factory LlmConfig.fromJson(Map<String, dynamic> json) {
@@ -151,9 +164,9 @@ class LlmEngineFlags {
 
   /// 序列化。
   Map<String, dynamic> toMap() => <String, dynamic>{
-        'useLlm': useLlm,
-        'autoMemory': autoMemory,
-      };
+    'useLlm': useLlm,
+    'autoMemory': autoMemory,
+  };
 
   /// 反序列化（缺失字段回落默认值，兼容旧配置文件）。
   factory LlmEngineFlags.fromMap(Map<String, dynamic> json) {
@@ -172,11 +185,14 @@ class LlmEngineFlags {
 /// 两者各自 [save]/[saveFlags] 时都会先读回整份文件再合并写回，
 /// 互不覆盖。读配置失败抛 [StorageException]；读开关失败回落默认值（见 [loadFlags]）。
 class LlmSettingsRepository {
-  /// 构造仓库。
-  LlmSettingsRepository(this.directory);
+  /// 构造仓库；凭据保护器必须显式注入，避免生产环境静默退回内存实现。
+  LlmSettingsRepository(this.directory, {required this.secretStore});
 
   /// 配置所在目录（AppDatabase 同级，避免额外 path_provider 依赖）。
   final String directory;
+
+  /// 凭据保护器；生产 Windows 使用 DPAPI，测试可注入内存实现。
+  final SecretStore secretStore;
 
   /// 配置文件路径。
   String get filePath => '$directory/llm_settings.json';
@@ -186,9 +202,22 @@ class LlmSettingsRepository {
     final File file = File(filePath);
     if (!await file.exists()) return const LlmConfig();
     try {
-      final Map<String, dynamic> json =
+      final Map<String, dynamic> decoded =
           jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      return LlmConfig.fromJson(json);
+      final Map<String, dynamic> restored = Map<String, dynamic>.from(
+        (await unprotectJsonSecrets(decoded, secretStore)) as Map,
+      );
+      final LlmConfig config = LlmConfig.fromJson(restored);
+      // 兼容旧版明文配置：首次读取后立即迁移为受保护字段。
+      if (decoded['apiKey'] is String &&
+          (decoded['apiKey'] as String).isNotEmpty) {
+        try {
+          await save(config);
+        } catch (_) {
+          // 迁移失败不应把已经成功读取的旧配置变成读取失败。
+        }
+      }
+      return config;
     } catch (e) {
       throw StorageException('LLM 配置读取失败', e);
     }
@@ -196,10 +225,14 @@ class LlmSettingsRepository {
 
   /// 保存配置（原子写；保留同文件内的引擎开关键）。
   Future<void> save(LlmConfig config) async {
-    await _writeJson(<String, dynamic>{
-      ...await _readJson(),
-      ...config.toJson(),
-    });
+    final Map<String, dynamic> merged = <String, dynamic>{...await _readJson()}
+      ..remove('apiKey')
+      ..remove('apiKeyEncrypted');
+    merged.addAll(config.toJson());
+    final Map<String, dynamic> protected = Map<String, dynamic>.from(
+      (await protectJsonSecrets(merged, secretStore)) as Map,
+    );
+    await _writeJson(protected);
   }
 
   /// 读取引擎开关。文件缺失或内容损坏时返回默认值而不抛错——
@@ -210,10 +243,15 @@ class LlmSettingsRepository {
 
   /// 保存引擎开关（原子写；保留同文件内的 [LlmConfig] 字段）。
   Future<void> saveFlags(LlmEngineFlags flags) async {
-    await _writeJson(<String, dynamic>{
+    final Map<String, dynamic> merged = <String, dynamic>{
       ...await _readJson(),
       ...flags.toMap(),
-    });
+    };
+    // saveFlags 也必须保护旧版明文配置，不能只依赖 load() 完成迁移。
+    final Map<String, dynamic> protected = Map<String, dynamic>.from(
+      (await protectJsonSecrets(merged, secretStore)) as Map,
+    );
+    await _writeJson(protected);
   }
 
   /// 读取原始 JSON；文件不存在或解析失败返回空映射。

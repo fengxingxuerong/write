@@ -480,6 +480,7 @@ class _FakeChatClient extends LlmChatClient {
     int? maxTokens,
     Duration? timeoutOverride,
     void Function(int attempt, Duration delay, Object error)? onRetry,
+    bool Function()? isCancelled,
   }) {
     calls++;
     lastSystem = system;

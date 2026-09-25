@@ -61,8 +61,9 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
     super.dispose();
   }
 
-  String get _defaultBaseUrl =>
-      _provider == LlmProvider.ollama ? 'http://localhost:11434' : 'https://api.deepseek.com/v1';
+  String get _defaultBaseUrl => _provider == LlmProvider.ollama
+      ? 'http://localhost:11434'
+      : 'https://api.deepseek.com/v1';
 
   String get _defaultModel =>
       _provider == LlmProvider.ollama ? 'qwen2.5:7b' : 'deepseek-chat';
@@ -71,9 +72,13 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
     setState(() => _saving = true);
     final LlmConfig config = LlmConfig(
       provider: _provider,
-      model: _modelCtrl.text.trim().isEmpty ? _defaultModel : _modelCtrl.text.trim(),
+      model: _modelCtrl.text.trim().isEmpty
+          ? _defaultModel
+          : _modelCtrl.text.trim(),
       apiKey: _apiKeyCtrl.text.trim(),
-      baseUrl: _baseUrlCtrl.text.trim().isEmpty ? _defaultBaseUrl : _baseUrlCtrl.text.trim(),
+      baseUrl: _baseUrlCtrl.text.trim().isEmpty
+          ? _defaultBaseUrl
+          : _baseUrlCtrl.text.trim(),
       temperature: _temperature,
       maxTokens: _maxTokens,
     );
@@ -99,9 +104,13 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
     });
     final LlmConfig config = LlmConfig(
       provider: _provider,
-      model: _modelCtrl.text.trim().isEmpty ? _defaultModel : _modelCtrl.text.trim(),
+      model: _modelCtrl.text.trim().isEmpty
+          ? _defaultModel
+          : _modelCtrl.text.trim(),
       apiKey: _apiKeyCtrl.text.trim(),
-      baseUrl: _baseUrlCtrl.text.trim().isEmpty ? _defaultBaseUrl : _baseUrlCtrl.text.trim(),
+      baseUrl: _baseUrlCtrl.text.trim().isEmpty
+          ? _defaultBaseUrl
+          : _baseUrlCtrl.text.trim(),
       temperature: _temperature,
       maxTokens: _maxTokens,
     );
@@ -140,13 +149,15 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
         ..connectionTimeout = const Duration(seconds: 3);
       try {
         // 先试 OpenAI 兼容的 /v1/models（llama-server / Ollama 都支持）。
-        final HttpClientRequest req =
-            await client.getUrl(Uri.parse('$base/v1/models'));
+        final HttpClientRequest req = await client.getUrl(
+          Uri.parse('$base/v1/models'),
+        );
         final HttpClientResponse resp = await req.close();
         if (resp.statusCode >= 200 && resp.statusCode < 300) {
           final String text = await resp.transform(utf8.decoder).join();
           final List<dynamic> models =
-              (jsonDecode(text) as Map<String, dynamic>)['data'] as List<dynamic>;
+              (jsonDecode(text) as Map<String, dynamic>)['data']
+                  as List<dynamic>;
           if (models.isNotEmpty) {
             final String model =
                 (models.first as Map<String, dynamic>)['id'] as String;
@@ -206,8 +217,12 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
                   if (v == null) return;
                   setState(() {
                     _provider = v;
-                    if (_modelCtrl.text.isEmpty) _modelCtrl.text = _defaultModel;
-                    if (_baseUrlCtrl.text.isEmpty) _baseUrlCtrl.text = _defaultBaseUrl;
+                    if (_modelCtrl.text.isEmpty) {
+                      _modelCtrl.text = _defaultModel;
+                    }
+                    if (_baseUrlCtrl.text.isEmpty) {
+                      _baseUrlCtrl.text = _defaultBaseUrl;
+                    }
                   });
                 },
               ),
@@ -230,7 +245,7 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
                   decoration: const InputDecoration(
                     labelText: 'API Key',
                     hintText: 'sk-...',
-                    helperText: '仅保存在本机，不会上传',
+                    helperText: '保存在本机设置文件；调用远程 API 时会发送给所选服务商用于鉴权',
                   ),
                   obscureText: true,
                   enabled: !_testing,
@@ -253,7 +268,9 @@ class _LlmSettingsDialogState extends ConsumerState<LlmSettingsDialog> {
                 max: 2,
                 divisions: 20,
                 label: _temperature.toStringAsFixed(1),
-                onChanged: _testing ? null : (v) => setState(() => _temperature = v),
+                onChanged: _testing
+                    ? null
+                    : (v) => setState(() => _temperature = v),
               ),
               const SizedBox(height: AppTokens.s3),
               Text('单次最大 Token：$_maxTokens（长文生成建议调高）'),

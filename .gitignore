@@ -1,6 +1,7 @@
 # Flutter/Dart 构建产物
 .dart_tool/
 build/
+dist/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
@@ -55,6 +56,9 @@ __pycache__/
 #     且 novel_pipeline.py / qa_scan_existing.py / ab_compare.py 均 import 它，必须入库。
 scripts/watchdog_pipeline.ps1
 
+
+# 一次性研究/工具产物（不入库）
+research-reports/
 
 # 一次性探测/诊断脚本（与 CI 口径一致：临时探针不入库、不设防）
 scripts/probe/

@@ -1,8 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:novel_writer/engine/quality/novel_consistency_checker.dart';
 import 'package:novel_writer/engine/quality/novel_quality_checker.dart';
 import 'package:novel_writer/engine/quality/token_tier.dart';
 import 'package:novel_writer/features/generate/generate_viewmodel.dart';
+import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
 /// 产生典型 AI 囷痕的假正文。
@@ -93,6 +95,91 @@ void main() {
     });
   });
 
+  group('GenerateState 字段与 clear 开关', () {
+    test('copyWith 设置生成进度、章节、记忆和预览字段', () {
+      const QualityCheckNote note = QualityCheckNote(
+        beforeScore: 60,
+        afterScore: 70,
+        issueCount: 2,
+        polished: false,
+      );
+      const GenerateState initial = GenerateState();
+      final GenerateState updated = initial.copyWith(
+        isGenerating: true,
+        progress: 0.4,
+        stage: '写第 2 章',
+        error: '临时错误',
+        generatedChapter: Chapter(
+          id: 'c1',
+          novelId: 'n1',
+          title: '第1章',
+          order: 0,
+          content: '正文',
+          createdAt: DateTime(2026, 1, 1),
+          updatedAt: DateTime(2026, 1, 1),
+        ),
+        memoryNote: 'AI 已记忆：新增 1 个角色',
+        memoryPending: true,
+        previewText: '流式预览',
+        qualityNote: note,
+        consistencyReport: const ConsistencyReport(),
+      );
+
+      expect(updated.isGenerating, isTrue);
+      expect(updated.progress, 0.4);
+      expect(updated.stage, '写第 2 章');
+      expect(updated.error, '临时错误');
+      expect(updated.generatedChapter?.id, 'c1');
+      expect(updated.memoryNote, contains('新增 1 个角色'));
+      expect(updated.memoryPending, isTrue);
+      expect(updated.previewText, '流式预览');
+      expect(updated.qualityNote, note);
+      expect(updated.consistencyReport, isNotNull);
+    });
+
+    test('clear* 开关可单独清掉章节、预览、质检和一致性报告', () {
+      final GenerateState seeded = GenerateState(
+        generatedChapter: Chapter(
+          id: 'c1',
+          novelId: 'n1',
+          title: '第1章',
+          order: 0,
+          content: '正文',
+          createdAt: DateTime(2026, 1, 1),
+          updatedAt: DateTime(2026, 1, 1),
+        ),
+        previewText: '旧预览',
+        qualityNote: const QualityCheckNote(
+          beforeScore: 10,
+          afterScore: 20,
+          issueCount: 1,
+          polished: false,
+        ),
+        consistencyReport: const ConsistencyReport(),
+        isGenerating: true,
+        progress: 0.9,
+        stage: '上一任务',
+      );
+
+      final GenerateState cleared = seeded.copyWith(
+        stage: '准备生成',
+        error: null,
+        clearChapter: true,
+        clearPreview: true,
+        clearQualityNote: true,
+        clearConsistencyReport: true,
+      );
+
+      expect(cleared.generatedChapter, isNull);
+      expect(cleared.previewText, isNull);
+      expect(cleared.qualityNote, isNull);
+      expect(cleared.consistencyReport, isNull);
+      expect(cleared.stage, '准备生成');
+      expect(cleared.isGenerating, isTrue);
+      expect(cleared.progress, 0.9);
+    });
+  });
+
   group('NovelQualityChecker 囷痕检测', () {
     test('AI 囷痕正文触发 needsPolish', () {
       final QualityReport r = NovelQualityChecker.check(_aiEchoContent());
@@ -112,8 +199,7 @@ void main() {
 
   group('TokenTier 集成', () {
     test('SensNova 模型走 reasoning 等级', () {
-      const LlmConfig config =
-          LlmConfig(model: 'sensenova-6.7-flash-lite');
+      const LlmConfig config = LlmConfig(model: 'sensenova-6.7-flash-lite');
       expect(TokenTier.fromModel(config.model), TokenTier.reasoning);
       expect(TokenBudget.needsExtraThinkingFlag(config), isTrue);
     });

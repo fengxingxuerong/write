@@ -18,6 +18,7 @@ import 'package:novel_writer/ai_pipeline/services/ai_pipeline_service.dart';
 import 'package:novel_writer/ai_pipeline/services/llm_router.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
+import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/engine/quality/fanqie_gate_checker.dart';
 
 void main() {
@@ -36,8 +37,11 @@ void main() {
         final String path =
             Platform.environment['NOVEL_KEY_FILE'] ?? '.env.local';
         final File f = File(path);
-        expect(f.existsSync(), isTrue,
-            reason: '未找到密钥来源：请设置 NOVEL_KEY_FILE 或准备 .env.local');
+        expect(
+          f.existsSync(),
+          isTrue,
+          reason: '未找到密钥来源：请设置 NOVEL_KEY_FILE 或准备 .env.local',
+        );
         keys.addAll(FixedWorkflowPreset.parseKeys(f.readAsStringSync()));
       }
       expect(keys, isNotEmpty, reason: '未解析到任何 API Key');
@@ -47,15 +51,20 @@ void main() {
       final Map<AiRole, AiRoleConfig> roles = FixedWorkflowPreset.roles(keys);
       for (final AiRole r in AiRole.values) {
         final AiRoleConfig c = roles[r]!;
-        print('${r.label}: 主=${c.llm.model}（${c.llm.baseUrl}）'
-            ' 备=${c.fallbacks.length}');
+        print(
+          '${r.label}: 主=${c.llm.model}（${c.llm.baseUrl}）'
+          ' 备=${c.fallbacks.length}',
+        );
         expect(c.llm.isConfigured, isTrue, reason: '${r.label} 主模型未配置');
       }
 
       // 3) 跑内置流水线：3 章、约 4500 字，开启编辑、审校、质量评分和低分重写。
-      final Directory out = Directory('verify-logs')..createSync(recursive: true);
-      final PipelineStorage storage =
-          PipelineStorage('${out.path}${Platform.pathSeparator}live_pipeline');
+      final Directory out = Directory('verify-logs')
+        ..createSync(recursive: true);
+      final PipelineStorage storage = PipelineStorage(
+        '${out.path}${Platform.pathSeparator}live_pipeline',
+        secretStore: InMemorySecretStore(),
+      );
       final AiPipelineConfig config = AiPipelineConfig(
         totalWords: 4500,
         maxChapters: 3,
@@ -69,8 +78,11 @@ void main() {
         useStateTrack: true,
         roles: roles,
       );
-      expect(AiPipelineService.missingRoles(config), isEmpty,
-          reason: '仍有角色缺配置');
+      expect(
+        AiPipelineService.missingRoles(config),
+        isEmpty,
+        reason: '仍有角色缺配置',
+      );
 
       final AiPipelineTask task = AiPipelineTask(
         id: 'live-${DateTime.now().millisecondsSinceEpoch}',
@@ -90,15 +102,19 @@ void main() {
       await service.run(
         task,
         isCancelled: () => false,
-        onProgress: () => print('进度：${task.chapterCount} 章 / '
-            '${task.totalWords} 字（最近日志：${task.log.last}）'),
+        onProgress: () => print(
+          '进度：${task.chapterCount} 章 / '
+          '${task.totalWords} 字（最近日志：${task.log.last}）',
+        ),
       );
 
       for (final String line in task.log.take(40)) {
         print(line);
       }
-      print('状态：${task.status.name}  章节：${task.chapterCount}  '
-          '字数：${task.totalWords}  书：《${task.title}》');
+      print(
+        '状态：${task.status.name}  章节：${task.chapterCount}  '
+        '字数：${task.totalWords}  书：《${task.title}》',
+      );
 
       // 4) 断言：跑完、有稿、成稿达到基本体量。
       expect(task.status, PipelineTaskStatus.done);
@@ -110,14 +126,19 @@ void main() {
           protagonist: config.protagonist,
         ).check(c.content, chapterIndex: c.idx);
         final List<String> commercialIssues = PipelineQa.chapterIssues(c);
-        print('质量：第${c.idx}章 ${c.words} 字｜'
-            '综合分 ${gate.score.toStringAsFixed(0)}｜'
-            '钩子 ${PipelineQa.hasEndingHook(c.content)}｜'
-            '商业问题 ${commercialIssues.length}');
+        print(
+          '质量：第${c.idx}章 ${c.words} 字｜'
+          '综合分 ${gate.score.toStringAsFixed(0)}｜'
+          '钩子 ${PipelineQa.hasEndingHook(c.content)}｜'
+          '商业问题 ${commercialIssues.length}',
+        );
         expect(c.content.trim(), isNotEmpty);
         expect(c.content.contains('```'), isFalse);
-        expect(gate.hasVeto, isFalse,
-            reason: '第${c.idx}章命中阻断级合规问题：${gate.issues}');
+        expect(
+          gate.hasVeto,
+          isFalse,
+          reason: '第${c.idx}章命中阻断级合规问题：${gate.issues}',
+        );
       }
 
       final StringBuffer buf = StringBuffer()
@@ -132,9 +153,9 @@ void main() {
         buf.writeln(c.content);
         buf.writeln();
       }
-      final File novelFile =
-          File('${out.path}${Platform.pathSeparator}live_novel.md')
-            ..writeAsStringSync(buf.toString(), flush: true);
+      final File novelFile = File(
+        '${out.path}${Platform.pathSeparator}live_novel.md',
+      )..writeAsStringSync(buf.toString(), flush: true);
       print('成稿已落盘：${novelFile.path}（${buf.length} 字符）');
       print('正文预览：${task.chapters.first.content.substring(0, 120)}');
     },

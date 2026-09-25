@@ -1,5 +1,5 @@
 name: novel_writer
-description: 墨匠 InkSmith —— 完全离线的一键小说写作工具（Flutter MVP，零网络请求）。
+description: 墨匠 InkSmith —— 本地优先的一键小说写作工具（默认离线，可选 AI）。
 publish_to: 'none'
 version: 0.1.0+1
 

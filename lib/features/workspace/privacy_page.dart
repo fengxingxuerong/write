@@ -6,7 +6,7 @@ import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/widgets/app_feedback.dart';
 
-/// 隐私与合规页面：声明数据归属、不出域、不用于模型训练。
+/// 隐私与合规页面：说明本地数据、可选云端调用与 API Key 处理方式。
 class PrivacyPage extends ConsumerWidget {
   const PrivacyPage({super.key});
 
@@ -32,7 +32,7 @@ class PrivacyPage extends ConsumerWidget {
             icon: Icons.shield_outlined,
             title: '文稿归作者所有',
             content:
-                '您创建的一切内容（包括角色设定、章节正文、大纲等）完全属于您本人。墨匠不会以任何形式获取您的作品权利，也不会用于分发、展示或授权第三方使用。',
+                '您创建的角色设定、章节正文、大纲等属于您的创作内容。墨匠不会自行将作品用于分发、展示或授权第三方使用；启用远程 AI 时，生成所需内容会发送给所选服务商，处理方式请以其条款和隐私政策为准。',
             color: AppInk.of(context).primary,
           ),
           _principleCard(
@@ -40,16 +40,15 @@ class PrivacyPage extends ConsumerWidget {
             icon: Icons.cloud_off_outlined,
             title: '可选的云端调用',
             content:
-                '调用 AI 生成时，发送给开源兼容 API（如 OpenAI、DeepSeek、通义千问等）的数据仅用于完成本次生成返回结果，墨匠本身不搭建内容中转服务器，不会留存您发送或返回的内容。'
-                '\n\n您可以选择在设置中完全关闭 AI 功能，使用纯本地模板引擎（零网络）。',
+                '启用远程 AI 后，墨匠会将本次生成所需的提示词及所选文稿内容发送给所配置的 API 服务商。服务商对内容的处理、保存和训练使用由其服务条款及隐私政策决定，墨匠无法代第三方承诺或控制。请在调用前确认所选服务商的政策。\n\n在 Windows 桌面版中，API Key 使用 Windows DPAPI 加密后保存在本机设置文件中，调用远程 API 时仅在请求中作为鉴权凭据发送。您可以关闭 AI 功能，改用不发起 AI 网络请求的本地模板引擎。',
             color: AppInk.of(context).success,
           ),
           _principleCard(
             theme,
             icon: Icons.model_training_outlined,
-            title: '不用于模型训练',
+            title: '模型训练说明',
             content:
-                '墨匠作者郑重承诺：在您使用本应用期间产生的任何文本、角色、大纲内容，不会被收集用于 LLM 微调、RLHA、DPO 或任何形式的模型训练。您写的东西就是您写的。',
+                '使用远程 AI 时，提示词和所选文稿内容会发送给所选服务商；这些内容是否用于模型训练、服务改进或人工处理，取决于服务商的条款和隐私政策。使用本地模型时，相关处理由您运行的本地模型服务决定。若您不接受相关用途，请关闭远程 AI 或选择符合您要求的本地服务。',
             color: AppInk.of(context).accent,
           ),
           _principleCard(
@@ -63,12 +62,12 @@ class PrivacyPage extends ConsumerWidget {
           _principleCard(
             theme,
             icon: Icons.gpp_good_outlined,
-            title: '符合法规要求',
+            title: '隐私保护措施',
             content:
-                '本应用遵循《中华人民共和国个人信息保护法》（PIPL）与《生成式人工智能服务管理暂行办法》相关要求：\n'
-                '• 内容过滤：内置敏感词库 + 上下文白名单，避免生成违规内容。\n'
-                '• 用户删除权：全程支持删除章节、角色、世界观设定。\n'
-                '• 透明度：所有 AI 生成内容均可追溯原始提示词与模型。',
+                '本页面说明应用的数据处理方式，不构成法律意见或法规符合性保证：\n'
+                '• 内容安全：提供敏感词检测，但可能存在误判或漏判。\n'
+                '• 数据管理：支持删除项目和清除本地数据。\n'
+                '• 信息透明：AI 调用由您选择服务商和模型，相关数据处理请结合服务商政策评估。',
             color: AppInk.of(context).primary,
           ),
           const SizedBox(height: AppTokens.s4),
@@ -80,15 +79,18 @@ class PrivacyPage extends ConsumerWidget {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.code, size: 18, color: theme.colorScheme.primary),
+                      Icon(
+                        Icons.code,
+                        size: 18,
+                        color: theme.colorScheme.primary,
+                      ),
                       const SizedBox(width: 8),
-                      Text('开放生态',
-                          style: theme.textTheme.titleSmall),
+                      Text('开放生态', style: theme.textTheme.titleSmall),
                     ],
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    '墨匠以开放生态运作，支持所有 OpenAI 兼容 API。您可以在本应用「AI 设置」页选择任意 API 提供商或使用本地 Ollama。您选择哪家提供商，决定权在您。',
+                    '墨匠可连接兼容 OpenAI chat/completions 接口的远程服务商，具体兼容性取决于服务商接口实现；您也可以使用本地 Ollama。请在连接前确认服务商的服务条款与隐私政策。',
                     style: theme.textTheme.bodySmall,
                   ),
                 ],
@@ -100,7 +102,8 @@ class PrivacyPage extends ConsumerWidget {
             icon: const Icon(Icons.delete_forever),
             label: const Text('清除所有本地数据'),
             style: FilledButton.styleFrom(
-                backgroundColor: AppInk.of(context).danger),
+              backgroundColor: AppInk.of(context).danger,
+            ),
             onPressed: () => _confirmWipe(context, ref),
           ),
           const SizedBox(height: AppTokens.s8),
@@ -116,11 +119,18 @@ class PrivacyPage extends ConsumerWidget {
         padding: const EdgeInsets.all(AppTokens.s4),
         child: Column(
           children: [
-            Icon(Icons.verified_user, size: 40, color: theme.colorScheme.primary),
+            Icon(
+              Icons.verified_user,
+              size: 40,
+              color: theme.colorScheme.primary,
+            ),
             const SizedBox(height: 8),
-            Text('墨匠隐私守则',
-                style: theme.textTheme.titleLarge
-                    ?.copyWith(fontWeight: FontWeight.bold)),
+            Text(
+              '墨匠隐私守则',
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
             const SizedBox(height: 4),
             Text(
               '您的故事，只属于您。',
@@ -151,13 +161,20 @@ class PrivacyPage extends ConsumerWidget {
               children: [
                 Icon(icon, size: 20, color: color),
                 const SizedBox(width: 8),
-                Text(title,
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.bold)),
+                Text(
+                  title,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 8),
-            Text(content, style: theme.textTheme.bodySmall, textAlign: TextAlign.justify),
+            Text(
+              content,
+              style: theme.textTheme.bodySmall,
+              textAlign: TextAlign.justify,
+            ),
           ],
         ),
       ),
@@ -179,7 +196,8 @@ class PrivacyPage extends ConsumerWidget {
           ),
           FilledButton(
             style: FilledButton.styleFrom(
-                backgroundColor: AppInk.of(ctx).danger),
+              backgroundColor: AppInk.of(ctx).danger,
+            ),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('确认清除'),
           ),

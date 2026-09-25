@@ -25,17 +25,11 @@ import 'package:novel_writer/storage/setting_repository.dart';
 /// 质检润色结果容器：摘要 + 润色后正文。
 class QualityCheckResult {
   /// 构造。
-  const QualityCheckResult({
-    required this.note,
-    required this.polishedContent,
-  });
+  const QualityCheckResult({required this.note, required this.polishedContent});
 
   /// 空构造（无问题或润色失败）。
   factory QualityCheckResult.empty(String originalContent) {
-    return QualityCheckResult(
-      note: null,
-      polishedContent: originalContent,
-    );
+    return QualityCheckResult(note: null, polishedContent: originalContent);
   }
 
   /// 质检润色摘要（null 表示跳过质检）。
@@ -144,8 +138,9 @@ class GenerateState {
       progress: progress ?? this.progress,
       stage: stage ?? this.stage,
       error: error,
-      generatedChapter:
-          clearChapter ? null : (generatedChapter ?? this.generatedChapter),
+      generatedChapter: clearChapter
+          ? null
+          : (generatedChapter ?? this.generatedChapter),
       memoryNote: memoryNote,
       memoryPending: memoryPending ?? this.memoryPending,
       previewText: clearPreview ? null : (previewText ?? this.previewText),
@@ -207,6 +202,9 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
     int order,
     String chapterTitle,
   ) async {
+    // 每次生成都开启新的取消周期，避免上次取消令牌延续到本轮。
+    _cancelToken.reset();
+
     state = state.copyWith(
       isGenerating: true,
       progress: 0,
@@ -260,8 +258,7 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
           final int remainder = outlineParts.length % count;
           final int start = i * base + (i < remainder ? i : remainder);
           final int take = base + (i < remainder ? 1 : 0);
-          chapterOutline =
-              outlineParts.skip(start).take(take).join('\n');
+          chapterOutline = outlineParts.skip(start).take(take).join('\n');
         }
         final ContextBundle chapterCtx = ctx.copyWith(
           outline: chapterOutline,
@@ -277,7 +274,8 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
         // 多 pass 生成路径：LLM 已配置 + enableMultiPass=true 时，
         // 走 MultiPassChapterEngine（场景拆解 → 逐场景生成 → 拼接）。
         final LlmSettingsState llmSnaphot = _ref.read(llmSettingsProvider);
-        final bool useMultiPass = chapterConfig.enableMultiPass &&
+        final bool useMultiPass =
+            chapterConfig.enableMultiPass &&
             llmSnaphot.useLlm &&
             llmSnaphot.config.isConfigured &&
             _engine is LlmEngine;
@@ -297,9 +295,7 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
             onProgress: (GenerationProgress p) {
               state = state.copyWith(
                 progress: count > 1 ? (i + p.progress) / count : p.progress,
-                stage: count > 1
-                    ? '第 ${i + 1}/$count 章 · ${p.stage}'
-                    : p.stage,
+                stage: count > 1 ? '第 ${i + 1}/$count 章 · ${p.stage}' : p.stage,
                 previewText: p.previewText,
               );
             },
@@ -311,12 +307,8 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
             cancelToken: _cancelToken,
             onProgress: (GenerationProgress p) {
               state = state.copyWith(
-                progress: count > 1
-                    ? (i + p.progress) / count
-                    : p.progress,
-                stage: count > 1
-                    ? '第 ${i + 1}/$count 章 · ${p.stage}'
-                    : p.stage,
+                progress: count > 1 ? (i + p.progress) / count : p.progress,
+                stage: count > 1 ? '第 ${i + 1}/$count 章 · ${p.stage}' : p.stage,
                 previewText: p.previewText,
               );
             },
@@ -328,8 +320,11 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
         String finalContent = result.content;
         QualityCheckNote? qualityNote;
         if (llm0.useLlm && llm0.config.isConfigured) {
-          final QualityCheckResult qcResult =
-              await _runQualityCheck(llm0, finalContent, config);
+          final QualityCheckResult qcResult = await _runQualityCheck(
+            llm0,
+            finalContent,
+            config,
+          );
           qualityNote = qcResult.note;
           final QualityCheckNote? note = qcResult.note;
           if (note != null && note.polished) {
@@ -396,15 +391,12 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
         String finalTitle = thisTitle;
         if (llm0.useLlm && llm0.config.isConfigured) {
           state = state.copyWith(
-            stage: count > 1
-                ? '第 ${i + 1}/$count 章：提炼标题…'
-                : '正在提炼章节标题…',
+            stage: count > 1 ? '第 ${i + 1}/$count 章：提炼标题…' : '正在提炼章节标题…',
           );
-          final String? aiTitle =
-              await _generateTitle(llm0, finalContent).timeout(
-            kTitleWait,
-            onTimeout: () => null,
-          );
+          final String? aiTitle = await _generateTitle(
+            llm0,
+            finalContent,
+          ).timeout(kTitleWait, onTimeout: () => null);
           if (aiTitle != null && aiTitle.isNotEmpty) {
             finalTitle = '$thisTitle $aiTitle';
           }
@@ -418,8 +410,9 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
         // 后续章节承接本段结尾（取末尾约 300 字，控制上下文长度）。
         // 使用 runes 按「字符」截取，避免 UTF-16 码元截断产生乱码。
         final String tail = finalContent.trim();
-        continuation =
-            tail.length > 300 ? tail.characters.skip(tail.length - 300).toString() : tail;
+        continuation = tail.length > 300
+            ? tail.characters.skip(tail.length - 300).toString()
+            : tail;
         // 为下一章的闸门跨章重合检查留存本章正文。
         prevChapterForGate = finalContent;
 
@@ -432,8 +425,10 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
           String? summary;
           if (llm0.useLlm && llm0.config.isConfigured) {
             try {
-              summary = await _summarizeChapter(llm0, finalContent)
-                  .timeout(kSummaryWait, onTimeout: () => null);
+              summary = await _summarizeChapter(
+                llm0,
+                finalContent,
+              ).timeout(kSummaryWait, onTimeout: () => null);
             } catch (_) {
               summary = null; // 提炼失败不阻塞：走本地兜底。
             }
@@ -446,8 +441,9 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
         ConsistencyReport? consistencyReport;
         if (llm0.useLlm && llm0.config.isConfigured && count > 1) {
           try {
-            final List<Chapter> existing =
-                await _chapterRepo.listChapters(_novelId);
+            final List<Chapter> existing = await _chapterRepo.listChapters(
+              _novelId,
+            );
             consistencyReport = NovelConsistencyChecker.check(existing);
             if (consistencyReport.hasIssues) {
               state = state.copyWith(
@@ -460,7 +456,9 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
         }
 
         // 每章都做内容安全自查（记录最后结果展示）。
-        final SensitiveWordsService sensitive = _ref.read(sensitiveWordsProvider);
+        final SensitiveWordsService sensitive = _ref.read(
+          sensitiveWordsProvider,
+        );
         final SensitiveCheckResult check = sensitive.check(chapter.content);
         sensitive.recordStats(check);
 
@@ -472,15 +470,12 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
         if (memoryEnabled) {
           state = state.copyWith(
             memoryPending: true,
-            stage: count > 1
-                ? '第 ${i + 1}/$count 章：记忆角色与设定…'
-                : '正在记忆新角色与设定…',
+            stage: count > 1 ? '第 ${i + 1}/$count 章：记忆角色与设定…' : '正在记忆新角色与设定…',
           );
           // 记忆提取只启动一次；超时仅表示「UI 不再等待」，
           // 原任务继续在后台完成。旧实现在 onTimeout 里再次调用
           // _runMemory，会导致同一段正文被提取两次（浪费配额且可能重复入库）。
-          final Future<String?> memoryFuture =
-              _runMemory(llm, finalContent);
+          final Future<String?> memoryFuture = _runMemory(llm, finalContent);
           String? note;
           try {
             note = await memoryFuture.timeout(kMemoryWait);
@@ -493,13 +488,16 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
           // readNovel 在文件不存在时抛 StorageException，try-catch 吞掉不影响主流程。
           if (count > 1 && i < count - 1) {
             try {
-              final Novel freshNovel = await _chapterRepo.db.readNovel(_novelId);
+              final Novel freshNovel = await _chapterRepo.db.readNovel(
+                _novelId,
+              );
               ctx = ctx.copyWith(
                 characters: freshNovel.characters,
                 worldSettings: freshNovel.worldSettings,
                 // 伏笔账本：把最新（含本章新埋/已回收）的未回收伏笔注入下一章。
-                foreshadowing:
-                    StoryMemory.buildForeshadowLedger(freshNovel.worldSettings),
+                foreshadowing: StoryMemory.buildForeshadowLedger(
+                  freshNovel.worldSettings,
+                ),
               );
             } catch (_) {
               // 读取失败不中断：沿用旧 ctx 继续生成。
@@ -516,9 +514,7 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
           consistencyReport: consistencyReport,
           stage: count > 1
               ? '第 ${i + 1}/$count 章 完成 ✓'
-              : (check.clean
-                  ? '生成完成'
-                  : '生成完成（检测到 ${check.count} 处敏感词，建议检查）'),
+              : (check.clean ? '生成完成' : '生成完成（检测到 ${check.count} 处敏感词，建议检查）'),
           progress: count > 1 ? (i + 1) / count : 1,
         );
         if (count > 1 && i < count - 1) {
@@ -565,18 +561,21 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
 
   /// 用 LLM 把一章正文提炼成 2~3 句剧情摘要（注入下一章的前情提要）。
   /// 输出不合规（空/过长/含 Markdown）返回 null，调用方回退本地启发式。
-  Future<String?> _summarizeChapter(LlmSettingsState llm, String content) async {
+  Future<String?> _summarizeChapter(
+    LlmSettingsState llm,
+    String content,
+  ) async {
     try {
       final LlmChatClient client = LlmChatClient(config: llm.config);
       final LlmChatResult res = await client.chat(
         '你是小说剧情记录员。把一章正文压缩成剧情摘要，供后续章节写作时保持连贯。',
         '本章正文如下（只读后半部分即可把握本章进展）：\n\n'
-        '${content.length > 4000 ? content.substring(content.length - 4000) : content}\n\n'
-        '要求：\n'
-        '- 用 2~3 句话概括本章发生的关键事件、人物关系变化与新信息；\n'
-        '- 只输出摘要本身，不要标题、序号、引号或任何解释；\n'
-        '- 总长不超过 80 字；\n'
-        '- 使用第三人称陈述句，不用感叹与抒情。',
+            '${content.length > 4000 ? content.substring(content.length - 4000) : content}\n\n'
+            '要求：\n'
+            '- 用 2~3 句话概括本章发生的关键事件、人物关系变化与新信息；\n'
+            '- 只输出摘要本身，不要标题、序号、引号或任何解释；\n'
+            '- 总长不超过 80 字；\n'
+            '- 使用第三人称陈述句，不用感叹与抒情。',
       );
       final String raw = res.content.trim().replaceAll(RegExp(r'[\r\n]+'), ' ');
       if (raw.isEmpty || raw.length > 120) return null;
@@ -591,8 +590,7 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
   String _localSummary(String content) {
     final String trimmed = content.trim().replaceAll(RegExp(r'\s+'), ' ');
     if (trimmed.isEmpty) return '';
-    final RegExpMatch? m =
-        RegExp(r'^(.{4,60}?)[。！？!?]').firstMatch(trimmed);
+    final RegExpMatch? m = RegExp(r'^(.{4,60}?)[。！？!?]').firstMatch(trimmed);
     if (m != null) return m.group(1)!;
     return trimmed.length > 60
         ? trimmed.characters.take(60).toString()
@@ -610,11 +608,11 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
       final LlmChatResult res = await client.chat(
         '你是一位小说章节标题编辑。根据正文提炼一个吸引人、有文采的章节标题。',
         '正文节选如下（只读前 600 字，不必读完全文）：\n\n'
-        '${content.characters.take(600).toString()}\n\n'
-        '要求：\n'
-        '- 只输出标题本身，不要引号、不要“第 N 章”前缀、不要解释；\n'
-        '- 8~15 个汉字，风格贴合正文（热血/悬疑/言情等）；\n'
-        '- 可用“·”分隔短句，如“惊鸿一剑·断崖之约”。',
+            '${content.characters.take(600).toString()}\n\n'
+            '要求：\n'
+            '- 只输出标题本身，不要引号、不要“第 N 章”前缀、不要解释；\n'
+            '- 8~15 个汉字，风格贴合正文（热血/悬疑/言情等）；\n'
+            '- 可用“·”分隔短句，如“惊鸿一剑·断崖之约”。',
       );
       final String raw = res.content.trim();
       if (raw.isEmpty || raw.length > 40) return null;
@@ -666,7 +664,9 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
           polishedContent: content,
         );
       }
-      state = state.copyWith(stage: '质检到 ${report.hardViolations.length} 处问题，AI 润色中…');
+      state = state.copyWith(
+        stage: '质检到 ${report.hardViolations.length} 处问题，AI 润色中…',
+      );
       final EditorAi editor = EditorAi(config: llm.config);
       final String polished = await editor
           .polish(
@@ -699,10 +699,14 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
   Future<String?> _runMemory(LlmSettingsState llm, String content) async {
     try {
       final Novel novel = await _settingRepo.db.readNovel(_novelId);
-      final StoryMemory memory =
-          StoryMemory(config: llm.config, settingRepo: _settingRepo);
-      final MemoryWriteSummary summary =
-          await memory.extractAndMerge(novel, content);
+      final StoryMemory memory = StoryMemory(
+        config: llm.config,
+        settingRepo: _settingRepo,
+      );
+      final MemoryWriteSummary summary = await memory.extractAndMerge(
+        novel,
+        content,
+      );
       if (summary.any) return 'AI 已记忆：${summary.describe}';
     } catch (_) {
       // 记忆失败不影响生成结果。

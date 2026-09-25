@@ -42,8 +42,7 @@ void main() {
 
   group('全局基础 provider', () {
     test('themeModeProvider 默认跟随系统', () {
-      final ProviderContainer c = ProviderContainer();
-      addTearDown(c.dispose);
+      final ProviderContainer c = makeContainer();
       expect(c.read(themeModeProvider), ThemeMode.system);
     });
 
@@ -116,6 +115,22 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 25));
       }
       fail('新容器 1s 内未加载到落盘的阅读设置');
+    });
+
+    test('应用主题切换后新容器可回读', () async {
+      final ProviderContainer c1 = makeContainer();
+      c1.read(themeModeProvider);
+      await settleInitialLoad();
+      await c1
+          .read(readerSettingsProvider.notifier)
+          .setAppTheme(AppThemeMode.dark);
+
+      final ProviderContainer c2 = makeContainer();
+      for (int i = 0; i < 40; i++) {
+        if (c2.read(themeModeProvider) == ThemeMode.dark) return;
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+      fail('新容器 1s 内未加载到落盘的应用主题');
     });
   });
 

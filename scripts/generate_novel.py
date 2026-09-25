@@ -28,6 +28,10 @@ def print(*args, **kwargs):
     kwargs.setdefault("flush", True)
     _real_print(*args, **kwargs)
 
+# 支持 `python -m scripts.generate_novel` 与直接脚本执行两种入口。
+# 放在 fanqie_* 相对导入之前，避免模块方式运行时找不到同目录文件。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 # Windows 控制台默认 GBK：质检报告含 ✓/✗ 等字符会 UnicodeEncodeError
 # 直接把 stdout/stderr 重配为 UTF-8（失败时退化为 replace，绝不让报告打印炸掉主流程）
 for _stream in (sys.stdout, sys.stderr):
@@ -46,7 +50,6 @@ from fanqie_review import (  # noqa: E402
     dialogue_ratio,
     filler_ratio,
     fix_prompt,
-    pacing_stats,
     review_chapter,
     self_repeat_ratio,
 )
@@ -958,12 +961,57 @@ def _quality_repair_prompt(text, review, registry, genre, protagonist, prev_text
     facts = facts_block(registry)
     return fix_prompt(review, text) + (
         f"\n【本题材】{genre}\n【主角】{protagonist}\n"
-        f"【上一章尾部】{prev_text[-200:] if prev_text else '无'}\n"
+        f"【前文尾部】{prev_text[-200:] if prev_text else '无'}\n"
         f"【角色户籍】{lock}\n【数字台账】{facts}\n"
         "【修复硬约束】保留主线、人物身份、数字、章末钩子；"
         "优先把叙述信息改成有压力的对白或动作；每句尽量不超过 25 字；"
         "删除不推进剧情的段落；不得用环境、回忆或同义反复凑字数。"
     )
+
+
+def _quality_chunks(text, max_chars=1800):
+    """按自然段切分质量修复上下文，避免单次请求携带整本长文。"""
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+    paragraphs = [p for p in re.split(r'\n\s*\n', text or '') if p.strip()]
+    chunks = []
+    current = []
+    size = 0
+    for paragraph in paragraphs:
+        paragraph = paragraph.strip()
+        if len(paragraph) > max_chars:
+            if current:
+                chunks.append('\n\n'.join(current))
+                current, size = [], 0
+            for start in range(0, len(paragraph), max_chars):
+                chunks.append(paragraph[start:start + max_chars])
+            continue
+        if current and size + len(paragraph) + 2 > max_chars:
+            chunks.append('\n\n'.join(current))
+            current, size = [], 0
+        current.append(paragraph)
+        size += len(paragraph) + 2
+    if current:
+        chunks.append('\n\n'.join(current))
+    return chunks or ['']
+
+
+def _quality_repair_in_chunks(text, review, registry, genre, protagonist,
+                               prev_text, call, max_chars=1800):
+    """分块调用质量修复；任一块失败即放弃整章，避免拼出半修复稿。"""
+    chunks = _quality_chunks(text, max_chars=max_chars)
+    repaired = []
+    context = prev_text or ''
+    for chunk in chunks:
+        prompt = _quality_repair_prompt(
+            chunk, review, registry, genre, protagonist, context[-200:])
+        part = call(prompt, max(600, int(count_words(chunk) * 2.2)))
+        if not part or not part.strip():
+            return ''
+        part = part.strip()
+        repaired.append(part)
+        context = part
+    return '\n\n'.join(repaired)
 
 
 def _quality_repair_candidate(before, after, before_review, after_review, target_words):
@@ -980,8 +1028,13 @@ def _quality_repair_candidate(before, after, before_review, after_review, target
         return False, '质量分下降'
     if len(after_review.get('blockers') or []) > len(before_review.get('blockers') or []):
         return False, '阻断项增加'
-    if dialogue_ratio(after) < min(0.25, dialogue_ratio(before)):
-        return False, '对白占比没有改善'
+    before_dialogue = dialogue_ratio(before)
+    after_dialogue = dialogue_ratio(after)
+    if before_dialogue < 0.25:
+        if after_dialogue < 0.25:
+            return False, '对白占比没有改善'
+    elif after_dialogue < before_dialogue - 0.05:
+        return False, '对白占比明显下降'
     if filler_ratio(after)[0] > filler_ratio(before)[0] + 2:
         return False, '水段率恶化'
     if self_repeat_ratio(after) > self_repeat_ratio(before) + 1:
@@ -993,31 +1046,59 @@ def _quality_repair_candidate(before, after, before_review, after_review, target
 # 状态持久化
 # ============================================================
 def load_state(path, min_words=800):
-    """加载进度；字数不足 min_words 的章节会被视为未完成，从 existing_idx 中排除以便重做。
-    同时加载最新的配角户籍表/数字台账（type=registry，取最后一条）。"""
+    """加载进度；只接受结构有效且正文足够长的章节，按 idx 去重。
+
+    JSONL 是追加式断点文件，可能因进程中断留下半行；恢复时不能因坏行
+    静默丢失，也不能把重复章节重复计入总字数。outline/registry 采用
+    last-wins，章节采用唯一 idx。
+    """
     if not os.path.exists(path):
         return {"outline": None, "chapters": [], "registry": None}
     out = {"outline": None, "chapters": [], "registry": None}
-    with open(path, encoding="utf-8") as f:
-        for line in f:
+    seen_idx = set()
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line_no, line in enumerate(f, 1):
             line = line.strip()
             if not line:
                 continue
             try:
                 rec = json.loads(line)
-            except Exception:
+            except json.JSONDecodeError as exc:
+                print(f"  [WARN] 进度第 {line_no} 行 JSON 损坏，已跳过：{exc.msg}")
                 continue
-            if rec.get("type") == "outline":
-                out["outline"] = rec["data"]
-            elif rec.get("type") == "registry":
-                out["registry"] = rec["data"]  # 后写覆盖，取最新
-            elif rec.get("type") == "chapter":
-                ch = rec["data"]
-                # 标记过短章节为需要重做
-                if ch.get("words", 0) < min_words:
-                    print(f"  [SKIP] 第 {ch.get('idx')} 章仅 {ch.get('words')} 字，标记为待重做")
+            if not isinstance(rec, dict) or not rec.get("type") or "data" not in rec:
+                print(f"  [WARN] 进度第 {line_no} 行结构无效，已跳过")
+                continue
+            kind = rec.get("type")
+            data = rec.get("data")
+            if kind in ("outline", "registry"):
+                if isinstance(data, dict):
+                    out[kind] = data
+                else:
+                    print(f"  [WARN] 进度第 {line_no} 行 {kind} data 不是对象，已跳过")
+            elif kind == "chapter":
+                if not isinstance(data, dict):
+                    print(f"  [WARN] 进度第 {line_no} 行 chapter data 不是对象，已跳过")
                     continue
-                out["chapters"].append(ch)
+                idx = data.get("idx")
+                content = data.get("content")
+                if not isinstance(idx, int) or isinstance(idx, bool) or idx <= 0:
+                    print(f"  [WARN] 进度第 {line_no} 行章节 idx 无效，已跳过")
+                    continue
+                if idx in seen_idx:
+                    print(f"  [WARN] 进度第 {line_no} 行重复第 {idx} 章，已跳过")
+                    continue
+                if not isinstance(content, str) or not content.strip():
+                    print(f"  [WARN] 进度第 {line_no} 行第 {idx} 章正文为空，已跳过")
+                    continue
+                actual_words = count_words(content)
+                if actual_words < min_words:
+                    print(f"  [SKIP] 第 {idx} 章仅 {actual_words} 字，标记为待重做")
+                    continue
+                chapter = dict(data)
+                chapter["words"] = actual_words
+                out["chapters"].append(chapter)
+                seen_idx.add(idx)
     return out
 
 
@@ -1026,8 +1107,14 @@ def append_state(path, kind, data):
         f.write(json.dumps({"type": kind, "data": data}, ensure_ascii=False) + "\n")
 
 
+def _sidecar_path(path, suffix):
+    """生成派生文件路径；无 .jsonl 后缀时追加后缀，绝不覆盖进度文件。"""
+    root, ext = os.path.splitext(path)
+    return (root if ext.lower() == ".jsonl" else path) + suffix
+
+
 def export_txt(path, title, chapters):
-    txt_path = path.replace(".jsonl", ".txt")
+    txt_path = _sidecar_path(path, ".txt")
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(f"《{title}》\n\n")
         for ch in chapters:
@@ -1057,6 +1144,14 @@ def main():
                    help="跳过章节质量自动修复轮（调试/节省额度时使用）")
     p.add_argument("--dry-run", action="store_true", help="只打印大纲不生成正文")
     args = p.parse_args()
+    if args.total_words <= 0 or args.max_chapters <= 0:
+        p.error("--total-words 与 --max-chapters 必须为正数")
+    if not args.output.strip():
+        p.error("--output 不能为空")
+    args.output = os.path.abspath(args.output)
+    if os.path.isdir(args.output):
+        p.error(f"--output 必须是文件路径：{args.output}")
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
     api_key = args.api_key or os.environ.get("NOVEL_LLM_API_KEY", "")
     base_url_raw = args.base_url
@@ -1243,33 +1338,32 @@ def main():
                 self_repeat_ratio(full_text) > 2 or
                 not has_ending_hook(full_text))
             if needs_repair:
-                repair_prompt = _quality_repair_prompt(
+                print('  [质量] 本章低于可投稿门槛，触发一轮定点修复...')
+                candidate = _quality_repair_in_chunks(
                     full_text, before_review, registry, args.genre,
-                    protagonist, last_summary)
-                if repair_prompt:
-                    print('  [质量] 本章低于可投稿门槛，触发一轮定点修复...')
-                    candidate = call_llm(
-                        base_url_raw, args.model, SYSTEM_PROMPT, repair_prompt,
-                        api_key, int(w * 2.2), args.temperature,
-                        retries=1, timeout=90)
-                    if candidate:
-                        after_review = review_chapter(
-                            candidate, last_summary, idx, args.genre, protagonist,
-                            has_hook=has_ending_hook(candidate))
-                        accepted, reason = _quality_repair_candidate(
-                            full_text, candidate, before_review, after_review,
-                            target)
-                        if accepted:
-                            print('  [质量] 采纳修复稿：'
-                                  f"{before_review.get('score', 0):.0f}→"
-                                  f"{after_review.get('score', 0):.0f} 分｜"
-                                  f"对白 {dialogue_ratio(full_text):.1%}→"
-                                  f"{dialogue_ratio(candidate):.1%}")
-                            full_text, w = candidate, count_words(candidate)
-                        else:
-                            print(f'  [质量] 修复稿拒绝：{reason}，保留原稿')
+                    protagonist, last_summary,
+                    lambda prompt, max_tokens: call_llm(
+                        base_url_raw, args.model, SYSTEM_PROMPT, prompt,
+                        api_key, max_tokens, args.temperature,
+                        retries=1, timeout=90))
+                if candidate:
+                    after_review = review_chapter(
+                        candidate, last_summary, idx, args.genre, protagonist,
+                        has_hook=has_ending_hook(candidate))
+                    accepted, reason = _quality_repair_candidate(
+                        full_text, candidate, before_review, after_review,
+                        target)
+                    if accepted:
+                        print('  [质量] 采纳修复稿：'
+                              f"{before_review.get('score', 0):.0f}→"
+                              f"{after_review.get('score', 0):.0f} 分｜"
+                              f"对白 {dialogue_ratio(full_text):.1%}→"
+                              f"{dialogue_ratio(candidate):.1%}")
+                        full_text, w = candidate, count_words(candidate)
                     else:
-                        print('  [质量] 修复模型无有效输出，保留原稿')
+                        print(f'  [质量] 修复稿拒绝：{reason}，保留原稿')
+                else:
+                    print('  [质量] 修复模型无有效输出，保留原稿')
 
         chapter_content = {
             "idx": idx,

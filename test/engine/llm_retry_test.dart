@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -263,6 +264,30 @@ void main() {
       // 只尝试了第一次；退避一次都没等（不被 sleep 卡住）。
       expect(calls, 1);
       expect(rec.waits, isEmpty);
+    });
+
+    test('退避等待期间取消会立即结束，不等待完整 backoff', () async {
+      bool cancelled = false;
+      final Completer<void> never = Completer<void>();
+      final RetryPolicy p = RetryPolicy(
+        maxAttempts: 3,
+        baseBackoff: const Duration(seconds: 5),
+        sleep: (_) => never.future,
+      );
+      final Future<void> pending = p.run<void>(
+        (int attempt) async {
+          throw const LlmTransportException('限流',
+              statusCode: 429, retryable: true);
+        },
+        isRetryable: LlmHttpErrors.retryable,
+        isCancelled: () => cancelled,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      cancelled = true;
+      await expectLater(
+        pending,
+        throwsA(isA<GenerationCancelledException>()),
+      );
     });
 
     test('取消发生在第二次失败后：第一次退避照常，第二次失败即中断', () async {

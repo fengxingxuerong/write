@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 import 'package:novel_writer/ai_pipeline/services/ai_pipeline_service.dart';
 import 'package:novel_writer/ai_pipeline/services/llm_router.dart';
+import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/llm_retry.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
@@ -14,9 +15,21 @@ import 'package:novel_writer/models/llm_config.dart';
 /// 冷却跳过 → 沿链尝试 → 空/失败切下一个 → 首个非空返回。
 void main() {
   group('ChainLlmRouter', () {
+    test('取消信号在路由入口立即生效', () async {
+      final ChainLlmRouter router = ChainLlmRouter(retry: _singleTry);
+      await expectLater(
+        router.call(
+          const <LlmConfig>[],
+          system: 's',
+          user: 'u',
+          isCancelled: () => true,
+        ),
+        throwsA(isA<GenerationCancelledException>()),
+      );
+    });
+
     test('主端点成功直接返回，不碰备用', () async {
-      final _Endpoint main =
-          await _startFake(statusCode: 200, content: '主文');
+      final _Endpoint main = await _startFake(statusCode: 200, content: '主文');
       final ChainLlmRouter router = ChainLlmRouter(retry: _singleTry);
       final LlmRouteResult r = await router.call(
         <LlmConfig>[_endpoint(main, 'main')],
@@ -31,10 +44,11 @@ void main() {
     });
 
     test('主端点 429 → 自动切备用并返回备用内容', () async {
-      final _Endpoint main =
-          await _startFake(statusCode: 429, content: '');
-      final _Endpoint backup =
-          await _startFake(statusCode: 200, content: '备用内容');
+      final _Endpoint main = await _startFake(statusCode: 429, content: '');
+      final _Endpoint backup = await _startFake(
+        statusCode: 200,
+        content: '备用内容',
+      );
       final ChainLlmRouter router = ChainLlmRouter(retry: _singleTry);
       final LlmRouteResult r = await router.call(
         <LlmConfig>[_endpoint(main, 'main'), _endpoint(backup, 'backup')],
@@ -49,10 +63,11 @@ void main() {
     });
 
     test('主端点空响应 → 切备用', () async {
-      final _Endpoint main =
-          await _startFake(statusCode: 200, content: '');
-      final _Endpoint backup =
-          await _startFake(statusCode: 200, content: '备用正文');
+      final _Endpoint main = await _startFake(statusCode: 200, content: '');
+      final _Endpoint backup = await _startFake(
+        statusCode: 200,
+        content: '备用正文',
+      );
       final ChainLlmRouter router = ChainLlmRouter(retry: _singleTry);
       final LlmRouteResult r = await router.call(
         <LlmConfig>[_endpoint(main, 'main'), _endpoint(backup, 'backup')],
@@ -67,10 +82,8 @@ void main() {
     });
 
     test('主备全部失败 → 空响应', () async {
-      final _Endpoint bad1 =
-          await _startFake(statusCode: 500, content: '');
-      final _Endpoint bad2 =
-          await _startFake(statusCode: 429, content: '');
+      final _Endpoint bad1 = await _startFake(statusCode: 500, content: '');
+      final _Endpoint bad2 = await _startFake(statusCode: 429, content: '');
       final ChainLlmRouter router = ChainLlmRouter(retry: _singleTry);
       final LlmRouteResult r = await router.call(
         <LlmConfig>[_endpoint(bad1, 'bad1'), _endpoint(bad2, 'bad2')],
@@ -91,8 +104,10 @@ void main() {
         statuses: <int>[429, 429],
       );
       final int port = await main.start();
-      final _Endpoint backup =
-          await _startFake(statusCode: 200, content: '备用正文');
+      final _Endpoint backup = await _startFake(
+        statusCode: 200,
+        content: '备用正文',
+      );
       final ChainLlmRouter router = ChainLlmRouter(
         retry: _singleTry,
         maxFailures: 2,
@@ -132,9 +147,36 @@ void main() {
       await backup.close();
     });
 
+    test('同模型不同 API Key 的冷却状态互不影响', () async {
+      final _Endpoint shared = _Endpoint.plan(
+        statusCode: 200,
+        content: '备用正文',
+        statuses: <int>[500, 200],
+      );
+      await shared.start();
+      final ChainLlmRouter router = ChainLlmRouter(
+        retry: _singleTry,
+        maxFailures: 1,
+        cooldown: const Duration(minutes: 5),
+      );
+      final LlmConfig first = _endpoint(shared, 'shared', apiKey: 'key-a');
+      final LlmConfig second = _endpoint(shared, 'shared', apiKey: 'key-b');
+
+      // 第一次请求让 key-a 失败并进入冷却；key-b 仍应命中同一端点。
+      await router.call(<LlmConfig>[first], system: 's', user: 'u');
+      final int afterFirst = shared.count;
+      final LlmRouteResult result = await router.call(
+        <LlmConfig>[second],
+        system: 's',
+        user: 'u',
+      );
+      expect(result.content, '备用正文');
+      expect(shared.count, afterFirst + 1);
+      await shared.close();
+    });
+
     test('显式 temperature 覆盖端点自带温度', () async {
-      final _Endpoint main =
-          await _startFake(statusCode: 200, content: '主正文');
+      final _Endpoint main = await _startFake(statusCode: 200, content: '主正文');
       final ChainLlmRouter router = ChainLlmRouter(retry: _singleTry);
       await router.call(
         <LlmConfig>[_endpoint(main, 'main', temperature: 1.0)],
@@ -147,8 +189,7 @@ void main() {
     });
 
     test('temperature 为 null 时用端点自带温度', () async {
-      final _Endpoint main =
-          await _startFake(statusCode: 200, content: '主正文');
+      final _Endpoint main = await _startFake(statusCode: 200, content: '主正文');
       final ChainLlmRouter router = ChainLlmRouter(retry: _singleTry);
       await router.call(
         <LlmConfig>[_endpoint(main, 'main', temperature: 1.0)],
@@ -188,8 +229,7 @@ void main() {
     });
 
     test('旧配置（无 fallbacks 字段）向后兼容', () {
-      final AiRoleConfig restored =
-          AiRoleConfig.fromJson(<String, dynamic>{
+      final AiRoleConfig restored = AiRoleConfig.fromJson(<String, dynamic>{
         'role': 'titler',
         'enabled': true,
         'llm': <String, dynamic>{'model': 'lite'},
@@ -259,8 +299,10 @@ void main() {
 
     test('端点空响应 → 日志提示并继续切下一个', () async {
       final _Endpoint main = await _startFake(statusCode: 200, content: '');
-      final _Endpoint backup =
-          await _startFake(statusCode: 200, content: '备用正文');
+      final _Endpoint backup = await _startFake(
+        statusCode: 200,
+        content: '备用正文',
+      );
       final ChainLlmRouter router = ChainLlmRouter(retry: _singleTry);
       final List<String> logs = <String>[];
       final LlmRouteResult r = await router.call(
@@ -277,8 +319,10 @@ void main() {
 
     test('失败达阈值 → 日志带冷却提示；冷却期跳过也有日志', () async {
       final _Endpoint main = await _startFake(statusCode: 429, content: '');
-      final _Endpoint backup =
-          await _startFake(statusCode: 200, content: '备用正文');
+      final _Endpoint backup = await _startFake(
+        statusCode: 200,
+        content: '备用正文',
+      );
       final ChainLlmRouter router = ChainLlmRouter(
         retry: _singleTry,
         maxFailures: 1,
@@ -341,8 +385,9 @@ void main() {
         cooldown: const Duration(minutes: 5),
       );
       final List<String> logs = <String>[];
-      List<LlmConfig> chain() =>
-          <LlmConfig>[_endpoint(main, 'main', port: port)];
+      List<LlmConfig> chain() => <LlmConfig>[
+        _endpoint(main, 'main', port: port),
+      ];
 
       await router.call(chain(), system: 's', user: 'u', onLog: logs.add);
       await router.call(chain(), system: 's', user: 'u', onLog: logs.add);
@@ -360,7 +405,6 @@ void main() {
       await main.close();
     });
   });
-
 }
 
 // ============================================================
@@ -392,8 +436,10 @@ class _Endpoint {
   int get port => _server!.port;
 
   Future<int> start() async {
-    final HttpServer server =
-        await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final HttpServer server = await HttpServer.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
     _server = server;
     server.listen((HttpRequest req) async {
       _count++;
@@ -406,11 +452,12 @@ class _Endpoint {
         if (payload.containsKey('temperature')) {
           temperatures.add((payload['temperature'] as num).toDouble());
         }
-      } catch (_) {/* 非 JSON 忽略 */}
-      final int code =
-          (statuses != null && statuses!.isNotEmpty)
-              ? statuses!.removeAt(0)
-              : statusCode;
+      } catch (_) {
+        /* 非 JSON 忽略 */
+      }
+      final int code = (statuses != null && statuses!.isNotEmpty)
+          ? statuses!.removeAt(0)
+          : statusCode;
       final String resp = jsonEncode(<String, dynamic>{
         'choices': <Map<String, dynamic>>[
           <String, dynamic>{
@@ -448,12 +495,17 @@ Future<_Endpoint> _startFake({
 }
 
 /// 构造指向假端点的 LlmConfig。
-LlmConfig _endpoint(_Endpoint e, String model,
-    {double temperature = 0.8, int? port}) {
+LlmConfig _endpoint(
+  _Endpoint e,
+  String model, {
+  double temperature = 0.8,
+  int? port,
+  String apiKey = 'sk-test',
+}) {
   return LlmConfig(
     provider: LlmProvider.openaiCompatible,
     model: model,
-    apiKey: 'sk-test',
+    apiKey: apiKey,
     baseUrl: 'http://127.0.0.1:${port ?? e.port}/v1',
     temperature: temperature,
   );

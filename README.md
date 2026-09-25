@@ -1,9 +1,9 @@
-# 墨匠 InkSmith —— 完全离线一键小说写作工具
+# 墨匠 InkSmith —— 本地优先的一键小说写作工具
 
-[![CI](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml/badge.svg)](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml) ![Coverage](https://img.shields.io/badge/coverage-86%25-brightgreen) ![Tests](https://img.shields.io/badge/tests-873-blue) ![Dart](https://img.shields.io/badge/dart-3.12%2B-blue) ![Flutter](https://img.shields.io/badge/flutter-3.44%2B-blue)
+[![CI](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml/badge.svg)](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml) ![Coverage](https://img.shields.io/badge/coverage-80%25%20gate-brightgreen) ![Tests](https://img.shields.io/badge/tests-CI-blue) ![Dart](https://img.shields.io/badge/dart-3.12%2B-blue) ![Flutter](https://img.shields.io/badge/flutter-3.44%2B-blue)
 
-> 单代码库 Flutter / Dart，核心链路零网络请求、零外部 API。所有生成与存储均在本机完成。
-> 支持接入本地大模型（llama.cpp / Ollama）实现 AI 辅助写作，同样完全离线。
+> 单代码库 Flutter / Dart。默认离线、零外部 API；用户主动启用云端 LLM、崩溃日志上报或网页端 AI 请求时才会联网。
+> 支持接入本地大模型（llama.cpp / Ollama）实现 AI 辅助写作；不启用联网功能时仍可使用本地模板引擎。
 
 ## 特性
 
@@ -24,6 +24,7 @@
 ### 小说管理
 - **JSON 文件存储**：每个小说项目单个 `.json` 文件（meta + chapters + characters + worldSettings），跨端拷贝即迁移
 - **项目列表**：标题搜索、筛选（全部/进行中/已归档）、卡片显示题材·章数·字数·更新时间；支持**归档/取消归档**（不删数据）
+- **备份恢复**：书架可直接导入 JSON 备份；导入会复制为新作品并重写内部 ID，不会覆盖现有项目。
 - **角色 / 世界观 / 大纲**：结构化编辑，随章节推进持续维护；**卷纲总览**弹窗汇总全书各章大纲要点，可一键复制为多章连写的卷纲输入
 - **阅读模式**：内置阅读器（白/米黄/夜间三主题，字号/行距/衬线可调并持久化）
 
@@ -78,7 +79,7 @@ lib/
 
 ### 前置
 
-- 安装 [Flutter 3.44+ / Dart 3.12+](https://docs.flutter.dev/get-started/install) 与平台工具链。**Windows 桌面为主力平台**（仓库维护 `windows/` 运行器且 CI 构建验证），Web 为次要平台；其余端未随仓库提供。
+- 安装 [Flutter 3.44+ / Dart 3.12+](https://docs.flutter.dev/get-started/install) 与 Windows 工具链。**Windows 桌面为主力平台**（仓库维护 `windows/` 运行器且 CI 构建验证）；另有独立网页工作台；其余端未随仓库提供。
 - 国内镜像（可选）：
   ```bash
   $env:PUB_HOSTED_URL='https://pub.flutter-io.cn'
@@ -95,8 +96,9 @@ flutter pub get
 
 ```bash
 flutter run -d windows # Windows 桌面（主力平台）
-flutter run -d chrome  # Web（浏览器）
 ```
+
+> 另有独立网页工作台：`web/index.html` + `web/app.js` + `web/ai.js`，直接用浏览器打开即可；它不是 Flutter Web 构建产物，功能与桌面端不完全一致。
 
 > Android / iOS / macOS / Linux 运行器未随仓库提供，也未在 CI 验证；如需支持请自行 `flutter create .` 生成运行器后适配（见下节）。
 
@@ -110,24 +112,27 @@ flutter create .
 
 该命令会按当前 `pubspec.yaml` 补齐平台运行器与配置，**不会覆盖你已写的 `lib/` 代码**。
 
-### 构建发布包
+### 核心验证（与 CI 保持同一组核心门禁）
 
 ```bash
-# Windows 可执行文件（.exe，CI 构建并上传产物）
+# Windows 便携包：CI 上传 ZIP 与同名 .sha256
 flutter build windows --release
 
-# Web（可选）
-flutter build web
+# 本地全量验证：analyze、测试/覆盖率、Python、Web、Windows 构建
+powershell -ExecutionPolicy Bypass -File verify-novel.ps1
 ```
 
-### 一键验证（analyze + 测试 + 构建）
+> CI 生成 `InkSmith-<version>-windows-x64.zip` 便携包及 SHA-256 校验文件；`installer.iss` 是可选的 Inno Setup 安装脚本，需要本机安装 Inno Setup 后手动编译。
+
+### 本地验证参数
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File verify-novel.ps1            # 三步全跑
-powershell -ExecutionPolicy Bypass -File verify-novel.ps1 -SkipBuild # 快速：analyze + 测试
+powershell -ExecutionPolicy Bypass -File verify-novel.ps1            # analyze + Flutter 测试/覆盖率 + Python + Web + Windows 构建
+powershell -ExecutionPolicy Bypass -File verify-novel.ps1 -SkipBuild # 跳过 Release 构建
+powershell -ExecutionPolicy Bypass -File verify-novel.ps1 -SkipPython -SkipWeb # 仅跑 analyze + Flutter 测试
 ```
 
-> 日志输出到 `verify-logs/`，含 `test-<时间戳>.log` 与 `build-<时间戳>.log`。
+> 日志输出到 `verify-logs/`。Flutter 测试会生成 `coverage/lcov.info`，本地脚本与 CI 都要求行覆盖率 ≥ 80%。
 
 ### 静态检查与测试
 
@@ -136,29 +141,31 @@ flutter analyze
 flutter test
 ```
 
-当前测试覆盖：**873 个用例**（模型序列化 / 模板引擎生成质量与番茄闸门过审 / 生成 ViewModel 多章连写 / 引擎抽象与种子可复现 / 存储层归档与数据可靠性 / 敏感词统计 / 编辑器体验 / 导出服务（txt·md·epub·docx·backup）/ AI 记忆链路 / 校对解析 / 语料版权卫生与骨架泄漏护栏 / 阅读设置 / 崩溃日志上报 / DI 装配 / 全书体检报告 / 节拍语料与流水线断点存储 / **AI 流水线 run 编排（大纲失败·取消·骨架兜底·钩子补写与本地兜底·润色采纳与压缩拒绝·低分重写·断点续传·提前收官·审校与伏笔超时·本地质检证据注入）** / **本地质检三件套（QA 报告·链式路由日志与健康池自愈·章纲→场景规划与兜底）** / 关键 prompt 内容回归（状态关系条目·证据块注入）/ 项目列表异常分支错误上屏 / 其他核心逻辑），行覆盖率约 **86%**。
+当前测试与覆盖率以 CI 实际输出为准；CI 要求已采集生产文件的行覆盖率不低于 **80%**，并检查关键安全/存储文件必须进入 LCOV。测试覆盖模型序列化、模板生成、存储可靠性、导出、AI 流水线、断点续传、导入幂等、隐私文案和 Windows DPAPI 通道。
 
 ### CI 流水线
 
-仓库已配置 GitHub Actions（`.github/workflows/ci.yml`）：push / PR 到 `main` 自动执行
+仓库已配置 GitHub Actions（`.github/workflows/ci.yml`）：push / PR 到 `main` 或 `master` 自动执行。Windows 构建会等待 Flutter 测试和 Web 回归全部通过后才打包上传。
 
 1. **dart analyze --fatal-infos** — 静态检查零告警（任何 info 含 deprecation 都算失败）
-2. **flutter test --coverage** — 全量测试 + 覆盖率门槛 **80%**（当前约 86%；门槛 2026-09-23 自 60% 上调，防止测试退化）
-3. **flutter build windows --release** — Windows 发布包构建，产物自动上传
+2. **flutter test --coverage** — 全量测试 + 覆盖率门槛 **80%**，并校验关键安全/存储文件进入 LCOV
+3. **Web 回归** — 书架、编辑器、AI 守卫、导入原子性和错误路径
+4. **flutter build windows --release** — Windows 便携 ZIP + SHA-256 校验文件自动上传
 
-本地等价格令：`powershell -ExecutionPolicy Bypass -File verify-novel.ps1`（三步全跑）。
+本地等效命令：`powershell -ExecutionPolicy Bypass -File verify-novel.ps1`（默认含 analyze、Flutter 测试/覆盖率、Python、Web 回归和 Windows 构建）。
 
 ## 数据存储位置
 
 - 项目数据：各平台 `applicationSupportDirectory/novels/`，每个项目一个 `<id>.json` 文件 + 一个 `index.json` 索引。
-- AI 设置：`llm_settings.json`（原子写 tmp+rename，本地地址免 API Key）。
+- AI 设置：`llm_settings.json`（原子写 tmp+rename；Windows 桌面版使用 DPAPI 加密 API Key，本地 Ollama 地址免 API Key）。
 - 阅读设置：`app_settings.json`（主题/字号/行距/衬线）。
 - 敏感词：`sensitive_words.json`（自定义词）+ `sensitive_stats.json`（历史命中统计）。
-- 跨端迁移：直接拷贝对应的 `<id>.json` 文件到目标设备的 `novels/` 目录即可。
+- 跨端迁移：直接拷贝对应的 `<id>.json` 文件到目标设备的 `novels/` 目录即可；也可以在书架使用「导入备份」选择 JSON 文件恢复为新作品。
 
 ## 架构要点
 
 - **引擎切换**：`generationEngineProvider` 按设置 `useLlm` 切换 `LlmEngine` / `TemplateEngine`。
+- **Windows 单实例**：运行器使用 `Local\\MoJiangInkSmith_SingleInstance` 互斥体，避免重复开实例竞争项目文件。
 - **降级路径**：AI 标题失败回退「第 N 章」、AI 记忆超时后台继续、连接超时 8 秒、生成取消保留已生成章节。
 - **本地模型接入**：走「云端 API」提供商分支 + Base URL `http://127.0.0.1:19110`（llama-server）或 `http://localhost:11434`（Ollama）。
 

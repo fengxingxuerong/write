@@ -176,6 +176,15 @@ void main() {
       expect(bad.state.novels, isEmpty);
     });
 
+    test('create / delete 抛普通异常 → 错误上屏', () async {
+      final ProjectListViewModel bad =
+          ProjectListViewModel(_ThrowingRepo(appError: false));
+      await bad.create('新书', '玄幻', '热血');
+      expect(bad.state.error, startsWith('创建作品失败'));
+      await bad.delete('n1');
+      expect(bad.state.error, startsWith('删除作品失败'));
+    });
+
     test('delete / rename / setArchived 抛错 → error 上屏', () async {
       final ProjectListViewModel bad = ProjectListViewModel(_ThrowingRepo());
       await bad.delete('n1');

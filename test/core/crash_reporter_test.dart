@@ -5,7 +5,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:novel_writer/core/crash_reporter.dart';
 
 void main() {
-
   late Directory tempDir;
   late Directory supportDir;
   late Directory crashDir;
@@ -32,8 +31,9 @@ void main() {
     });
 
     test('fromJson 容错缺字段', () {
-      final CrashReporterConfig config =
-          CrashReporterConfig.fromJson(<String, dynamic>{});
+      final CrashReporterConfig config = CrashReporterConfig.fromJson(
+        <String, dynamic>{},
+      );
       expect(config.uploadUrl, isEmpty);
       expect(config.enabled, isFalse);
     });
@@ -44,52 +44,109 @@ void main() {
     });
 
     test('toJson / fromJson 往返', () {
-      const CrashReporterConfig config =
-          CrashReporterConfig(uploadUrl: 'https://example.com/api/crash');
-      final CrashReporterConfig restored =
-          CrashReporterConfig.fromJson(config.toJson());
+      const CrashReporterConfig config = CrashReporterConfig(
+        uploadUrl: 'https://example.com/api/crash',
+      );
+      final CrashReporterConfig restored = CrashReporterConfig.fromJson(
+        config.toJson(),
+      );
       expect(restored.uploadUrl, 'https://example.com/api/crash');
       expect(restored.enabled, isTrue);
     });
 
     test('copyWith', () {
       const CrashReporterConfig config = CrashReporterConfig();
-      final CrashReporterConfig next =
-          config.copyWith(uploadUrl: 'https://x.com/crash');
+      final CrashReporterConfig next = config.copyWith(
+        uploadUrl: 'https://x.com/crash',
+      );
       expect(next.uploadUrl, 'https://x.com/crash');
       expect(next.enabled, isTrue);
       expect(config.uploadUrl, isEmpty); // 原对象不变
     });
 
     test('非 HTTPS 旧配置不会启用上报', () {
-      const CrashReporterConfig config =
-          CrashReporterConfig(uploadUrl: 'http://example.com/crash');
+      const CrashReporterConfig config = CrashReporterConfig(
+        uploadUrl: 'http://example.com/crash',
+      );
       expect(config.enabled, isFalse);
     });
   });
 
   group('配置读写', () {
     test('无配置文件时返回空配置', () async {
-      final CrashReporterConfig config =
-          await loadCrashReporterConfig(supportDir);
+      final CrashReporterConfig config = await loadCrashReporterConfig(
+        supportDir,
+      );
       expect(config.enabled, isFalse);
     });
 
     test('save + load 往返', () async {
-      const CrashReporterConfig config =
-          CrashReporterConfig(uploadUrl: 'https://s.example.com/crash');
+      const CrashReporterConfig config = CrashReporterConfig(
+        uploadUrl: 'https://s.example.com/crash',
+      );
       await saveCrashReporterConfig(supportDir, config);
-      final CrashReporterConfig loaded =
-          await loadCrashReporterConfig(supportDir);
+      final CrashReporterConfig loaded = await loadCrashReporterConfig(
+        supportDir,
+      );
       expect(loaded.uploadUrl, 'https://s.example.com/crash');
     });
 
     test('损坏 JSON 回退空配置', () async {
-      File('${supportDir.path}/crash_report_config.json')
-          .writeAsStringSync('not json {{{');
-      final CrashReporterConfig loaded =
-          await loadCrashReporterConfig(supportDir);
+      File(
+        '${supportDir.path}/crash_report_config.json',
+      ).writeAsStringSync('not json {{{');
+      final CrashReporterConfig loaded = await loadCrashReporterConfig(
+        supportDir,
+      );
       expect(loaded.enabled, isFalse);
+    });
+  });
+
+  group('同步配置读写', () {
+    test('文件不存在时同步读取返回空配置', () {
+      final CrashReporterConfig config = loadCrashReporterConfigSync(
+        supportDir,
+      );
+      expect(config.enabled, isFalse);
+      expect(config.uploadUrl, isEmpty);
+    });
+
+    test('同步 save/load 往返一致', () {
+      saveCrashReporterConfigSync(
+        supportDir,
+        const CrashReporterConfig(uploadUrl: 'https://sync.example.com/crash'),
+      );
+      final CrashReporterConfig loaded = loadCrashReporterConfigSync(
+        supportDir,
+      );
+      expect(loaded.uploadUrl, 'https://sync.example.com/crash');
+      expect(loaded.enabled, isTrue);
+    });
+
+    test('同步读取坏 JSON 或非对象时回退空配置', () {
+      final File file = File('${supportDir.path}/crash_report_config.json');
+      file.writeAsStringSync('not json {{');
+      expect(loadCrashReporterConfigSync(supportDir).enabled, isFalse);
+
+      file.writeAsStringSync('[1,2,3]');
+      expect(loadCrashReporterConfigSync(supportDir).enabled, isFalse);
+    });
+  });
+
+  group('崩溃上报脱敏', () {
+    test('去掉设备标识、密钥、Bearer 和用户路径', () {
+      const String raw = '''
+machineId: machine-123456789
+apiKey: sk-super-secret
+Authorization: Bearer top-secret-token
+path=C:\\Users\\Alice\\secret-project
+''';
+      final String safe = sanitizeCrashContent(raw);
+      expect(safe, isNot(contains('machine-123456789')));
+      expect(safe, isNot(contains('sk-super-secret')));
+      expect(safe, isNot(contains('top-secret-token')));
+      expect(safe, isNot(contains('Alice')));
+      expect(safe, contains('[redacted]'));
     });
   });
 
@@ -136,9 +193,7 @@ void main() {
 
     test('非 HTTPS 协议被拒绝', () {
       expect(
-        const CrashReporterConfig(
-          uploadUrl: 'file:///tmp/crash',
-        ).enabled,
+        const CrashReporterConfig(uploadUrl: 'file:///tmp/crash').enabled,
         isFalse,
       );
       expect(

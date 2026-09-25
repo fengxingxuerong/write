@@ -13,25 +13,30 @@ import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
 import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/core/theme/app_tokens.dart';
+import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/models/llm_config.dart';
 import 'package:novel_writer/widgets/app_feedback.dart';
 
 /// 流水线存储 provider（应用支持目录 /ai_pipeline）。
 final Provider<PipelineStorage> pipelineStorageProvider =
     Provider<PipelineStorage>((ref) {
-  final String dir = ref.watch(appDatabaseProvider).directory.path;
-  return PipelineStorage('$dir${Platform.pathSeparator}ai_pipeline');
-});
+      final String dir = ref.watch(appDatabaseProvider).directory.path;
+      return PipelineStorage(
+        '$dir${Platform.pathSeparator}ai_pipeline',
+        secretStore: const DpapiSecretStore(),
+      );
+    });
 
 /// 流水线服务 provider。
 final Provider<AiPipelineService> aiPipelineServiceProvider =
     Provider<AiPipelineService>((ref) {
-  return AiPipelineService(ref.watch(pipelineStorageProvider));
-});
+      return AiPipelineService(ref.watch(pipelineStorageProvider));
+    });
 
 /// 书架导入 provider。
-final Provider<NovelImporter> novelImporterProvider =
-    Provider<NovelImporter>((ref) {
+final Provider<NovelImporter> novelImporterProvider = Provider<NovelImporter>((
+  ref,
+) {
   return NovelImporter(
     ref.watch(novelRepositoryProvider),
     ref.watch(appDatabaseProvider),
@@ -48,8 +53,7 @@ class AiPipelineHomePage extends ConsumerStatefulWidget {
   const AiPipelineHomePage({super.key});
 
   @override
-  ConsumerState<AiPipelineHomePage> createState() =>
-      _AiPipelineHomePageState();
+  ConsumerState<AiPipelineHomePage> createState() => _AiPipelineHomePageState();
 }
 
 class _AiPipelineHomePageState extends ConsumerState<AiPipelineHomePage> {
@@ -90,21 +94,23 @@ class _AiPipelineHomePageState extends ConsumerState<AiPipelineHomePage> {
       ),
       body: FutureBuilder<List<AiPipelineTask>>(
         future: _future,
-        builder: (BuildContext context, AsyncSnapshot<List<AiPipelineTask>> snap) {
-          if (snap.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final List<AiPipelineTask> tasks = snap.data ?? <AiPipelineTask>[];
-          if (tasks.isEmpty) {
-            return _buildEmpty(context);
-          }
-          return ListView.builder(
-            padding: const EdgeInsets.all(AppTokens.s3),
-            itemCount: tasks.length,
-            itemBuilder: (BuildContext context, int index) =>
-                _TaskCard(task: tasks[index], onChanged: _reload),
-          );
-        },
+        builder:
+            (BuildContext context, AsyncSnapshot<List<AiPipelineTask>> snap) {
+              if (snap.connectionState != ConnectionState.done) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              final List<AiPipelineTask> tasks =
+                  snap.data ?? <AiPipelineTask>[];
+              if (tasks.isEmpty) {
+                return _buildEmpty(context);
+              }
+              return ListView.builder(
+                padding: const EdgeInsets.all(AppTokens.s3),
+                itemCount: tasks.length,
+                itemBuilder: (BuildContext context, int index) =>
+                    _TaskCard(task: tasks[index], onChanged: _reload),
+              );
+            },
       ),
     );
   }
@@ -114,8 +120,11 @@ class _AiPipelineHomePageState extends ConsumerState<AiPipelineHomePage> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: <Widget>[
-          Icon(Icons.auto_stories_outlined,
-              size: 64, color: AppInk.of(context).inkFaint),
+          Icon(
+            Icons.auto_stories_outlined,
+            size: 64,
+            color: AppInk.of(context).inkFaint,
+          ),
           const SizedBox(height: AppTokens.s3),
           const Text('还没有生成任务'),
           const SizedBox(height: 4),
@@ -158,11 +167,7 @@ class _TaskCard extends ConsumerWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: AppTokens.s2),
       child: ListTile(
-        title: Text(
-          task.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
+        title: Text(task.title, maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(
           '${task.chapterCount} 章 · ${task.totalWords} 字 · '
           '${task.createdAt.toLocal().toString().substring(0, 16)}',
@@ -183,8 +188,9 @@ class _TaskCard extends ConsumerWidget {
             ),
             PopupMenuButton<String>(
               onSelected: (String v) async {
-                final PipelineStorage storage =
-                    ref.read(pipelineStorageProvider);
+                final PipelineStorage storage = ref.read(
+                  pipelineStorageProvider,
+                );
                 switch (v) {
                   case 'run':
                     await context.push('/ai-pipeline/run/${task.id}');
@@ -192,14 +198,13 @@ class _TaskCard extends ConsumerWidget {
                   case 'report':
                     _showReport(context, task);
                   case 'import':
-                    final NovelImporter importer =
-                        ref.read(novelImporterProvider);
+                    final NovelImporter importer = ref.read(
+                      novelImporterProvider,
+                    );
                     try {
                       final String id = await importer.importTask(task);
                       task.importedNovelId = id;
-                      await ref
-                          .read(pipelineStorageProvider)
-                          .saveTask(task);
+                      await ref.read(pipelineStorageProvider).saveTask(task);
                       if (context.mounted) {
                         AppToast.success(context, '已导入书架：《${task.title}》');
                       }
@@ -242,10 +247,7 @@ class _TaskCard extends ConsumerWidget {
                     child: Text('继续 / 查看'),
                   )
                 else
-                  const PopupMenuItem<String>(
-                    value: 'run',
-                    child: Text('查看'),
-                  ),
+                  const PopupMenuItem<String>(value: 'run', child: Text('查看')),
                 if (task.chapterCount > 0 &&
                     task.status == PipelineTaskStatus.done)
                   PopupMenuItem<String>(
@@ -253,7 +255,10 @@ class _TaskCard extends ConsumerWidget {
                     child: Text(task.importedNovelId == null ? '导入书架' : '打开作品'),
                   ),
                 if (task.chapterCount > 0)
-                  const PopupMenuItem<String>(value: 'report', child: Text('质检报告')),
+                  const PopupMenuItem<String>(
+                    value: 'report',
+                    child: Text('质检报告'),
+                  ),
                 const PopupMenuItem<String>(value: 'delete', child: Text('删除')),
               ],
             ),
@@ -271,9 +276,9 @@ class _TaskCard extends ConsumerWidget {
     showDialog<void>(
       context: context,
       builder: (BuildContext context) {
-        final List<PipelineChapter> sorted =
-            List<PipelineChapter>.from(task.chapters)
-              ..sort((a, b) => a.idx.compareTo(b.idx));
+        final List<PipelineChapter> sorted = List<PipelineChapter>.from(
+          task.chapters,
+        )..sort((a, b) => a.idx.compareTo(b.idx));
         return AlertDialog(
           title: const Text('质检报告'),
           content: SizedBox(
@@ -291,7 +296,10 @@ class _TaskCard extends ConsumerWidget {
                         '第${c.idx}章 ${c.title}（${c.words}字）'
                         '　AI味 ${PipelineQa.aiEchoPct(c.content).toStringAsFixed(2)}%'
                         '　重复 ${PipelineQa.adjacentRepetition(c.content).toStringAsFixed(3)}',
-                        style: AppFonts.text(AppInk.of(context).inkSoft, size: 12),
+                        style: AppFonts.text(
+                          AppInk.of(context).inkSoft,
+                          size: 12,
+                        ),
                       ),
                     ),
                 ],
@@ -325,14 +333,14 @@ class AiPipelineConfigPage extends ConsumerStatefulWidget {
 }
 
 class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
-  final TextEditingController _wordsCtrl =
-      TextEditingController(text: '100000');
-  final TextEditingController _chaptersCtrl =
-      TextEditingController(text: '40');
-  final TextEditingController _genreCtrl =
-      TextEditingController(text: '玄幻');
-  final TextEditingController _protagonistCtrl =
-      TextEditingController(text: '');
+  final TextEditingController _wordsCtrl = TextEditingController(
+    text: '100000',
+  );
+  final TextEditingController _chaptersCtrl = TextEditingController(text: '40');
+  final TextEditingController _genreCtrl = TextEditingController(text: '玄幻');
+  final TextEditingController _protagonistCtrl = TextEditingController(
+    text: '',
+  );
   bool _useEditor = true;
   bool _useVerifier = true;
 
@@ -342,7 +350,10 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
   /// 五角色配置（默认值；可从最近任务配置加载）。
   Map<AiRole, AiRoleConfig> _roles = <AiRole, AiRoleConfig>{
     for (final AiRole r in AiRole.values)
-      r: AiRoleConfig(role: r, llm: LlmConfig(temperature: r.defaultTemperature)),
+      r: AiRoleConfig(
+        role: r,
+        llm: LlmConfig(temperature: r.defaultTemperature),
+      ),
   };
 
   @override
@@ -353,8 +364,9 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
 
   /// 加载最近一次任务配置并预填表单。
   Future<void> _loadRecent() async {
-    final AiPipelineConfig? cfg =
-        await ref.read(pipelineStorageProvider).loadRecentConfig();
+    final AiPipelineConfig? cfg = await ref
+        .read(pipelineStorageProvider)
+        .loadRecentConfig();
     if (cfg == null || !mounted) return;
     setState(() {
       _wordsCtrl.text = cfg.totalWords.toString();
@@ -417,7 +429,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
 
   /// 导入本机 API 配置并按固定分工装配五角色端点链。
   ///
-  /// 密钥只落在本机任务配置里（随 pipeline 存储），不进源码、不外发。
+  /// 密钥只落在本机任务配置里（随 pipeline 存储），不进源码；调用远程服务时会作为鉴权凭据发送。
   Future<void> _importLocalKeys() async {
     String? text;
     try {
@@ -441,7 +453,8 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
             controller: ctrl,
             maxLines: 8,
             decoration: const InputDecoration(
-              hintText: 'Base URL / 模型名 / API Key 混排即可，'
+              hintText:
+                  'Base URL / 模型名 / API Key 混排即可，'
                   '会自动识别 rc- / sk- / nvapi- / sk-or-v1- 开头的密钥',
               border: OutlineInputBorder(),
             ),
@@ -469,11 +482,16 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
       return;
     }
     setState(() {
-      _roles =
-          FixedWorkflowPreset.roles(keys, includeCandidates: _useUnverified);
+      _roles = FixedWorkflowPreset.roles(
+        keys,
+        includeCandidates: _useUnverified,
+      );
     });
-    _snack('已按固定分工导入 ${keys.length} 个密钥（'
-        '策划/写手/编辑/标题/审校 各自的主备链已自动排序）');
+    _snack(
+      '已按固定分工导入 ${keys.length} 个密钥（'
+      '策划/写手/编辑/标题/审校 各自的主备链已自动排序；'
+      '调用远程服务时会发送给对应服务商）',
+    );
   }
 
   @override
@@ -568,8 +586,9 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
                     contentPadding: EdgeInsets.zero,
                     title: const Text('同时纳入未实测候选端点'),
                     subtitle: const Text(
-                        'NVIDIA（z-ai/glm-5.2）与 OpenRouter（stealth/ox-alpha）'
-                        '仅作链尾兜底'),
+                      'NVIDIA（z-ai/glm-5.2）与 OpenRouter（stealth/ox-alpha）'
+                      '仅作链尾兜底',
+                    ),
                     value: _useUnverified,
                     onChanged: (bool v) => setState(() => _useUnverified = v),
                   ),
@@ -605,12 +624,15 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
 
   Widget _roleCard(AiRole role) {
     final AiRoleConfig cfg = _roles[role]!;
-    final TextEditingController modelCtrl =
-        TextEditingController(text: cfg.llm.model);
-    final TextEditingController urlCtrl =
-        TextEditingController(text: cfg.llm.baseUrl);
-    final TextEditingController keyCtrl =
-        TextEditingController(text: cfg.llm.apiKey);
+    final TextEditingController modelCtrl = TextEditingController(
+      text: cfg.llm.model,
+    );
+    final TextEditingController urlCtrl = TextEditingController(
+      text: cfg.llm.baseUrl,
+    );
+    final TextEditingController keyCtrl = TextEditingController(
+      text: cfg.llm.apiKey,
+    );
 
     return Card(
       margin: const EdgeInsets.only(bottom: AppTokens.s2),
@@ -621,16 +643,13 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
           children: <Widget>[
             Row(
               children: <Widget>[
-                Icon(
-                  switch (role) {
-                    AiRole.planner => Icons.account_tree_outlined,
-                    AiRole.writer => Icons.edit_note,
-                    AiRole.editor => Icons.brush_outlined,
-                    AiRole.titler => Icons.title,
-                    AiRole.verifier => Icons.fact_check_outlined,
-                  },
-                  size: 20,
-                ),
+                Icon(switch (role) {
+                  AiRole.planner => Icons.account_tree_outlined,
+                  AiRole.writer => Icons.edit_note,
+                  AiRole.editor => Icons.brush_outlined,
+                  AiRole.titler => Icons.title,
+                  AiRole.verifier => Icons.fact_check_outlined,
+                }, size: 20),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Column(
@@ -671,7 +690,8 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
             TextField(
               controller: urlCtrl,
               decoration: const InputDecoration(
-                labelText: 'Base URL（自动拼接 /chat/completions，填根地址如 https://xxx/v1）',
+                labelText:
+                    'Base URL（自动拼接 /chat/completions，填根地址如 https://xxx/v1）',
                 isDense: true,
                 border: OutlineInputBorder(),
               ),
@@ -728,8 +748,7 @@ class AiPipelineRunPage extends ConsumerStatefulWidget {
   final String taskId;
 
   @override
-  ConsumerState<AiPipelineRunPage> createState() =>
-      _AiPipelineRunPageState();
+  ConsumerState<AiPipelineRunPage> createState() => _AiPipelineRunPageState();
 }
 
 class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
@@ -751,33 +770,45 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
   }
 
   Future<void> _load() async {
-    final AiPipelineTask? t =
-        await ref.read(pipelineStorageProvider).loadTask(widget.taskId);
+    final AiPipelineTask? t = await ref
+        .read(pipelineStorageProvider)
+        .loadTask(widget.taskId);
     if (mounted) setState(() => _task = t);
   }
 
   Future<void> _run() async {
-    if (_task == null || _running) return;
+    final AiPipelineTask? task = _task;
+    if (task == null || _running) return;
     setState(() {
       _running = true;
       _cancelRequested = false;
     });
-    final AiPipelineService service =
-        ref.read(aiPipelineServiceProvider);
-    await service.run(
-      _task!,
-      isCancelled: () => _cancelRequested,
-      onProgress: () {
-        if (mounted) setState(() {});
-        _scrollToBottom();
-      },
-    );
-    if (mounted) {
-      setState(() {
-        _running = false;
-        _task = _task;
-      });
-      await _load();
+    try {
+      final AiPipelineService service = ref.read(aiPipelineServiceProvider);
+      await service.run(
+        task,
+        isCancelled: () => _cancelRequested,
+        onProgress: () {
+          if (mounted) setState(() {});
+          _scrollToBottom();
+        },
+      );
+    } catch (error) {
+      if (mounted) {
+        AppToast.error(context, '流水线运行失败：$error');
+      }
+    } finally {
+      _running = false;
+      if (mounted) {
+        setState(() {});
+        try {
+          await _load();
+        } catch (error) {
+          if (mounted) {
+            AppToast.error(context, '任务状态刷新失败：$error');
+          }
+        }
+      }
     }
   }
 
@@ -795,9 +826,9 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
 
   Future<void> _exportTxt() async {
     final AiPipelineTask task = _task!;
-    final List<PipelineChapter> sorted =
-        List<PipelineChapter>.from(task.chapters)
-          ..sort((a, b) => a.idx.compareTo(b.idx));
+    final List<PipelineChapter> sorted = List<PipelineChapter>.from(
+      task.chapters,
+    )..sort((a, b) => a.idx.compareTo(b.idx));
     final StringBuffer buf = StringBuffer()
       ..writeln('《${task.title}》')
       ..writeln();
@@ -813,7 +844,9 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
       '${ref.read(pipelineStorageProvider).directory}${Platform.pathSeparator}export',
     );
     if (!await dir.exists()) await dir.create(recursive: true);
-    final File file = File('${dir.path}${Platform.pathSeparator}${task.id}.txt');
+    final File file = File(
+      '${dir.path}${Platform.pathSeparator}${task.id}.txt',
+    );
     await file.writeAsString(buf.toString(), flush: true);
     if (!mounted) return;
     AppToast.success(context, '已导出：${file.path}');
@@ -918,7 +951,11 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
                 padding: const EdgeInsets.symmetric(vertical: 1),
                 child: Text(
                   task.log[index],
-                  style: AppFonts.text(AppInk.of(context).inkSoft, size: 12, monoFace: true),
+                  style: AppFonts.text(
+                    AppInk.of(context).inkSoft,
+                    size: 12,
+                    monoFace: true,
+                  ),
                 ),
               ),
             ),
@@ -933,13 +970,12 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
                         ? OutlinedButton.icon(
                             icon: const Icon(Icons.stop),
                             label: const Text('停止'),
-                            onPressed: () => setState(() => _cancelRequested = true),
+                            onPressed: () =>
+                                setState(() => _cancelRequested = true),
                           )
                         : FilledButton.icon(
                             icon: const Icon(Icons.play_arrow),
-                            label: Text(
-                              task.resumable ? '继续生成' : '重新开始',
-                            ),
+                            label: Text(task.resumable ? '继续生成' : '重新开始'),
                             onPressed: _run,
                           ),
                   ),
