@@ -539,6 +539,10 @@ def state_extract_prompt(text, prev_state):
 # 对照户籍表/数字台账/跨章状态，抓「身份换人 / 数字漂移 / 状态矛盾 / 无中生有」。
 # 必须在户籍表更新前调用——核查的是「本章 vs 前章已确立事实」。
 FACT_CHECK_SYS = "你是独立事实核查员，只输出 JSON，不要任何解释。"
+# 核查预算（2026-09-26 门禁 v7 实锤修复）：PLANNER_CHAIN 主位是思考型 glm-5.2，
+# 原固定 3000 预算下「思考链吃满 → 正文为空 → 整章核查记 error」三章复发，直接把门禁
+# 第 16 项判负。逐档重试：8000（与链定义同档）→ 16000（仍被吃满时的最后一道）。
+FACT_CHECK_BUDGETS = (8000, 16000)
 
 
 def fabrication_check_prompt(chapter_text, registry, state_track, idx):
@@ -571,18 +575,25 @@ def fabrication_check_prompt(chapter_text, registry, state_track, idx):
 def run_fact_check(registry, state_track, final_text, idx):
     """关卡 5 · 编造核查：规划官 glm 链（与写手 dsf/DeepSeek 异家族）独立核查。
 
-    返回 fabrication 列表；LLM/解析失败返回 None（调用方记 error，不算通过凭据）。
+    返回 fabrication 列表；核查未跑成（异常/空输出/不合 schema）返回 **None**，
+    由调用方记 error——「没跑成」绝不当「没问题」（门禁第 16 项据此判 FAIL）。
+    预算按 FACT_CHECK_BUDGETS 逐档重试，防思考型模型吃满 max_tokens 造成静默失效。
     """
-    try:
-        raw = call_chain(PLANNER_CHAIN, FACT_CHECK_SYS,
-                         fabrication_check_prompt(final_text, registry, state_track, idx),
-                         max_tokens=3000)
-        parsed = parse_json_from_llm(raw)
-    except Exception:
-        return None
-    if not isinstance(parsed, dict) or not isinstance(parsed.get("fabrications"), list):
-        return None
-    return [item for item in parsed["fabrications"] if isinstance(item, dict)]
+    prompt = fabrication_check_prompt(final_text, registry, state_track, idx)
+    for attempt, budget in enumerate(FACT_CHECK_BUDGETS, start=1):
+        try:
+            raw = call_chain(PLANNER_CHAIN, FACT_CHECK_SYS, prompt, max_tokens=budget)
+            parsed = parse_json_from_llm(raw)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("fabrications"), list):
+            return [item for item in parsed["fabrications"] if isinstance(item, dict)]
+        if attempt < len(FACT_CHECK_BUDGETS):
+            print(f"    [核查] 预算 {budget} 未取到合法 JSON（思考链吃满/解析失败），"
+                  f"提到 {FACT_CHECK_BUDGETS[attempt]} 重试")
+        else:
+            print(f"    [核查] 预算提到 {budget} 仍未取到合法 JSON，本轮核查放弃")
+    return None
 
 
 def update_registry(output, registry, final_text, idx):

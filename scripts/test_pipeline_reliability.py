@@ -46,11 +46,42 @@ class PipelineReliabilityTest(unittest.TestCase):
 
     def test_fact_check_rejects_wrong_schema(self):
         with patch.object(pipeline, 'call_chain', return_value='{"fabrications":"bad"}'):
-            self.assertIsNone(
-                pipeline.run_fact_check({'characters': [], 'facts': []}, '', '正文', 1))
+            with patch('builtins.print'):
+                self.assertIsNone(
+                    pipeline.run_fact_check({'characters': [], 'facts': []}, '', '正文', 1))
         with patch.object(pipeline, 'call_chain', return_value='{"fabrications":[]}'):
             self.assertEqual(
                 pipeline.run_fact_check({'characters': [], 'facts': []}, '', '正文', 1), [])
+
+    def test_fact_check_retries_with_bigger_budget(self):
+        """思考型规划官链吃满 max_tokens 导致正文为空时，须提预算重试而非静默记 error
+        （2026-09-26 门禁 v7 实锤：3 章核查执行失败，第 16 项判负）。"""
+        calls = []
+
+        def fake_call(chain, system, user, max_tokens):
+            calls.append(max_tokens)
+            return "" if len(calls) == 1 else '{"fabrications":[]}'
+
+        with patch.object(pipeline, 'call_chain', side_effect=fake_call):
+            with patch('builtins.print'):
+                result = pipeline.run_fact_check({'characters': [], 'facts': []}, '', '正文', 1)
+        self.assertEqual(result, [])
+        self.assertEqual(calls, list(pipeline.FACT_CHECK_BUDGETS))
+
+    def test_fact_check_gives_up_after_all_budgets(self):
+        """全部预算档都失败仍返回 None（调用方记 error），不得伪装成「0 处编造」。"""
+        with patch.object(pipeline, 'call_chain', return_value='') as call:
+            with patch('builtins.print'):
+                result = pipeline.run_fact_check({'characters': [], 'facts': []}, '', '正文', 1)
+        self.assertIsNone(result)
+        self.assertEqual(call.call_count, len(pipeline.FACT_CHECK_BUDGETS))
+
+    def test_fact_check_budget_clears_thinking_floor(self):
+        """首档预算须 ≥ 规划官链自身 max_tokens 且不低于 8000，否则退回「吃满即空」复发态。"""
+        self.assertGreaterEqual(pipeline.FACT_CHECK_BUDGETS[0],
+                                pipeline.PLANNER_CHAIN[0]['max_tokens'])
+        self.assertGreaterEqual(pipeline.FACT_CHECK_BUDGETS[0], 8000)
+        self.assertLess(pipeline.FACT_CHECK_BUDGETS[0], pipeline.FACT_CHECK_BUDGETS[1])
 
     def test_foreshadow_save_reports_failure(self):
         with patch('builtins.open', side_effect=OSError('disk full')):

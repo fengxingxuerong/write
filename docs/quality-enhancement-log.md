@@ -604,3 +604,25 @@
 - 文档内每个脚本名经磁盘存在性核对；21 个参数逐项对照 `python scripts/novel_pipeline.py --help`（HEAD `20be62a`）；门禁十六项与 `run_smoke_gate.py` 代码注释 ①-⑯ 及 `smoke_gate_v7.log` 实际输出逐行对齐
 - 本轮**未改动任何代码**（仅 `docs/交付文档.md`、`docs/quality-enhancement-log.md`、`README.md` 三个 Markdown 文件），CI 无需重跑
 
+---
+
+## 十七、2026-09-26 门禁 v7 第 16 项根因修复：关卡5 核查预算逐档重试
+
+### 根因（第十六节线索的直接落地）
+
+`run_fact_check` 走 `PLANNER_CHAIN`（主位思考型 `glm-5.2`，链自身 `max_tokens=8000`），但调用点把预算**硬压到 3000**。思考型模型的 reasoning 先吃预算，3000 档下极易「思考链有输出、正文为空」——`call_chain` 视为空结果切下一位，整条链跑完返回 `""`，`parse_json_from_llm` 拿不到 JSON → 返回 None → 章节记 `error`。v7 三章核查执行失败即此。与缺陷清单 #1（2026-09-12 pro 角色 max_tokens 吃空）同一模式复发，说明**预算与思考型链不匹配要靠断言守住，不能靠人记**。
+
+### 改动
+
+- `scripts/novel_pipeline.py`：新增 `FACT_CHECK_BUDGETS = (8000, 16000)`；`run_fact_check` 改为逐档重试，每档失败打印 `[核查] 预算 X 未取到合法 JSON（思考链吃满/解析失败），提到 Y 重试`，全档失败才返回 `None`
+- **契约不变**：仍是「成功返回列表 / 未跑成返回 None 由调用方记 error」，两处调用点（主循环 7.60、结构补章）与门禁第 16 项口径都不动——**「没跑成」依旧不算通过凭据**，只是不再因为预算配置而频繁白丢核查
+- prompt 提前算一次复用，重试不重复拼 prompt
+- `scripts/test_pipeline_reliability.py`：新增 3 项单测——① 首档空输出须提额到 16000 重试并成功；② 全档失败返回 None 且调用次数＝档数（不伪装成「0 处编造」）；③ 下限守卫 `FACT_CHECK_BUDGETS[0] >= PLANNER_CHAIN[0]['max_tokens']` 且 ≥ 8000、两档递增（防再次退回 3000）
+
+### 验证
+
+- `python -m unittest discover -s scripts -p 'test_*.py'` → **Ran 27 tests OK**（24→27）
+- `python -m ruff check scripts --select=F` → All checks passed；`compileall scripts` 退出码 0；`python -m scripts.novel_pipeline --help` 导入回归正常
+- **待复验**：真实端点下的确认要重跑门禁 v8（`python scripts/run_smoke_gate.py --output data/generated/smoke_gate_v8.jsonl`，耗配额、约 1 小时）。预期第 16 项的「执行失败章」消失；若仍报 6 处编造命中，则属生成侧真编造，转入下一轮（世界观/设定注入）
+- 副作用评估：最坏情况每章多一次 LLM 调用（仅在首档失败时），且规划官链本就是每章多处调用的主链，配额影响可控；思考链吃满导致的健康池连败冷却也随之减少
+
