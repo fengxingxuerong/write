@@ -737,12 +737,41 @@
 - **写手预防**：`scene_prompt` 加【事实与数字硬约束】——数字只准取自台账、台账没有的一律不许凭空写；背景细节（债务/年份/地点/师门/旧约/存放处）首次出现必须在本章交代来龙去脉，禁止以「既定事实」口吻引用。
 - 两处调用点（主循环 7.60、结构补章）改走 `fact_check_stage`，`fact_check` 记录格式不变（`idx/fabrications/error` + 新增 `repaired`），门禁第 16 项读取逻辑**零改动**。
 
+---
+
+## 二十一、2026-09-26 场景规划大面积降级根因排查与门禁第 17 项加固
+
+### 根因
+
+在分析 `data/generated/smoke_gate_v7.smokegate.log` 时发现，4 章中有 3 章（第 1、2、4 章）打印了：
+> `[规划] LLM 场景规划失败，使用默认「起承转合」骨架兜底`
+
+排查代码 `scripts/novel_pipeline.py`（原 915-925 行与 1891-1903 行）发现：
+1. **预算与思考型规划链冲突**：`PLANNER_CHAIN` 主位是思考型 `glm-5.2`，链配置 `max_tokens=8000`；但两处场景规划调用均硬编码 `max_tokens=2000`，且两次重试使用完全相同的 2000 预算。当大纲、跨章状态、人物/事实台账注入较长时，思考链输出占满 2000 token，导致正文输出截断为空，`parse_json_from_llm("")` 失败。这与缺陷清单 #1（pro 角色 max_tokens 吃空）和 #11（关卡5 编造核查 3000 token 预算不足）完全是同一机理复发。
+2. **静默降级且不可观测**：
+   - 规划失败后直接退回无世界观、无事实锚点的默认起承转合兜底骨架（400/400/400/400 字）；
+   - 写手在兜底骨架下拿不到任何场景级世界观设定要求，只能自由脑补，直接导致后续第 1/2/3 章连挂「世界观未落地」阻断项，并在第 2 章发生 6 处无事实依据的编造；
+   - 章节产物未记录规划来源，门禁验收对此完全无感知。
+
+### 改动
+
+1. **场景规划逐档重试与日志收敛**：
+   - `scripts/novel_pipeline.py` 新增 `SCENE_PLAN_BUDGETS = (8000, 16000)`；
+   - 提取公共函数 `plan_scenes_or_fallback`，支持分档重试（8000 失败提档至 16000 重试），分流打印空输出（思考链吃满/超时）与非法 JSON 原因，全档失败才降级；
+   - 章节记录新增 `scene_plan: "llm" | "fallback"` 字段并随 JSONL 落盘。
+2. **冒烟门禁加固第 17 项**：
+   - `scripts/run_smoke_gate.py` 新增第 17 项「场景规划无静默兜底降级」；
+   - 任何章节 `scene_plan == "fallback"` 直接判 FAIL，拦截因规划降级引起的隐性劣化；
+   - 兼容历史产物：无 `scene_plan` 字段时降级 WARN 提示不拦截。
+3. **单测覆盖**：
+   - `scripts/test_pipeline_reliability.py` 新增 `ScenePlanReliabilityTest` 5 项测试：首档成功验证、首档空输出提档至 16000 验证、全档失败降级验证、门禁统计拦截验证、历史产物兼容验证。
+
 ### 验证
 
-- 新增 7 项单测（scripts 53→**60 全过**）：零命中不花额外调用、核查失败不触发修复、**复检改善才采纳**、复检未改善**必须回滚**、修复稿没过采纳闸则不复检、修复 prompt 含全部 claim+字数下限、写手硬约束在场
-- `ruff --select=F,E9` 全绿、`compileall` 0、`novel_pipeline --help` / `generate_novel --help` 导入回归通过
-- v7 旧产物 `--check-only` 仍 **FAIL 13/16**（第 16 项仍报「编造 6 处；执行失败章 [1,3,4]」）——历史记录未被改写，符合「旧产物＝基线」的约定
-- **未验证项（须补）**：修复模型是否真能把六处断言改到位、复检是否真的归零，只有门禁 v8 能回答；Dart 端**没有关卡5**（`lib/` 内 grep 无 fact_check/编造相关实现），属精简版能力缺口，已记入已知问题
+- `python -m unittest discover -s scripts -p "test_*.py"` → **Ran 65 tests OK**（60→65）
+- `ruff check` 零报错；`py_compile` 零报错
+- `python scripts/run_smoke_gate.py --check-only --output data/generated/smoke_gate_v7.jsonl`：第 17 项输出 `[WARN] 场景规划来源无记录（历史产物，仅提示不拦截）`，历史基线兼容正常
+
 
 
 

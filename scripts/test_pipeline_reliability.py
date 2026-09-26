@@ -276,5 +276,60 @@ class ScenePromptFactRuleTest(unittest.TestCase):
         self.assertIn("台账没有的数字一律不许凭空写", p)
 
 
+class ScenePlanReliabilityTest(unittest.TestCase):
+    def test_plan_scenes_llm_success_first_attempt(self):
+        llm_resp = '{"scenes": [{"index": 0, "stage": "起", "goal": "测试", "beats": [], "targetWords": 500}]}'
+        with patch.object(pipeline, "call_chain", return_value=llm_resp) as cc, \
+                redirect_stdout(io.StringIO()):
+            scenes, source = pipeline.plan_scenes_or_fallback("目标", "前情", "", 2000)
+        self.assertEqual(source, "llm")
+        self.assertEqual(len(scenes), 1)
+        self.assertEqual(scenes[0]["stage"], "起")
+        self.assertEqual(cc.call_count, 1)
+        self.assertEqual(cc.call_args.kwargs.get("max_tokens"), pipeline.SCENE_PLAN_BUDGETS[0])
+
+    def test_plan_scenes_escalates_budget_on_first_empty(self):
+        llm_resp = '{"scenes": [{"index": 0, "stage": "起", "goal": "升档成功", "beats": [], "targetWords": 500}]}'
+        with patch.object(pipeline, "call_chain", side_effect=["", llm_resp]) as cc, \
+                redirect_stdout(io.StringIO()):
+            scenes, source = pipeline.plan_scenes_or_fallback("目标", "前情", "", 2000)
+        self.assertEqual(source, "llm")
+        self.assertEqual(cc.call_count, 2)
+        # 第一次调用预算是首档，第二次调用预算是二档（升档）
+        first_call = cc.call_args_list[0]
+        second_call = cc.call_args_list[1]
+        self.assertEqual(first_call.kwargs.get("max_tokens"), pipeline.SCENE_PLAN_BUDGETS[0])
+        self.assertEqual(second_call.kwargs.get("max_tokens"), pipeline.SCENE_PLAN_BUDGETS[1])
+
+    def test_plan_scenes_falls_back_when_all_fail(self):
+        with patch.object(pipeline, "call_chain", side_effect=["", "not a json"]) as cc, \
+                redirect_stdout(io.StringIO()):
+            scenes, source = pipeline.plan_scenes_or_fallback("目标", "前情", "", 2000)
+        self.assertEqual(source, "fallback")
+        self.assertEqual(len(scenes), 4)
+        self.assertEqual([s["stage"] for s in scenes], ["起", "承", "转", "合"])
+        self.assertEqual(cc.call_count, len(pipeline.SCENE_PLAN_BUDGETS))
+
+    def test_scene_plan_stats_in_smoke_gate(self):
+        import run_smoke_gate
+        records = [
+            {"type": "chapter", "data": {"idx": 1, "scene_plan": "llm"}},
+            {"type": "chapter", "data": {"idx": 2, "scene_plan": "fallback"}},
+            {"type": "chapter", "data": {"idx": 3, "scene_plan": "llm"}},
+        ]
+        total, fallback = run_smoke_gate.scene_plan_stats(records)
+        self.assertEqual(total, 3)
+        self.assertEqual(fallback, [2])
+
+    def test_scene_plan_stats_legacy_records(self):
+        import run_smoke_gate
+        records = [
+            {"type": "chapter", "data": {"idx": 1, "title": "旧书无此字段"}},
+        ]
+        total, fallback = run_smoke_gate.scene_plan_stats(records)
+        self.assertEqual(total, 0)
+        self.assertEqual(fallback, [])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -5,14 +5,16 @@
 每次改动 novel_pipeline.py / generate_novel.py / fanqie_review.py 后跑一次：
   1) 编译检查（py_compile 三大脚本）
   2) 3 章小样全链路（写前守门 → 逐章 → 守护/爽点 → 终审多采样 → 评估卡/终审卡）
-  3) 自动验收十六项，输出 SMOKE GATE: PASS / FAIL
-     其中 9~12 项是 2026-09 事故回归护栏（正文元话语残留/章内大段重复/题材漂移/
+  3) 自动验收十七项，输出 SMOKE GATE: PASS / FAIL
+     其中 10~13 项是 2026-09 事故回归护栏（正文元话语残留/章内大段重复/题材漂移/
      阻断级硬伤章），与 fanqie_review 同口径——门禁必须能拦住评审报的硬伤。
-     第 13 项是语义硬伤三关（人称漂移/主角称谓漂移/题材内容塌陷，2026-09-23），
+     第 14 项语义硬伤三关（人称漂移/主角称谓漂移/题材内容塌陷，2026-09-23），
      与 qa_semantic_check 同口径——机器分抓不住、人工试读才看得见的硬伤进门禁。
-     第 14 项人物关系张冠李戴（关卡4，纯规则，同 qa_semantic_check）。
+     第 15 项人物关系张冠李戴（关卡4，纯规则，同 qa_semantic_check）。
      第 16 项编造核查（关卡5，type=fact_check LLM 记录）；无记录（历史产物或
      --no-fact-check）降级 WARN 不计入拦截，有记录但存在编造/执行失败即 FAIL。
+      第 17 项场景规划不得静默降级（chapter.scene_plan == "fallback" 即 FAIL，
+      2026-09-26 新增；历史产物无该字段同样降级 WARN，与第 16 项同口径）。
       另在第 1 项检查 JSONL 结构；仅最后一行半截可恢复，中间坏行直接 FAIL。
 
 断点友好：中途中断后重跑同命令自动续传，续传完成后照常验收。
@@ -133,6 +135,27 @@ def world_blocker_hint(review_row):
         return ""
     miss = "、".join(w.get("missing") or [])
     return f"（专名 {w.get('hit', 0)}/{w.get('total', 0)}" + (f"：缺 {miss}" if miss else "") + "）"
+
+
+def scene_plan_stats(records):
+    """统计章节记录的 scene_plan 字段：返回 (带字段章数, 兜底章 idx 列表)。
+
+    只认 "llm" / "fallback" 两种取值；历史产物没有该字段 → (0, [])，
+    调用方按「仅提示不拦截」处理（与第 16 项编造核查同口径）。
+    """
+    total, fallback = 0, []
+    for rec in records:
+        data = rec.get("data")
+        if not isinstance(data, dict):
+            continue
+        sp = data.get("scene_plan")
+        if sp not in ("llm", "fallback"):
+            continue
+        total += 1
+        if sp == "fallback" and isinstance(data.get("idx"), int) and \
+                not isinstance(data.get("idx"), bool):
+            fallback.append(data["idx"])
+    return total, sorted(fallback)
 
 
 def check(output, max_chapters, review_pass=78.0, genre="玄幻"):
@@ -368,6 +391,17 @@ def check(output, max_chapters, review_pass=78.0, genre="玄幻"):
             detail += ("；" if detail else "") + f"执行失败章 {err_idx}"
         chk("编造核查通过（关卡5，无编造且无执行失败）", not bad,
             detail or f"{len(fact_recs)} 章全部通过")
+
+    # 17) 场景规划不得静默降级（chapter.scene_plan == "fallback" 即 FAIL，2026-09-26 新增）：
+    #  LLM 规划失败退回起承转合兜底骨架时，场景目标失去世界/设定锚点，写手只能脑补，
+    #  直接引发后续章节的世界观未落地和设定编造。降级必须在报告里可见，并作为阻断项。
+    #  历史产物无该字段时降级 WARN 不拦截（同第 16 项）。
+    sp_total, sp_fallback = scene_plan_stats(records)
+    if sp_total == 0:
+        print("  [WARN] 场景规划来源无记录（历史产物，仅提示不拦截）")
+    else:
+        chk("场景规划无静默兜底降级", not sp_fallback,
+            f"兜底章 {sp_fallback}" if sp_fallback else f"{sp_total} 章全部由 LLM 规划")
 
     n_pass = sum(1 for _, ok, _ in results if ok)
     print(f"\nSMOKE GATE: {'PASS' if n_pass == len(results) else 'FAIL'}（{n_pass}/{len(results)}）")

@@ -675,6 +675,63 @@ def fact_check_stage(registry, state_track, final_text, idx, genre):
                               "error": False, "repaired": False}
 
 
+def fallback_scenes(goal, target):
+    """场景规划全档失败时的兜底骨架（起承转合，字数按章目标 30/25/25/20 分配）。
+
+    兜底只是「不空转」的底线：场景目标里没有世界/设定锚点，写手只能自己脑补——
+    v7 四章里三章走兜底，随后第 1/2/3 章连挂「世界观未落地」、第 2 章 6 处编造。
+    小章（target 小）时下限取 min(400, target/4)，避免四段之和反超章目标。
+    """
+    floor = min(400, max(1, int(target // 4)))
+    return [
+        {"index": 0, "stage": "起", "goal": f"场景铺垫：{goal[:30]}", "beats": [],
+         "targetWords": max(floor, int(target * 0.3))},
+        {"index": 1, "stage": "承", "goal": "事件推进，冲突升级", "beats": [],
+         "targetWords": max(floor, int(target * 0.25))},
+        {"index": 2, "stage": "转", "goal": "局势逆转，危机爆发", "beats": [],
+         "targetWords": max(floor, int(target * 0.25))},
+        {"index": 3, "stage": "合", "goal": "收束本章并埋下钩子", "beats": [],
+         "targetWords": max(floor, int(target * 0.2))},
+    ]
+
+
+# 场景规划预算：与关卡5 同款教训——规划官链主位是思考型 glm-5.2、链自身 max_tokens=8000，
+# 而两处规划调用此前都写死 2000 且**两次重试同预算**。v7 实测 4 章中 3 章「思考链吃满 →
+# 正文为空 → 非法 JSON」→ 静默走兜底骨架（见 fallback_scenes docstring）。
+SCENE_PLAN_BUDGETS = (8000, 16000)
+
+
+def plan_scenes_or_fallback(goal, last_summary, state_inject, target, *, protagonist="",
+                            genre="", world_hint="", registry="", facts=""):
+    """场景规划：按 SCENE_PLAN_BUDGETS 逐档重试，全档失败才退回兜底骨架。
+
+    返回 (scenes, source)：source ∈ {"llm", "fallback"}，随章节记录落盘（scene_plan 字段），
+    门禁第 17 项据此统计兜底率——**静默降级必须在报告里可见**。
+    失败原因分两类打印（空输出＝思考链吃满/全线失败；非法 JSON＝模型没按格式答），
+    v7 只有一句「规划失败」，分不清是预算还是格式问题。
+    """
+    reason = ""
+    for attempt, budget in enumerate(SCENE_PLAN_BUDGETS, start=1):
+        try:
+            raw = call_chain(PLANNER_CHAIN, PLANNER_SYS,
+                             scene_planning_prompt(goal, last_summary, state_inject,
+                                                   protagonist=protagonist, genre=genre,
+                                                   world_hint=world_hint,
+                                                   registry=registry, facts=facts),
+                             max_tokens=budget)
+        except Exception:
+            raw = ""
+        plan = parse_json_from_llm(raw)
+        if plan and plan.get("scenes"):
+            return plan["scenes"], "llm"
+        reason = "空输出（思考链吃满/全线失败）" if not raw else "返回非法 JSON 或缺 scenes"
+        if attempt < len(SCENE_PLAN_BUDGETS):
+            print(f"  [规划] 预算 {budget} 未拿到场景（{reason}），"
+                  f"提到 {SCENE_PLAN_BUDGETS[attempt]} 重试")
+    print(f"  [规划] LLM 场景规划失败（{reason}），使用默认「起承转合」骨架兜底")
+    return fallback_scenes(goal, target), "fallback"
+
+
 def update_registry(output, registry, final_text, idx):
     """章节定稿后维护配角户籍表/数字台账。
 
@@ -911,28 +968,12 @@ def generate_appended_chapter(ch, ctx):
         write_state = trackers["state_track"]
 
     world_hint = json.dumps(ctx["outline"].get("world", {}), ensure_ascii=False) if isinstance(ctx["outline"], dict) else ""
-    plan = None
-    for attempt in range(2):
-        raw = call_chain(PLANNER_CHAIN, PLANNER_SYS,
-                         scene_planning_prompt(goal, trackers["last_summary"], state_inject,
-                                               protagonist=ctx["protagonist"], genre=args.genre,
-                                               world_hint=world_hint,
-                                               registry=registry_block(registry),
-                                               facts=facts_block(registry)),
-                         max_tokens=2000)
-        plan = parse_json_from_llm(raw)
-        if plan and plan.get("scenes"):
-            break
-    if not plan or not plan.get("scenes"):
-        print("  [规划] 场景规划失败，使用默认「起承转合」骨架兜底")
-        plan = {"scenes": [
-            {"index": 0, "stage": "起", "goal": f"承接前文：{goal[:30]}", "beats": [], "targetWords": max(400, int(target * 0.3))},
-            {"index": 1, "stage": "承", "goal": "推进收束事件", "beats": [], "targetWords": max(400, int(target * 0.25))},
-            {"index": 2, "stage": "转", "goal": "回收伏笔/摊牌/交代主线", "beats": [], "targetWords": max(400, int(target * 0.25))},
-            {"index": 3, "stage": "合", "goal": "收束并留续作余韵", "beats": [], "targetWords": max(400, int(target * 0.2))},
-        ]}
-    scenes = plan["scenes"]
-    print(f"  [规划] {len(scenes)} 场景：{'/'.join(s.get('stage', '承') for s in scenes)}")
+    scenes, plan_source = plan_scenes_or_fallback(
+        goal, trackers["last_summary"], state_inject, target,
+        protagonist=ctx["protagonist"], genre=args.genre, world_hint=world_hint,
+        registry=registry_block(registry), facts=facts_block(registry))
+    print(f"  [规划] {len(scenes)} 场景：{'/'.join(s.get('stage', '承') for s in scenes)}"
+          f"（{plan_source}）")
 
     scene_texts = []
     prev_text = trackers["last_summary"]
@@ -1073,7 +1114,8 @@ def generate_appended_chapter(ch, ctx):
 
     record = {"idx": idx, "title": title_ok, "content": final_text,
               "words": count_words(final_text), "raw_words": w,
-              "scenes": len(scenes), "issues": fab_issues, "chief_structural": True}
+              "scenes": len(scenes), "scene_plan": plan_source,
+              "issues": fab_issues, "chief_structural": True}
     if promise_results:
         n_ok = sum(1 for r in promise_results if r.get("fulfilled"))
         record["issues"].append({"type": "promise_check",
@@ -1888,28 +1930,12 @@ def main():
             state_inject = (state_inject + "\n\n" + promise_block_main) if state_inject else promise_block_main
             print(f"  [承诺] 超时伏笔必兑现清单 {promise_block_main.count(chr(10))} 条注入场景规划与写手")
             write_state_main = (state_track + "\n\n" + promise_block_main) if state_track else promise_block_main
-        plan = None
-        for attempt in range(2):
-            raw = call_chain(PLANNER_CHAIN, PLANNER_SYS,
-                             scene_planning_prompt(goal, last_summary, state_inject,
-                                                   protagonist=protagonist, genre=args.genre,
-                                                   world_hint=world_hint,
-                                                   registry=registry_block(registry),
-                                                   facts=facts_block(registry)),
-                             max_tokens=2000)
-            plan = parse_json_from_llm(raw)
-            if plan and plan.get("scenes"):
-                break
-        if not plan or not plan.get("scenes"):
-            print("  [规划] LLM 场景规划失败，使用默认「起承转合」骨架兜底")
-            plan = {"scenes": [
-                {"index": 0, "stage": "起", "goal": f"场景铺垫：{goal[:30]}", "beats": [], "targetWords": max(400, int(target * 0.3))},
-                {"index": 1, "stage": "承", "goal": "事件推进，冲突升级", "beats": [], "targetWords": max(400, int(target * 0.25))},
-                {"index": 2, "stage": "转", "goal": "局势逆转，危机爆发", "beats": [], "targetWords": max(400, int(target * 0.25))},
-                {"index": 3, "stage": "合", "goal": "收束本章并埋下钩子", "beats": [], "targetWords": max(400, int(target * 0.2))},
-            ]}
-        scenes = plan["scenes"]
-        print(f"  [规划] {len(scenes)} 场景：{'/'.join(s.get('stage','承') for s in scenes)}")
+        scenes, plan_source = plan_scenes_or_fallback(
+            goal, last_summary, state_inject, target, protagonist=protagonist,
+            genre=args.genre, world_hint=world_hint,
+            registry=registry_block(registry), facts=facts_block(registry))
+        print(f"  [规划] {len(scenes)} 场景：{'/'.join(s.get('stage','承') for s in scenes)}"
+              f"（{plan_source}）")
 
         # 2) 逐场景正文（writer，带故障转移）
         scene_texts = []
@@ -2206,6 +2232,7 @@ def main():
             "words": count_words(final_text),
             "raw_words": w,
             "scenes": len(scenes),
+            "scene_plan": plan_source,
             "issues": issues,
         }
         state["chapters"].append(chapter_record)
