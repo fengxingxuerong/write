@@ -178,5 +178,44 @@ class ThinTermPoolTest(unittest.TestCase):
         self.assertIn("其中 2 个（全章合计不少于 2 个）", prompt)
 
 
+class FixPromptLengthFloorTest(unittest.TestCase):
+    """定点修字数下限（门禁 v7 第 4 项「编辑链过度压缩」的根因修复）。
+
+    实测证据：4 次告警全部来自定点修（`[评审修]`），产出比原文少 30%~75%，
+    低于 apply_text_patch 的 0.85 下限 → 整份被拒、定点修白跑、问题原地复发。
+    提示词里此前**没有任何字数下限**，只有「删水段/25 字句/3 行段」三条压缩指令。
+    """
+
+    def _prompt(self, content):
+        return fanqie_review.fix_prompt(_world_review(), content, TERMS)
+
+    def test_states_floor_and_conflict_resolution(self):
+        content = "他推开门。" * 100  # 500 字
+        prompt = self._prompt(content)
+        words = fanqie_review.count_words(content)
+        floor = int(words * fanqie_review.FIX_MIN_RATIO)
+        self.assertIn(f"不得少于 {floor} 字", prompt)
+        self.assertIn(f"原文 {words} 字", prompt)
+        self.assertIn("最多允许压缩 8%", prompt)
+        self.assertIn("以本下限为准", prompt)
+        self.assertIn("总字数不得下降", prompt)
+
+    def test_floor_is_stricter_than_pipeline_guard(self):
+        # 采纳守卫默认 0.85；提示词下限必须更高一档，否则产出必然被拒
+        import novel_pipeline
+        self.assertGreater(fanqie_review.FIX_MIN_RATIO,
+                           novel_pipeline.EDITOR_MIN_RATIO)
+
+    def test_compression_instruction_qualified(self):
+        prompt = self._prompt("他推开门。" * 100)
+        self.assertNotIn("删掉所有「删了不影响剧情」的段落", prompt)
+        self.assertIn("只删与剧情无关的水段", prompt)
+
+    def test_empty_content_omits_floor(self):
+        # 空正文时不发下限区块（引用它的那句「见上文【字数硬约束】」仍在，属无害悬空引用）
+        prompt = fanqie_review.fix_prompt(_world_review(), "")
+        self.assertNotIn("【字数硬约束·先看这条】", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

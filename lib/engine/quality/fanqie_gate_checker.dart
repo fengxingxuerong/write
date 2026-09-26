@@ -2,6 +2,14 @@ import 'dart:math' as math;
 
 import 'package:novel_writer/services/sensitive_words.dart';
 
+/// 定点修字数下限（与 Python 侧 `fanqie_review.FIX_MIN_RATIO` 同口径）。
+///
+/// 低于此比例整份产出会被采纳守卫拒绝（Python 侧 `apply_text_patch` 默认 0.85）——
+/// 提示词必须比守卫更严一档，并写明「评审的压缩诉求让位于本下限」，否则模型会照
+/// 【改写要求】的「删水段/短句」把整章压掉三成，产出全被拒、定点修白跑
+/// （门禁 v7 实测 4 次：4087→2847 / 3465→2718 / 4176→2707 / 5983→1517）。
+const double fixMinRatio = 0.92;
+
 /// 番茄过审闸门（本地零成本，纯函数，可单测）。
 ///
 /// 与 `scripts/fanqie_review.py` 同口径：两边指标一一对应，改任一端必须同步另一端
@@ -159,6 +167,18 @@ class FanqieGateReport {
     for (final FanqieRedlineHit h in redlines.where((x) => x.veto)) {
       b.writeln('- 合规红线：出现「${h.word}」（${h.category}），换成不点名的写法');
     }
+    // 字数硬约束：没有它时，模型会把【改写要求】的「删水段/25 字句/3 行段」整章执行，
+    // 产出低于采纳下限被整份拒绝 → 定点修白跑（与 Python fix_prompt 同款条款）
+    if (words > 0) {
+      final int floor = (words * fixMinRatio).floor();
+      b
+        ..writeln()
+        ..writeln('【字数硬约束·先看这条】改写后正文不得少于 $floor 字（原文 $words 字，'
+            '最多允许压缩 ${((1 - fixMinRatio) * 100).round()}%）。'
+            '「删水段」只许删与剧情无关的段落，且删掉多少就要用冲突/对白/动作/细节'
+            '补足同等篇幅——**总字数不得下降**。若评审意见（如「篇幅偏长」）与本下限冲突，'
+            '以本下限为准：压缩诉求请用「改写」（并句、去修饰、换更短的表达）满足，不靠删段。');
+    }
     // 世界观专名缺失清单：与 Python 侧 fix_prompt 同口径——不点名缺哪些，模型改不动
     if (worldMissing.isNotEmpty &&
         todo.any((FanqieGateIssue e) => e.message.contains('世界观专名'))) {
@@ -179,7 +199,7 @@ class FanqieGateReport {
       ..writeln()
       ..writeln('【改写要求】首屏 300 字必须有主角在场、正在发生的冲突、至少一句对白；'
           '主角本章至少做一次有代价的主动选择；对话占比提到 25%~45%；'
-          '删掉所有「删了不影响剧情」的段落；句子尽量 25 字内，段落不超过 3 行。')
+          '只删与剧情无关的水段（删多少就补多少，见上文【字数硬约束】）；句子尽量 25 字内，段落不超过 3 行。')
       ..writeln('**题材与世界观必须与本作一致**：不得出现现代词汇、不得更换主角、不得引入新故事线。')
       ..writeln('**只输出改写后的正文**：不要任何解释、说明、前言、字数报告或操作描述（写进正文即判废）。');
     return b.toString();
