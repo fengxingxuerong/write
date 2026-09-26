@@ -564,3 +564,43 @@
 - v6 真书投影肉眼核对：状态清单 8 条 bullet、户籍表 5 人、数字台账 23 条、
   伏笔 open 5 条（与 jsonl 台账一致）、控制面含评审 82 分与读者官三问反馈
 
+---
+
+## 十六、2026-09-26 交付文档对齐实态 + 门禁 v7 实跑 FAIL 记录（本轮无代码改动）
+
+### 背景
+
+`交付文档.md` 自 09-12 首版后由各轮零星追加，与 HEAD `20be62a` 的实态出现 8 处漂移（含引用从未入库的脚本、门禁项数滞后、参数表缺 12 项、Dart 端整批交付无账）。本轮只做「文档对齐代码」，不动任何逻辑。
+
+### 交付文档修正清单
+
+1. **头部**：版本补「12 角色 / 三级权力 / 投前五关 / 门禁十六项 / Dart 客户端 / Markdown 投影」；交付日期由孤立「2026-09-12」改为三段轨迹，并标注同步基准 HEAD `20be62a`
+2. **核心目录**：删去 `probe_roster_20260912.py` / `probe_roster_r2_20260912.py` / `smoke_roles_20260912.py` 三行——磁盘无文件且 `git ls-files`、`git log --all` 均无跟踪记录（一次性脚本从未入库），改为显式注记「结论已沉淀在文档，复现须重写探针」；补列实际存在的 `qa_semantic_check.py` / `run_smoke_gate.py` / `watchdog_*.ps1` / `test_*.py` 与 `lib/`+`test/`
+3. **二节标题**：「10 个 LLM 角色」→「12 个」（表格自第 11/12 角色起一直是 12 行）
+4. **新增 三·八**：投前质检五关（1-4 纯规则 + 5 LLM 异家族）与**冒烟门禁十六项**逐项清单、项数轨迹八→十二→十五→十六、关卡5「执行失败不作为通过凭据」口径
+5. **新增 三·九**：Dart 客户端交付表（DPAPI 密钥保护 / 备份导入复制恢复 / `llm_retry` 三条硬规矩 / 隐私页 / GUI 现状 / 0.85 守卫同步）+ CI 四段验证口径
+6. **参数表**：9 项 → **21 项**全量（补 `--output`、`--chapter-wait`、`--review-pass`、`--golden-chapters`、`--prev-summary-file`、`--no-fanqie-pack`、`--no-projection`、`--no-chief-structure`、`--chief-structure-max`、`--chief-samples`、`--no-fact-check`），逐项核对 `--help` 默认值
+7. **产物清单**：补三份 Markdown 投影与独立 CLI 用法；新增「四·5 冒烟门禁」命令段（`--check-only` 是**标志**、产物用 `--output` 指定、默认 `data/generated/smoke_gate.jsonl`、进程退出码非 0 禁止沿用旧产物）
+8. **六、验证记录**：补第 6/7/8 条（语义关卡回归、P0-3 投影验证、门禁 v7 实跑 FAIL）
+9. **七、已知问题**：表首新增 **⚠️ 未闭环（最高优先）「冒烟门禁 v7 三项未过」** 与 **❌「GUI 缺口（借鉴 P0-2）」** 两行；「端到端回归」行改述为十六项并指向 FAIL；「Dart 端同步」升级为「Dart 客户端交付」
+10. 另修 `README.md` CI 徽章：指向不存在的 `inksmith-dev/novel-writer` → 实际 remote `fengxingxuerong/write`
+
+### 门禁 v7 实跑结果（FAIL 13/16，未闭环）
+
+`verify-logs/smoke_gate_v7.log` + `data/generated/smoke_gate_v7.smokegate.log`（2026-09-26 03:46 完成，总耗时 3933s）：
+
+| 失败项 | 证据 | 判读 |
+|---|---|---|
+| ④ 编辑链无过度压缩告警 | 4 次：4087→2847 / 3465→2718 / 4176→2707 / 5983→1517 字 | 0.85 守卫 4/4 全部正确拦下并保留原文（止血有效）；「编辑为何砍 30%-75%」根因未定位 |
+| ⑬ 无阻断级硬伤章 | 第 1/2/3 章均报「世界观未落地」（大纲世界观专名在正文一个都没出现） | 判定见 `fanqie_review.blocking_reasons`（第 457 行定义、第 476 行产出该项）；定点修一轮后仍残留——定点修提示词里没有世界观专名清单 |
+| ⑯ 编造核查通过（关卡5） | 累计 6 处命中（`fabricated` ×5 + `number` ×1：老周债务与守夜年数、灵雪被监视、命火令背面凹槽、地契存放处）；另有 3 章 `error` | 命中项是真编造（正文断言在户籍表/状态台账中无据）；`error` 属核查未跑成，按设计同样判负 |
+
+**根因线索（已核对代码）**：`run_fact_check` 走 `PLANNER_CHAIN` 且 `max_tokens=3000`（`novel_pipeline.py:577`），而该链主位是思考型 `glm-5.2`（链定义 max_tokens=8000）；日志同期大量「`glm-5.2` 思考链有输出但正文为空（thinking 吃满 max_tokens）→ 连 3 败冷却 300s」，`deepseek-v4-flash` 2000 预算亦同类告警。即**关卡5 的 3000 预算对思考型模型过紧**，属交付文档缺陷清单 #1「max_tokens 吃空」模式的复发。
+
+**修复次序建议**：① 关卡5 核查预算放宽 / 换非思考型备胎（成本最低，先让门禁能真跑）→ ② 世界观专名注入写手与定点修提示词 → ③ 追编辑压缩根因（对照上述 4 组字数比与编辑提示词）。
+
+### 验证
+
+- 文档内每个脚本名经磁盘存在性核对；21 个参数逐项对照 `python scripts/novel_pipeline.py --help`（HEAD `20be62a`）；门禁十六项与 `run_smoke_gate.py` 代码注释 ①-⑯ 及 `smoke_gate_v7.log` 实际输出逐行对齐
+- 本轮**未改动任何代码**（仅 `docs/交付文档.md`、`docs/quality-enhancement-log.md`、`README.md` 三个 Markdown 文件），CI 无需重跑
+

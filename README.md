@@ -1,6 +1,6 @@
 # 墨匠 InkSmith —— 本地优先的一键小说写作工具
 
-[![CI](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml/badge.svg)](https://github.com/inksmith-dev/novel-writer/actions/workflows/ci.yml) ![Coverage](https://img.shields.io/badge/coverage-80%25%20gate-brightgreen) ![Tests](https://img.shields.io/badge/tests-CI-blue) ![Dart](https://img.shields.io/badge/dart-3.12%2B-blue) ![Flutter](https://img.shields.io/badge/flutter-3.44%2B-blue)
+[![CI](https://github.com/fengxingxuerong/write/actions/workflows/ci.yml/badge.svg)](https://github.com/fengxingxuerong/write/actions/workflows/ci.yml) ![Coverage](https://img.shields.io/badge/coverage-80%25%20gate-brightgreen) ![Tests](https://img.shields.io/badge/tests-CI-blue) ![Dart](https://img.shields.io/badge/dart-3.12%2B-blue) ![Flutter](https://img.shields.io/badge/flutter-3.44%2B-blue)
 
 > 单代码库 Flutter / Dart。默认离线、零外部 API；用户主动启用云端 LLM、崩溃日志上报或网页端 AI 请求时才会联网。
 > 支持接入本地大模型（llama.cpp / Ollama）实现 AI 辅助写作；不启用联网功能时仍可使用本地模板引擎。
