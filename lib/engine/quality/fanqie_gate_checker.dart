@@ -71,6 +71,7 @@ class FanqieGateReport {
     this.fillerCounted = 0,
     required this.worldHit,
     required this.worldTotal,
+    this.worldMissing = const <String>[],
     this.words = 0,
   });
 
@@ -90,6 +91,12 @@ class FanqieGateReport {
   final int fillerCounted;
   final int worldHit;
   final int worldTotal;
+
+  /// 正文里尚未出现的大纲世界观专名（≤8 个展示用）。
+  ///
+  /// 定点修指令要靠它点名：只报「专名一个都没出现」而不给清单，模型无从下手
+  /// （门禁 v7 第 13 项「世界观未落地」定点修一轮后仍残留的直接原因）。
+  final List<String> worldMissing;
 
   /// 正文汉字数（0 = 未知；阻断项判定需要它）。
   final int words;
@@ -151,6 +158,22 @@ class FanqieGateReport {
     }
     for (final FanqieRedlineHit h in redlines.where((x) => x.veto)) {
       b.writeln('- 合规红线：出现「${h.word}」（${h.category}），换成不点名的写法');
+    }
+    // 世界观专名缺失清单：与 Python 侧 fix_prompt 同口径——不点名缺哪些，模型改不动
+    if (worldMissing.isNotEmpty &&
+        todo.any((FanqieGateIssue e) => e.message.contains('世界观专名'))) {
+      final int need = worldMissing.length < 5 ? worldMissing.length : 5;
+      final String state =
+          worldHit == 0 ? '一个都没出现' : '仅命中 $worldHit/$worldTotal';
+      b
+        ..writeln()
+        ..writeln('【世界观专名·本条为阻断项，必须解决】下列专名取自本书大纲，'
+            '当前正文$state，还缺 ${worldMissing.length} 个：'
+            '${worldMissing.take(8).join('、')}')
+        ..writeln('改写时必须把其中至少 $need 个自然织进正文（地名/机构/功法/器物/称谓皆可）：'
+            '经由对白称呼、路牌招牌、他人提及、物件来历描写带出；专名按字面照抄，'
+            '禁止换成近义词/简称/拼音（初审按字面命中判定）；'
+            '禁止把专名列成清单、禁止整段解释设定、禁止为塞专名插入无关段落。');
     }
     b
       ..writeln()
@@ -457,15 +480,21 @@ class FanqieGateChecker {
     for (final String msg in _nameDrift(text)) {
       issues.add(FanqieGateIssue('一致性', msg, FanqieGateAction.rewrite));
     }
+    final List<String> worldMissing = worldTerms
+        .where((String t) => !_termHit(text, t))
+        .toList(growable: false);
     if (worldTerms.isNotEmpty) {
-      final int hit = worldTerms.where((String t) => _termHit(text, t)).length;
+      final int hit = worldTerms.length - worldMissing.length;
+      // 待补清单：评审只报「专名一个都没出现」时，模型不知道补哪几个（与 Python 同口径）
+      final String pending = worldMissing.take(6).join('、');
       if (hit == 0) {
         issues.add(FanqieGateIssue('一致性',
-            '大纲世界观专名 ${worldTerms.length} 个在正文一个都没出现（写手没接住设定，已另起故事）',
+            '大纲世界观专名 ${worldTerms.length} 个在正文一个都没出现'
+            '（写手没接住设定，已另起故事；待补：$pending）',
             FanqieGateAction.rewrite));
       } else if (hit <= 1) {
         issues.add(FanqieGateIssue('一致性',
-            '世界观专名仅命中 $hit/${worldTerms.length}，题材锁定不够紧',
+            '世界观专名仅命中 $hit/${worldTerms.length}，题材锁定不够紧（待补：$pending）',
             FanqieGateAction.revise));
       }
     }
@@ -497,8 +526,9 @@ class FanqieGateChecker {
       dialogueRatio: double.parse(dialogue.toStringAsFixed(3)),
       fillerRatio: double.parse(filler.ratio.toStringAsFixed(1)),
       fillerCounted: filler.counted,
-      worldHit: worldTerms.where((String t) => _termHit(text, t)).length,
+      worldHit: worldTerms.length - worldMissing.length,
       worldTotal: worldTerms.length,
+      worldMissing: worldMissing.take(8).toList(growable: false),
       words: words,
     );
   }

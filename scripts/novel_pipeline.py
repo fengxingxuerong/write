@@ -877,7 +877,8 @@ def generate_appended_chapter(ch, ctx):
                                            hook=hook_for(idx) if si + 1 == len(scenes) else "",
                                            is_opening=False,
                                            registry=registry_block(registry),
-                                           facts=facts_block(registry)),
+                                           facts=facts_block(registry),
+                                           world_terms=ctx["review_world_terms"]),
                               max_tokens=int(tw * 3.0))
             if text.strip():
                 break
@@ -952,7 +953,7 @@ def generate_appended_chapter(ch, ctx):
     rv = review_chapter(final_text, trackers["last_summary"], idx, args.genre,
                         ctx["protagonist"], ctx["review_world_terms"])
     if needs_fix(rv, args.review_pass):
-        fp = fix_prompt(rv, final_text)
+        fp = fix_prompt(rv, final_text, ctx["review_world_terms"])
         if fp.strip():
             print(f"  [评审] {rv['score']} 分，定点修…")
             fixed = call_chain(EDITOR_CHAIN, SYSTEM_PROMPT, fp,
@@ -1859,7 +1860,8 @@ def main():
                                                hook=hook_for(idx) if si + 1 == len(scenes) else "",
                                                is_opening=(idx == 1 and si == 0),
                                                registry=registry_block(registry),
-                                               facts=facts_block(registry)),
+                                               facts=facts_block(registry),
+                                               world_terms=review_world_terms),
                                   max_tokens=int(tw * 3.0))
                 if text.strip():
                     break
@@ -2029,7 +2031,7 @@ def main():
         rv = review_chapter(final_text, last_summary, idx, args.genre, protagonist,
                             review_world_terms, has_hook=has_ending_hook(final_text))
         if needs_fix(rv, args.review_pass):
-            fp = fix_prompt(rv, final_text)
+            fp = fix_prompt(rv, final_text, review_world_terms)
             if not fp.strip():
                 # 只剩「建议」级问题：不值得为它花一次 LLM 调用
                 print(f"  [评审] {rv['score']} 分（仅剩建议项，不触发定点修）")

@@ -48,6 +48,7 @@ for _stream in (sys.stdout, sys.stderr):
 from fanqie_prompts import FANQIE_SYSTEM_PROMPT as SYSTEM_PROMPT  # noqa: E402
 from fanqie_review import (  # noqa: E402
     dialogue_ratio,
+    extract_world_terms,
     filler_ratio,
     fix_prompt,
     review_chapter,
@@ -363,10 +364,13 @@ def emotion_fix_prompt(full_text, registry):
 
 def scene_prompt(scene_no, total_scenes, stage, goal, beats, prev_text, genre_hint="玄幻",
                  state="", protagonist="", world="", hook="", is_opening=False,
-                 registry="", facts=""):
+                 registry="", facts="", world_terms=()):
     """单场景生成。state 为跨章状态清单（人物伤势/修为/物品/承诺）。
     genre_hint 为题材（见 GENRE_SPECS）；protagonist/world 为本书已确立的主角名与世界观，
     必须显式注入——缺这两项时写手会自己另起一个故事。
+    world_terms 为大纲世界观专名清单：评审按**字面命中**判定「世界观是否落地」，
+    只给整段 world 描述时写手会自由转述、专名一个都不落纸面（门禁 v7 第 13 项
+    三章连挂「世界观未落地」）。给了清单要求逐场景带出。
     is_opening 为全书第 1 章第 1 场景标记，强制开场变故硬约束。"""
     spec = GENRE_SPECS.get(genre_hint, GENRE_SPECS["玄幻"])
     s = ""
@@ -374,6 +378,16 @@ def scene_prompt(scene_no, total_scenes, stage, goal, beats, prev_text, genre_hi
         s += f"本书题材：{genre_hint}（{spec['label']}）。\n"
     if world:
         s += f"本书世界观（必须沿用，不得改写或另起设定）：{world}\n"
+    if world_terms:
+        shown = "、".join(world_terms[:10])
+        more = "" if len(world_terms) <= 10 else f"（另 {len(world_terms) - 10} 个见大纲）"
+        # 评审按专名字面命中判定「世界观是否落地」：只给整段世界观描述时，写手会自由转述、
+        # 专名一个都不落纸面（门禁 v7 第 13 项连续三章判「世界观未落地」）。
+        s += (f"【世界观专名·本章必须落地】本书专名：{shown}{more}。"
+              "本场景至少自然带出其中 2 个（全章合计不少于 4 个）："
+              "对白称呼、地名/机构/功法/器物名、他人提及、路牌招牌皆可；"
+              "专名按字面照抄，禁止改成近义词或简称（评审按字面命中判定「世界观是否落地」）；"
+              "禁止把专名列成清单、禁止整段解释设定。\n")
     if protagonist:
         s += f"本章主角：{protagonist}。全章只用这个名字，禁止改名、别名。\n"
         s += (f"【主角名片】场景中首次出现主角时必须自然带出名字（对话称呼/名牌/他人介绍/身份描写均可），"
@@ -955,11 +969,14 @@ def quality_check(chapters):
     return report
 
 
-def _quality_repair_prompt(text, review, registry, genre, protagonist, prev_text):
-    """组装质量修复指令；只针对检测到的问题，不重写无关段落。"""
+def _quality_repair_prompt(text, review, registry, genre, protagonist, prev_text,
+                           world_terms=()):
+    """组装质量修复指令；只针对检测到的问题，不重写无关段落。
+
+    world_terms 传大纲专名时，世界观缺失会被点名（见 fanqie_review.fix_prompt）。"""
     lock = registry_block(registry)
     facts = facts_block(registry)
-    return fix_prompt(review, text) + (
+    return fix_prompt(review, text, world_terms) + (
         f"\n【本题材】{genre}\n【主角】{protagonist}\n"
         f"【前文尾部】{prev_text[-200:] if prev_text else '无'}\n"
         f"【角色户籍】{lock}\n【数字台账】{facts}\n"
@@ -997,14 +1014,14 @@ def _quality_chunks(text, max_chars=1800):
 
 
 def _quality_repair_in_chunks(text, review, registry, genre, protagonist,
-                               prev_text, call, max_chars=1800):
+                               prev_text, call, max_chars=1800, world_terms=()):
     """分块调用质量修复；任一块失败即放弃整章，避免拼出半修复稿。"""
     chunks = _quality_chunks(text, max_chars=max_chars)
     repaired = []
     context = prev_text or ''
     for chunk in chunks:
         prompt = _quality_repair_prompt(
-            chunk, review, registry, genre, protagonist, context[-200:])
+            chunk, review, registry, genre, protagonist, context[-200:], world_terms)
         part = call(prompt, max(600, int(count_words(chunk) * 2.2)))
         if not part or not part.strip():
             return ''
@@ -1205,6 +1222,8 @@ def main():
     protagonist = _p.get("name", "") if isinstance(_p, dict) else ""
     _w = outline.get("world") or {}
     world_str = _w if isinstance(_w, str) else json.dumps(_w, ensure_ascii=False)
+    # 世界观专名清单：评审按字面命中判定「世界观是否落地」，写手/修复提示词都要逐条点名
+    world_terms = extract_world_terms(outline)
     # 配角户籍表 + 数字台账：随进度文件持久化，跨章/跨次运行强一致；主角自动登记
     registry = state.get("registry") or {"characters": [], "facts": []}
     registry.setdefault("characters", [])
@@ -1277,7 +1296,8 @@ def main():
                                          beats, prev_text, args.genre, protagonist=protagonist, world=world_str,
                                          hook=hook_for(idx) if si + 1 == len(scenes) else "",
                                          registry=registry_block(registry),
-                                         facts=facts_block(registry)),
+                                         facts=facts_block(registry),
+                                         world_terms=world_terms),
                             api_key, int(tw * 1.8), args.temperature)
             text = text.strip()
             w = count_words(text)
@@ -1328,9 +1348,10 @@ def main():
                           f"爽点 {_ft}｜异动 {_fs}），保原文")
         # 质量修复轮：先评审，再把问题交给编辑模型；修复稿不劣化才采纳。
         if not args.skip_quality_repair and w >= max(500, int(target * 0.5)):
+            # world_terms 一并传入：此前这条路径不查世界观落地，与 novel_pipeline 口径不一致
             before_review = review_chapter(
                 full_text, last_summary, idx, args.genre, protagonist,
-                has_hook=has_ending_hook(full_text))
+                world_terms=world_terms, has_hook=has_ending_hook(full_text))
             needs_repair = (
                 before_review.get('score', 0) < 78 or
                 dialogue_ratio(full_text) < 0.25 or
@@ -1345,11 +1366,12 @@ def main():
                     lambda prompt, max_tokens: call_llm(
                         base_url_raw, args.model, SYSTEM_PROMPT, prompt,
                         api_key, max_tokens, args.temperature,
-                        retries=1, timeout=90))
+                        retries=1, timeout=90),
+                    world_terms=world_terms)
                 if candidate:
                     after_review = review_chapter(
                         candidate, last_summary, idx, args.genre, protagonist,
-                        has_hook=has_ending_hook(candidate))
+                        world_terms=world_terms, has_hook=has_ending_hook(candidate))
                     accepted, reason = _quality_repair_candidate(
                         full_text, candidate, before_review, after_review,
                         target)

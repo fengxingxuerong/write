@@ -293,11 +293,18 @@ def _term_hit(text, term):
 
 
 def world_consistency(text, terms):
-    """世界观一致性：大纲里的专名在正文命中几个。一个都没有 = 写手跑题。"""
+    """世界观一致性：大纲里的专名在正文命中几个。一个都没有 = 写手跑题。
+
+    同时给出 missing（未命中的专名清单）：定点修与写手提示词要靠它点名。
+    只告诉模型「专名一个都没出现」而不给清单，模型根本无从下手——这是
+    门禁 v7 第 13 项「世界观未落地」定点修一轮后仍残留的直接原因。
+    """
     if not terms:
         return None
     hit = [t for t in terms if _term_hit(text or "", t)]
-    return {"hit": len(hit), "total": len(terms), "terms": hit[:5]}
+    missing = [t for t in terms if not _term_hit(text or "", t)]
+    return {"hit": len(hit), "total": len(terms), "terms": hit[:5],
+            "missing": missing[:8], "missing_total": len(missing)}
 
 
 def redline_scan(text):
@@ -701,10 +708,10 @@ def review_chapter(text, prev_text="", idx=1, genre="", protagonist="", world_te
     wc = world_consistency(text, world_terms)
     if wc and wc["hit"] == 0:
         probs.append(("一致性", f"大纲世界观专名 {wc['total']} 个在正文一个都没出现"
-                      "（写手没接住设定，己另起故事）", "重写"))
+                      f"（写手没接住设定，己另起故事；待补：{'、'.join(wc['missing'][:6])}）", "重写"))
     elif wc and wc["hit"] <= 1:
-        probs.append(("一致性", f"世界观专名仅命中 {wc['hit']}/{wc['total']}，题材锁定不够紧",
-                      "修改"))
+        probs.append(("一致性", f"世界观专名仅命中 {wc['hit']}/{wc['total']}，题材锁定不够紧"
+                      f"（待补：{'、'.join(wc['missing'][:6])}）", "修改"))
     sr = self_repeat_ratio(text)
     if sr > 1.0:
         probs.append(("重复", f"整句重复率 {sr}%（同句复用，读者会判定为凑字）", "重写"))
@@ -739,7 +746,7 @@ def review_chapter(text, prev_text="", idx=1, genre="", protagonist="", world_te
            "redline": {"veto": veto, "warn": warn},
            "metrics": {"pace": pace, "filler": fr, "filler_paras": fr_n,
                        "cliche": cl["per_k"],
-                       "repeat": rep, "agency": ag}}
+                       "repeat": rep, "agency": ag, "world": wc}}
     row["blockers"] = blocking_reasons(row)
     if veto:
         row["verdict"] = "不予推荐"
@@ -792,12 +799,15 @@ def review_book(chapters, genre="", protagonist="", world_terms=()):
             "veto_count": sum(len(r["redline"]["veto"]) for r in veto_rows)}
 
 
-def fix_prompt(review, content):
+def fix_prompt(review, content, world_terms=()):
     """把评估结果转成「定点修」提示（只改问题处，保留已写好的剧情与文字）。
 
     达线且无阻断项（无重写/修改级问题）时返回空串——与 Dart 侧 fixPrompt 同一约定。
     阻断项在身时即使分数达标也照样出单（实测事故：92 分章含「元话语残留」被判可投，
-    于是修复链跳过，脏文本一路留到成书）。"""
+    于是修复链跳过，脏文本一路留到成书）。
+    world_terms 传大纲专名时会点名「正文还缺哪些专名」——评审只报「专名一个都没出现」，
+    模型拿不到清单就无从下手（门禁 v7 第 13 项「世界观未落地」定点修一轮后仍残留，
+    直接原因是修复提示词里根本没有世界观专名）。不传时行为与旧版完全一致。"""
     probs = [p for p in review["problems"] if p["action"] in ("重写", "修改")]
     if not probs or (review.get("verdict") == "可投" and not review.get("blockers")):
         return ""
@@ -806,10 +816,26 @@ def fix_prompt(review, content):
     if rl:
         lines += [f"- 合规红线：出现「{h['word']}」（{h['category']}），必须替换成不点名的写法"
                   for h in rl[:8]]
+    # 世界观专名缺失清单：评审只报「专名一个都没出现」，不点名缺哪些，模型改不动
+    world_block = ""
+    if world_terms and any("世界观专名" in p["msg"] for p in probs):
+        missing = [t for t in world_terms if not _term_hit(content or "", t)]
+        if missing:
+            hit = len(world_terms) - len(missing)
+            need = min(5, len(missing))
+            state = "一个都没出现" if hit == 0 else f"仅命中 {hit}/{len(world_terms)}"
+            world_block = (
+                "\n【世界观专名·本条为阻断项，必须解决】下列专名取自本书大纲，"
+                f"当前正文{state}，还缺 {len(missing)} 个：{'、'.join(missing[:8])}\n"
+                f"改写时必须把其中至少 {need} 个自然织进正文（地名/机构/功法/器物/称谓皆可）："
+                "经由对白称呼、路牌招牌、他人提及、物件来历描写带出；专名按字面照抄，"
+                "禁止换成近义词/简称/拼音（初审按字面命中判定）；"
+                "禁止把专名列成清单、禁止整段解释设定、禁止为塞专名插入无关段落。\n")
     return (
         "下面这一章要过番茄初审，评审器给出以下硬伤。请**只针对这些点改写**，"
         "保持人物名、事件顺序、已埋的伏笔完全不变，不要重写无关段落：\n"
         + "\n".join(lines)
+        + world_block
         + "\n\n【改写要求】首屏 300 字必须有主角在场、正在发生的冲突、至少一句对白；"
           "主角本章至少做出一次有代价的主动选择；对话占比提到 25%~45%；"
           "删掉所有「删了不影响剧情」的段落；句子尽量控制在 25 字内；段落不超过 3 行。\n"

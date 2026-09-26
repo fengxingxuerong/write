@@ -165,6 +165,26 @@ void main() {
       expect(r.fixPrompt, contains('对白'));
       expect(r.fixPrompt, contains('只输出改写后的正文'));
     });
+
+    test('世界观未落地时 fixPrompt 点名缺失专名（与 Python fix_prompt 同口径）', () {
+      const FanqieGateChecker c = FanqieGateChecker(
+          worldTerms: <String>['星髓', '裂隙星域', '曲速']);
+      final FanqieGateReport r =
+          c.check('雨下了一整夜。${'他很愤怒，心中一凛，仿佛周围空气凝固。' * 60}');
+      expect(r.worldMissing, contains('星髓'));
+      expect(r.blockers, contains('世界观未落地'));
+      expect(r.fixPrompt, contains('【世界观专名·本条为阻断项'));
+      expect(r.fixPrompt, contains('星髓'));
+      expect(r.fixPrompt, contains('至少 3 个'));
+    });
+
+    test('专名全部命中时 fixPrompt 不出现专名区块', () {
+      const FanqieGateChecker c = FanqieGateChecker(
+          worldTerms: <String>['星髓', '裂隙星域', '曲速']);
+      final FanqieGateReport r = c.check('星髓亮起，裂隙星域在曲速里后退。' * 40);
+      expect(r.worldMissing, isEmpty);
+      expect(r.fixPrompt, isNot(contains('【世界观专名·本条为阻断项')));
+    });
   });
 
   group('补丁卫生与题材漂移（2026-09 事故回归）', () {

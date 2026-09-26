@@ -626,3 +626,31 @@
 - **待复验**：真实端点下的确认要重跑门禁 v8（`python scripts/run_smoke_gate.py --output data/generated/smoke_gate_v8.jsonl`，耗配额、约 1 小时）。预期第 16 项的「执行失败章」消失；若仍报 6 处编造命中，则属生成侧真编造，转入下一轮（世界观/设定注入）
 - 副作用评估：最坏情况每章多一次 LLM 调用（仅在首档失败时），且规划官链本就是每章多处调用的主链，配额影响可控；思考链吃满导致的健康池连败冷却也随之减少
 
+---
+
+## 十八、2026-09-26 门禁 v7 第 13 项根因修复：世界观专名清单注入写手与定点修
+
+### 根因（都在提示词侧，不在模型能力）
+
+把「评审 → 定点修 → 再评审」整条链路拉直后，失败是**必然**而非偶然：
+
+1. **修复侧（决定性）**：`fanqie_review.fix_prompt(review, content)` 只把评审结论抄成一行「- 一致性：大纲世界观专名 12 个在正文一个都没出现…」，**提示词里一个专名都没有**。定点修模型收到的指令是「把世界观写进正文」却不知道本书世界观叫什么——修不动是意料之中，v7「定点修一轮后仍残留」由此解释。
+2. **生成侧**：`scene_prompt` 注入的是整段 `world` JSON（「本书世界观（必须沿用）」），而评审用的是 `extract_world_terms` 切出的**专名**、按**字面命中**计数。写手自由转述设定 ⇒ 0 命中 ⇒ 直接记「世界观未落地」（重写级阻断项）。
+
+结论：这是「检测口径（字面命中）与提示词投放（整段描述）不匹配」的配置缺陷，与 #11 同属可测可防的工程问题。
+
+### 改动（Python 主链路 + Dart 同口径）
+
+- `scripts/fanqie_review.py`：`world_consistency` 增 `missing` / `missing_total`（最多 8 个）；评审文案补「待补：…」（「世界观专名」「没接住设定」等字面契约不变，门禁第 13 项照旧能数）；`fix_prompt(review, content, world_terms=())` 在命中世界观专名问题时插入「【世界观专名·本条为阻断项，必须解决】」，点名缺哪几个、至少补 `min(5, 缺失数)` 个，要求**按字面照抄**（禁近义词/简称/拼音）、禁列清单、禁整段解释设定；`metrics` 增 `world`
+- `scripts/generate_novel.py`：`scene_prompt(..., world_terms=())` 增「【世界观专名·本章必须落地】」，要求本场景至少带出 2 个、全章 ≥4 个（超 10 个截断并注明）；`_quality_repair_prompt` / `_quality_repair_in_chunks` 透传；Phase 1.5 质量修复轮的 `review_chapter` 一并补 world_terms（此前这条路径根本不查世界观落地，与 pipeline 口径不一致）
+- `scripts/novel_pipeline.py`：写手两处调用（主循环 + 结构补章）与定点修两处调用全部接线 `review_world_terms`
+- Dart：`FanqieGateReport.worldMissing` + `fixPrompt` 专名区块 + 评审文案待补清单；`test/engine/quality/fanqie_gate_checker_test.dart` 增 2 项
+
+### 验证
+
+- 新增 `scripts/test_world_landing.py`（16 项）：missing 拆分、评审文案与阻断项、`fix_prompt` 点名与 `min(5,缺)` 上限、全命中不加区块、不传专名时行为不变、`scene_prompt` 注入与截断、修复提示词透传、**源码级接线守卫**（4 处调用点必须带 world_terms，防后续重构把线拆掉）
+- 踩坑记录：`_term_hit` 是**局部命中**口径（3 字滑窗 / 尾 2 字），测试若用「专名0…专名11」这类同构名会互相误命中——造测试专名必须彼此无 3 字与尾 2 字重合（已写进测试注释）
+- `python -m unittest discover -s scripts` → **Ran 43 tests OK**（27→43）；`ruff --select=F,E9` 全绿；`compileall scripts` 退出码 0；`novel_pipeline --help` / `fanqie_review -h` 导入回归正常
+- **未验证项（须补）**：本机无 Dart/Flutter SDK，Dart 改动只经人工审读 → 交 CI（`dart analyze --fatal-infos` + `flutter test --coverage`）复核；真实生成效果仍需重跑门禁 v8
+- 成本影响：写手提示词每场景约 +120 字（专名 ≤10 个），定点修只在命中世界观专名问题时才加区块
+
