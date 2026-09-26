@@ -179,5 +179,102 @@ class PipelineReliabilityTest(unittest.TestCase):
             "（专名 2/2）")
 
 
+class FactCheckStageTest(unittest.TestCase):
+    """关卡5 命中即修：核查 → 定点修 → 复检（复检命中数下降才采纳，否则回滚）。
+
+    v7 实锤：第 2 章 6 处编造只被「记录」、从无任何处置，门禁第 16 项因此必然 FAIL。
+    """
+
+    FABS1 = [{"type": "fabricated", "claim": "老周求我宽限三天", "evidence": "前文无此事实"}]
+    FABS2 = [{"type": "fabricated", "claim": "命火令背面有凹槽", "evidence": "台账无据"}]
+
+    def setUp(self):
+        pipeline._HEALTH.clear()
+
+    def tearDown(self):
+        pipeline._HEALTH.clear()
+
+    def test_zero_hits_costs_nothing(self):
+        with patch.object(pipeline, "run_fact_check", return_value=[]), \
+                patch.object(pipeline, "call_chain") as cc, \
+                redirect_stdout(io.StringIO()):
+            text, fabs, rec = pipeline.fact_check_stage({}, "", "正文", 1, "玄幻")
+        cc.assert_not_called()
+        self.assertEqual(text, "正文")
+        self.assertEqual(fabs, [])
+        self.assertFalse(rec["error"])
+
+    def test_error_when_check_fails_without_repair_attempt(self):
+        with patch.object(pipeline, "run_fact_check", return_value=None), \
+                patch.object(pipeline, "call_chain") as cc, \
+                redirect_stdout(io.StringIO()):
+            text, fabs, rec = pipeline.fact_check_stage({}, "", "正文", 1, "玄幻")
+        cc.assert_not_called()
+        self.assertIsNone(fabs)
+        self.assertTrue(rec["error"])
+        self.assertEqual(rec["fabrications"], [])
+
+    def test_adopt_repair_only_when_recheck_improves(self):
+        original = "他推开门。" * 100
+        repaired = "他推开门，屋里很暗，纸窗上有一道裂口。" * 90
+        with patch.object(pipeline, "run_fact_check",
+                          side_effect=[self.FABS1, []]), \
+                patch.object(pipeline, "call_chain", return_value=repaired), \
+                patch.object(pipeline, "apply_text_patch",
+                             return_value=repaired), \
+                redirect_stdout(io.StringIO()):
+            text, fabs, rec = pipeline.fact_check_stage({}, "", original, 1, "玄幻")
+        self.assertEqual(text, repaired)
+        self.assertEqual(fabs, [])
+        self.assertTrue(rec["repaired"])
+        self.assertFalse(rec["error"])
+        self.assertEqual(rec["fabrications"], [])
+
+    def test_revert_when_recheck_not_better(self):
+        original = "他推开门。" * 100
+        repaired = "他推开门，屋里很暗，纸窗上有一道裂口。" * 90
+        with patch.object(pipeline, "run_fact_check",
+                          side_effect=[self.FABS1, self.FABS2]), \
+                patch.object(pipeline, "call_chain", return_value=repaired), \
+                patch.object(pipeline, "apply_text_patch",
+                             return_value=repaired), \
+                redirect_stdout(io.StringIO()):
+            text, fabs, rec = pipeline.fact_check_stage({}, "", original, 1, "玄幻")
+        self.assertEqual(text, original, "复检未改善必须回滚，不能把换了文字当解决了问题")
+        self.assertEqual(fabs, self.FABS1)
+        self.assertFalse(rec["repaired"])
+
+    def test_rejected_patch_skips_recheck(self):
+        original = "他推开门。" * 100
+        with patch.object(pipeline, "run_fact_check",
+                          return_value=self.FABS1) as chk, \
+                patch.object(pipeline, "call_chain", return_value="太短"), \
+                redirect_stdout(io.StringIO()):
+            text, fabs, rec = pipeline.fact_check_stage({}, "", original, 1, "玄幻")
+        self.assertEqual(chk.call_count, 1, "修复稿没过采纳闸就不该再花一次复检")
+        self.assertEqual(text, original)
+        self.assertEqual(fabs, self.FABS1)
+        self.assertFalse(rec["repaired"])
+
+    def test_fact_fix_prompt_lists_claims_and_floor(self):
+        original = "他推开门。" * 100
+        prompt = pipeline.fact_fix_prompt(original, self.FABS1 + self.FABS2, 2)
+        self.assertIn("老周求我宽限三天", prompt)
+        self.assertIn("命火令背面有凹槽", prompt)
+        self.assertIn("只处置下列断言", prompt)
+        self.assertIn("改写成非断言", prompt)
+        floor = int(400 * fanqie_review.FIX_MIN_RATIO)
+        self.assertIn(f"不得少于 {floor} 字", prompt)
+
+
+class ScenePromptFactRuleTest(unittest.TestCase):
+    def test_scene_prompt_carries_fact_hard_rule(self):
+        from generate_novel import scene_prompt
+        p = scene_prompt(1, 2, "起", "开场", [], "", "玄幻",
+                         facts="三年（第 1 章确立）", registry="")
+        self.assertIn("【事实与数字硬约束】", p)
+        self.assertIn("台账没有的数字一律不许凭空写", p)
+
+
 if __name__ == '__main__':
     unittest.main()

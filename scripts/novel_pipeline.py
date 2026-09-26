@@ -37,7 +37,8 @@ from generate_novel import (count_words, parse_json_from_llm, quality_check,
                             registry_block, facts_block, extract_registry_prompt,
                             merge_registry, merge_facts)  # noqa: E402
 from fanqie_review import (review_chapter, fix_prompt, patch_gate, local_hook_fallback,
-                           extract_world_terms, dedup_intra_repeat)  # noqa: E402
+                           extract_world_terms, dedup_intra_repeat,
+                           FIX_MIN_RATIO)  # noqa: E402
 from fanqie_prompts import first_screen_rewrite_prompt, pack_prompt  # noqa: E402
 
 # ============================================================
@@ -596,6 +597,84 @@ def run_fact_check(registry, state_track, final_text, idx):
     return None
 
 
+def fact_fix_prompt(chapter_text, fabrications, idx):
+    """编造定点修 prompt：只处置核查命中的断言，其余段落一字不动。
+
+    三条处置路径（优先删/弱化）：无据断言要么删，要么改成非断言（传闻/未证实），
+    要么在本章内补出「谁、何时、为何、在哪」变成本章首次确立的设定。
+    字数下限沿用 FIX_MIN_RATIO——删掉的部分必须用等量铺陈补回，禁止「以删代修」。
+    """
+    words = count_words(chapter_text or "")
+    floor = int(words * FIX_MIN_RATIO)
+    items = []
+    for fb in fabrications[:8]:
+        claim = str(fb.get("claim", "")).strip()
+        if not claim:
+            continue
+        ev = str(fb.get("evidence", "")).strip() or "台账/前文无据"
+        items.append(f"- [{fb.get('type', 'fabricated')}] 断言「{claim}」｜核查依据：{ev}")
+    listing = "\n".join(items) or "- （无明细，按「无据断言」类型自行定位）"
+    floor_line = ""
+    if floor:
+        floor_line = (f"【字数硬约束】改写后正文不得少于 {floor} 字（原文 {words} 字）："
+                      "删掉的断言要用等量的铺陈/对白补回，禁止整段删除凑字数差。\n")
+    return f"""第 {idx} 章被独立事实核查员判出 {len(fabrications)} 处与户籍表/数字台账/跨章状态无据的断言。
+请**只处置下列断言**，其余段落一字不改；人名、事件顺序、已确立的台账数字、章末钩子必须原样保留：
+{listing}
+
+每处断言按优先级三选一：
+1. 删掉该断言；或
+2. 改写成非断言（传闻/猜测/未证实的口气，如「据说…」「他也不确定…」），确保后续章节不会把它当既定事实；或
+3. 确为剧情必需时，在本章内补出来龙去脉（谁在何时为何、在哪儿），让它成为本章首次确立的设定。
+{floor_line}
+只输出改写后的完整正文，不要任何解释、说明或前言。
+
+【第 {idx} 章正文】
+{chapter_text}"""
+
+
+def fact_check_stage(registry, state_track, final_text, idx, genre):
+    """关卡5 全流程：核查 → 命中即定点修 → 复检（台账保持前章口径，绝不回灌自证）。
+
+    返回 (final_text, fabs, record)：
+    - fabs 为 None ⇒ 核查未跑成，调用方记 error（门禁据此判 FAIL，不作通过凭据）；
+    - 修复只有在**复检命中数下降**时才采纳，否则回滚保留原文与首轮命中——
+      「换了段文字」绝不等于「问题解决了」（与评审修同一验收哲学）。
+    成本：只在命中时多两次调用（1 次修复 + 1 次复检），0 命中章零额外开销。
+    """
+    fabs = run_fact_check(registry, state_track, final_text, idx)
+    if fabs is None:
+        return final_text, None, {"idx": idx, "fabrications": [], "error": True}
+    if not fabs:
+        print("  [核查] 编造核查通过 ✅（0 处编造）")
+        return final_text, [], {"idx": idx, "fabrications": [], "error": False}
+    for fb in fabs[:8]:
+        desc = f"{fb.get('type', 'fabricated')}: {str(fb.get('claim', ''))[:60]}"
+        print(f"  [核查] ⚠ {desc}")
+    print(f"  [核查] {len(fabs)} 处编造 → 定点修并复检…")
+    try:
+        raw_fix = call_chain(EDITOR_CHAIN, SYSTEM_PROMPT,
+                             fact_fix_prompt(final_text, fabs, idx),
+                             max_tokens=int(count_words(final_text) * 1.6) + 600)
+    except Exception:
+        raw_fix = ""
+    repaired = apply_text_patch(final_text, raw_fix or "", genre, tag="编造修")
+    if repaired == final_text:
+        print("  [核查] 修复稿未过采纳闸（空产出/过度压缩/补丁卫生），保留原文照记命中")
+        return final_text, fabs, {"idx": idx, "fabrications": fabs,
+                                  "error": False, "repaired": False}
+    fabs2 = run_fact_check(registry, state_track, repaired, idx)
+    if fabs2 is not None and len(fabs2) < len(fabs):
+        print(f"  [核查] 复检 {len(fabs)} → {len(fabs2)} 处，采纳修复稿"
+              f"（{count_words(final_text)} → {count_words(repaired)} 字）")
+        return repaired, fabs2, {"idx": idx, "fabrications": fabs2,
+                                 "error": False, "repaired": True}
+    why = "复检未跑成" if fabs2 is None else f"复检仍 {len(fabs2)} 处"
+    print(f"  [核查] {why}、未优于首轮，回滚保留原文（首轮命中照记）")
+    return final_text, fabs, {"idx": idx, "fabrications": fabs,
+                              "error": False, "repaired": False}
+
+
 def update_registry(output, registry, final_text, idx):
     """章节定稿后维护配角户籍表/数字台账。
 
@@ -978,23 +1057,19 @@ def generate_appended_chapter(ch, ctx):
 
     final_text = dedup_chapter(final_text, idx)
 
-    # 关卡5 编造核查（与主循环同款：户籍表更新前、glm 与写手异家族独立核查）
+    # 关卡5 编造核查（与主循环同款：户籍表更新前、glm 与写手异家族独立核查；
+    # 命中即定点修并复检，台账口径保持前章、绝不回灌自证）
     fab_issues = []
     if not args.no_fact_check:
-        fabs = run_fact_check(registry, trackers["state_track"], final_text, idx)
+        final_text, fabs, fact_record = fact_check_stage(
+            registry, trackers["state_track"], final_text, idx, args.genre)
+        append_state(args.output, "fact_check", fact_record)
         if fabs is None:
-            append_state(args.output, "fact_check",
-                         {"idx": idx, "fabrications": [], "error": True})
             print("  [核查] ⚠ 编造核查执行失败（记 error，不算通过凭据）")
         else:
             for fb in fabs[:8]:
                 desc = f"{fb.get('type', 'fabricated')}: {str(fb.get('claim', ''))[:60]}"
                 fab_issues.append({"type": "fabrication", "desc": desc})
-                print(f"  [核查] ⚠ {desc}")
-            append_state(args.output, "fact_check",
-                         {"idx": idx, "fabrications": fabs, "error": False})
-            if not fabs:
-                print("  [核查] 编造核查通过 ✅（0 处编造）")
 
     record = {"idx": idx, "title": title_ok, "content": final_text,
               "words": count_words(final_text), "raw_words": w,
@@ -2110,22 +2185,19 @@ def main():
         final_text = dedup_chapter(final_text, idx)
 
         # 7.60) 关卡5 编造核查（规划官 glm 链与写手异家族，--no-fact-check 可关）：
-        #        必须在户籍表更新前——核查「本章 vs 前章已确立事实」；失败记 error 不算通过凭据
+        #        必须在户籍表更新前——核查「本章 vs 前章已确立事实」；失败记 error 不算通过凭据；
+        #        命中即触发定点修并复检（台账口径不变、绝不回灌自证），last-wins 写盘供门禁第 16 项读取
         if not args.no_fact_check:
-            fabs = run_fact_check(registry, state_track, final_text, idx)
+            final_text, fabs, fact_record = fact_check_stage(
+                registry, state_track, final_text, idx, args.genre)
+            append_state(args.output, "fact_check", fact_record)
             if fabs is None:
-                append_state(args.output, "fact_check",
-                             {"idx": idx, "fabrications": [], "error": True})
                 print("  [核查] ⚠ 编造核查执行失败（记 error，不作为通过凭据）")
             else:
                 for fb in fabs[:8]:
-                    desc = f"{fb.get('type', 'fabricated')}: {str(fb.get('claim', ''))[:60]}"
-                    issues.append({"type": "fabrication", "desc": desc})
-                    print(f"  [核查] ⚠ {desc}")
-                append_state(args.output, "fact_check",
-                             {"idx": idx, "fabrications": fabs, "error": False})
-                if not fabs:
-                    print("  [核查] 编造核查通过 ✅（0 处编造）")
+                    issues.append({"type": "fabrication",
+                                   "desc": f"{fb.get('type', 'fabricated')}: "
+                                           f"{str(fb.get('claim', ''))[:60]}"})
 
         chapter_record = {
             "idx": idx,
