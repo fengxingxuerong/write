@@ -148,5 +148,35 @@ class PipelineWiringTest(unittest.TestCase):
         self.assertIn('fix_prompt(rv, final_text, ctx["review_world_terms"])', src)
 
 
+class WorldTermsExtractionTest(unittest.TestCase):
+    """专名池抽取：v7 实测《废柴修仙》world 三个字段只切出 1 个专名，瓶颈在全角分隔符。"""
+
+    def test_fullwidth_slash_splits_factions(self):
+        terms = fanqie_review.extract_world_terms(
+            {"world": {"continent": "荒晷大陆", "faction": "天问宗／骨门／渊阁"}})
+        self.assertIn("荒晷大陆", terms)
+        self.assertIn("天问宗", terms)
+        # 未加引号的 2 字片段仍按「片段 ≥3 字」规则挡掉，避免「秩序/资本」类噪声进池
+        self.assertNotIn("骨门", terms)
+
+    def test_quoted_two_char_name_still_accepted(self):
+        terms = fanqie_review.extract_world_terms({"world": {"currency": "『星髓』"}})
+        self.assertIn("星髓", terms)
+
+
+class ThinTermPoolTest(unittest.TestCase):
+    """专名池只有 1-2 个时，提示词必须给做得到的名额（v7 实测该书只切出 1 个）。"""
+
+    def test_single_term_quota_degrades(self):
+        prompt = scene_prompt(1, 3, "起", "开场", ["开门"], "", "玄幻",
+                              world="荒晷大陆", world_terms=("荒晷大陆",))
+        self.assertIn("其中 1 个（全章合计不少于 1 个）", prompt)
+
+    def test_two_term_quota_degrades(self):
+        prompt = scene_prompt(1, 3, "起", "开场", ["开门"], "", "玄幻",
+                              world="x", world_terms=("荒晷大陆", "天问宗"))
+        self.assertIn("其中 2 个（全章合计不少于 2 个）", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

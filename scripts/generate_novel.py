@@ -381,10 +381,14 @@ def scene_prompt(scene_no, total_scenes, stage, goal, beats, prev_text, genre_hi
     if world_terms:
         shown = "、".join(world_terms[:10])
         more = "" if len(world_terms) <= 10 else f"（另 {len(world_terms) - 10} 个见大纲）"
+        # 名额按下发清单长度收敛：专名池可能只切出 1-2 个（v7 实测《废柴修仙》只有 1 个），
+        # 写死「≥2/≥4」会给出做不到的指令，反而诱发堆砌或整段解释设定。
+        per_scene = min(2, len(world_terms))
+        per_chapter = min(4, len(world_terms))
         # 评审按专名字面命中判定「世界观是否落地」：只给整段世界观描述时，写手会自由转述、
         # 专名一个都不落纸面（门禁 v7 第 13 项连续三章判「世界观未落地」）。
         s += (f"【世界观专名·本章必须落地】本书专名：{shown}{more}。"
-              "本场景至少自然带出其中 2 个（全章合计不少于 4 个）："
+              f"本场景至少自然带出其中 {per_scene} 个（全章合计不少于 {per_chapter} 个）："
               "对白称呼、地名/机构/功法/器物名、他人提及、路牌招牌皆可；"
               "专名按字面照抄，禁止改成近义词或简称（评审按字面命中判定「世界观是否落地」）；"
               "禁止把专名列成清单、禁止整段解释设定。\n")

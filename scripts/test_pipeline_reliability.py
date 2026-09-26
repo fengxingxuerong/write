@@ -165,5 +165,19 @@ class PipelineReliabilityTest(unittest.TestCase):
         self.assertFalse(pipeline._in_cooldown(provider))
 
 
+    def test_world_blocker_hint_reports_hit_and_missing(self):
+        row = {"metrics": {"world": {"hit": 0, "total": 2,
+                                     "missing": ["荒晷大陆", "天问宗"]}}}
+        self.assertEqual(smoke.world_blocker_hint(row),
+                         "（专名 0/2：缺 荒晷大陆、天问宗）")
+
+    def test_world_blocker_hint_silent_without_world_metrics(self):
+        self.assertEqual(smoke.world_blocker_hint({}), "")
+        self.assertEqual(smoke.world_blocker_hint({"metrics": {}}), "")
+        self.assertEqual(
+            smoke.world_blocker_hint({"metrics": {"world": {"hit": 2, "total": 2}}}),
+            "（专名 2/2）")
+
+
 if __name__ == '__main__':
     unittest.main()

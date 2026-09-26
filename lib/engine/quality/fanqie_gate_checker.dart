@@ -548,7 +548,7 @@ class FanqieGateChecker {
       '主要势力', '自拟', '三大势力', '自拟专名', '能源为',
     };
     const String sepChars =
-        '，。、；：！？（）()《》〈〉“”‘’「」『』【】[]{}\\/"\':;,·—-与和及 \t\r\n';
+        '，。、；：！？（）()《》〈〉“”‘’「」『』【】[]{}\\/"\':;,·—-与和及／｜ \t\r\n';
     final RegExp ok = RegExp(r'^[\u4e00-\u9fffA-Za-z0-9·]{2,12}$');
     final RegExp quoted = RegExp('[「『《“‘]([^\\n」』”’]{2,10})[」』”’]');
     final Set<String> out = <String>{};

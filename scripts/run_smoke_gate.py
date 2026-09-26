@@ -121,6 +121,20 @@ def _valid_chapter_data(data):
 
 
 
+def world_blocker_hint(review_row):
+    """「世界观未落地」的落地明细后缀（专名命中数 + 缺失清单）。
+
+    单看这四个字分不清是写手没接住设定、还是专名池本身太薄——v7 实测《废柴修仙》
+    world 三个字段只切出 1 个专名，整项判定全看那一个词是否出现。带上下限信息后，
+    复验时一眼能看出该修提示词还是该修抽取规则。
+    """
+    w = (review_row.get("metrics") or {}).get("world")
+    if not w:
+        return ""
+    miss = "、".join(w.get("missing") or [])
+    return f"（专名 {w.get('hit', 0)}/{w.get('total', 0)}" + (f"：缺 {miss}" if miss else "") + "）"
+
+
 def check(output, max_chapters, review_pass=78.0, genre="玄幻"):
     results = []
 
@@ -264,7 +278,8 @@ def check(output, max_chapters, review_pass=78.0, genre="玄幻"):
     for idx, d in sorted(review_rows.items(), key=lambda kv: (kv[0] is None, kv[0])):
         bl = d.get("blockers") or blocking_reasons(d)
         if bl:
-            blocked.append(f"第{idx}章：{'、'.join(bl)}")
+            hint = world_blocker_hint(d) if "世界观未落地" in bl else ""
+            blocked.append(f"第{idx}章：{'、'.join(bl)}{hint}")
     chk("无阻断级硬伤章", not blocked, "、".join(blocked[:3]))
 
     # 14) 语义硬伤三关（与 qa_semantic_check 同口径，2026-09-23）：
