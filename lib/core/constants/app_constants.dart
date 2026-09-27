@@ -34,23 +34,27 @@ class AppConstants {
   /// 规则：CJK 统一字符（含扩展 A、兼容区）每字计 1；
   /// 连续的 ASCII 字母/数字串计 1（一个英文单词/数字）。
   /// 模型层 [Chapter.wordCount] / [Novel.wordCount] 复用此实现。
+  ///
+  /// 逐码元扫描（旧实现迭代 `text.runes`）：全书体检里这段按章被调 4~6 次，
+  /// 码元级读写省掉 Runes 迭代器的构建与逐码元装箱。口径不变——代理对的两个
+  /// 码元都落在三个 CJK 区间外，与「一个图素簇一个 rune」同样走 else 分支。
   static int countWords(String text) {
     if (text.isEmpty) return 0;
     int count = 0;
     bool inAsciiWord = false;
-    final runes = text.runes;
-    for (final r in runes) {
+    for (int i = 0; i < text.length; i++) {
+      final int r = text.codeUnitAt(i);
       // CJK 统一表意文字（基本区 + 扩展 A + 兼容区）：每字计 1。
-      if (r >= 0x3400 && r <= 0x4DBF ||
-          r >= 0x4E00 && r <= 0x9FFF ||
-          r >= 0xF900 && r <= 0xFAFF) {
+      if ((r >= 0x3400 && r <= 0x4DBF) ||
+          (r >= 0x4E00 && r <= 0x9FFF) ||
+          (r >= 0xF900 && r <= 0xFAFF)) {
         count++;
         inAsciiWord = false;
       }
       // ASCII 字母或数字：连续成一个词，计 1。
       else if ((r >= 0x41 && r <= 0x5A) ||
-               (r >= 0x61 && r <= 0x7A) ||
-               (r >= 0x30 && r <= 0x39)) {
+          (r >= 0x61 && r <= 0x7A) ||
+          (r >= 0x30 && r <= 0x39)) {
         if (!inAsciiWord) {
           count++;
           inAsciiWord = true;

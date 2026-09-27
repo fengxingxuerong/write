@@ -235,4 +235,30 @@ void main() {
     });
   });
 
+  group('PipelineQa.repetitionAndRhythm（合并入口）', () {
+    test('与两个单指标入口逐值一致（共用同一份段落切分）', () {
+      const String text = '他走进院子，看见屋檐下挂着两盏灯笼。\n\n'
+          '他走进院子，看见屋檐下挂着两盏灯笼。\n\n'
+          '雪落下来，压弯了枝头，远处有人喊了一声。';
+      final ({double repetition, double rhythm}) rr =
+          PipelineQa.repetitionAndRhythm(text);
+      expect(rr.repetition, PipelineQa.adjacentRepetition(text));
+      expect(rr.rhythm, PipelineQa.rhythmScore(text));
+    });
+
+    test('不足两段时重复率为 0，节奏仍按同一批段落算', () {
+      const String one = '只有一段内容，长度超过十个字符以便进入统计口径。';
+      final ({double repetition, double rhythm}) rr =
+          PipelineQa.repetitionAndRhythm(one);
+      expect(rr.repetition, 0.0);
+      expect(rr.rhythm, PipelineQa.rhythmScore(one));
+    });
+
+    test('空文本两个指标都是 0', () {
+      final ({double repetition, double rhythm}) rr =
+          PipelineQa.repetitionAndRhythm('');
+      expect(rr.repetition, 0.0);
+      expect(rr.rhythm, 0.0);
+    });
+  });
 }

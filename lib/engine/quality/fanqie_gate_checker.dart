@@ -453,7 +453,7 @@ class FanqieGateChecker {
     }
 
     // ---- 水段 / 套句 / 自我重复 ----
-    final ({double ratio, int counted}) filler = fillerStats(text);
+    final ({double ratio, int counted}) filler = fillerStats(text, paras: paras);
     if (filler.ratio > maxFiller) {
       // 长段样本不足 8 个时，百分比会说谎（短章可能一共就 4 个长段）。
       final FanqieGateAction act =
@@ -507,7 +507,8 @@ class FanqieGateChecker {
           drift.level == '重写' ? FanqieGateAction.rewrite : FanqieGateAction.revise));
     }
     // 章内大段重复：复制粘贴级事故（实测第 3 章开头 800 字整块两遍）
-    final ({int blocks, int words, String sample}) inrep = intraRepeat(text);
+    final ({int blocks, int words, String sample}) inrep =
+        intraRepeat(text, paras: paras);
     if (inrep.blocks > 0) {
       issues.add(FanqieGateIssue('重复',
           '章内大段重复：${inrep.words} 字整块出现两次（如「${inrep.sample}…」），'
@@ -639,11 +640,15 @@ class FanqieGateChecker {
   ///
   /// 短段不参统计：「他顿了顿。」这种喘气段是准则明写的节奏手段，
   /// 按段落长短砍它会把好文风压成流水账。返回的 counted 用于判样本量。
-  static ({double ratio, int counted}) fillerStats(String text) {
-    final List<String> paras = _paragraphs(text);
+  ///
+  /// [paras] 可由调用方传入已切好的段落（[check] 里同一章要切三次，见
+  /// [intraRepeat] 注释）；不传则现场切分，口径完全一致。
+  static ({double ratio, int counted}) fillerStats(String text,
+      {List<String>? paras}) {
+    final List<String> list = paras ?? _paragraphs(text);
     int bad = 0;
     int counted = 0;
-    for (final String p in paras) {
+    for (final String p in list) {
       if (_hanCount(p) < 40) continue;
       counted++;
       if (p.contains('“') || p.contains('"') || p.contains('「')) continue;
@@ -662,7 +667,10 @@ class FanqieGateChecker {
   /// 与 Python 侧 `fanqie_review.intra_repeat` 同口径：
   /// ① 扁平文本滑动指纹（完全相同的长块）；② 段落级近似比对（标点/个别用词微调）。
   /// `blocks` > 0 即判「重写」级事故（实测：第 3 章开头 800 字整块出现两遍）。
-  static ({int blocks, int words, String sample}) intraRepeat(String text) {
+  static ({int blocks, int words, String sample}) intraRepeat(
+    String text, {
+    List<String>? paras,
+  }) {
     final String flat = text.replaceAll(_ws, '');
     final List<List<int>> spans =
         flat.length >= intraRepeatMinBlock * 2 ? _dupSpans(flat) : <List<int>>[];
@@ -676,7 +684,8 @@ class FanqieGateChecker {
       return (blocks: spans.length, words: words, sample: flat.substring(head, end));
     }
     // 近似重复通道：段落级二元组相似度 ≥0.85（标点/个别用词微调也算）
-    final List<String> longParas = _paragraphs(text)
+    // [paras] 由调用方传入时省掉重复切分（[check] 里同一章还要用它算段长与水段率）。
+    final List<String> longParas = (paras ?? _paragraphs(text))
         .where((String p) => _hanCount(p) >= intraRepeatMinBlock)
         .toList();
     // 二元组集合按段落只算一次：旧实现在下面的 O(n²) 配对里，

@@ -30,14 +30,23 @@ class NovelQualityChecker {
     for (int i = 1; i < paragraphs.length; i++) {
       adjacentSim[i - 1] = _similarity(paragraphs[i - 1], paragraphs[i]);
     }
+    // AI 囷痕与字数也只算一次再复用：旧实现「AI 味密度」与「硬伤详情」各把 39 个
+    // 模式在全文扫一遍（`allMatches` 是惰性 Iterable，两次消费＝两次实扫），
+    // 字数统计同样被密度/五感/总字数各算一遍。全书体检下这是最贵的一段重复。
+    final List<List<RegExpMatch>> echoHits = <List<RegExpMatch>>[
+      for (final _AiEchoPattern p in _aiEchoPatterns)
+        p.allMatches(text).toList(growable: false),
+    ];
+    final int words = _countWords(text);
     return QualityReport(
-      aiEchoScore: _calcAiEchoScore(text),
+      aiEchoScore: _aiEchoScoreOf(echoHits, words),
       repetitionScore: _repetitionScoreOf(adjacentSim),
       rhythmScore: _calcRhythmScore(text),
-      sensoryScore: _calcSensoryScore(text),
+      sensoryScore: _calcSensoryScore(text, words),
       dialogueRatio: _calcDialogueRatio(text),
-      totalWords: _countWords(text),
-      hardViolations: _findHardViolations(text, paragraphs, adjacentSim),
+      totalWords: words,
+      hardViolations:
+          _findHardViolations(text, paragraphs, adjacentSim, echoHits),
     );
   }
 
@@ -62,29 +71,33 @@ class NovelQualityChecker {
   /// ============================================================
   /// 1. AI 囷痕密度（命中数 / 正文字数 × 100）
   /// ============================================================
-  static double _calcAiEchoScore(String text) {
-    if (text.isEmpty) return 0.0;
-    int hits = 0;
-    for (final _AiEchoPattern p in _aiEchoPatterns) {
-      hits += p.allMatches(text).length;
+
+  /// 由 [check] 预扫好的命中列表与预算好的字数算密度。
+  static double _aiEchoScoreOf(List<List<RegExpMatch>> hits, int words) {
+    if (words == 0) return 0.0;
+    int n = 0;
+    for (final List<RegExpMatch> list in hits) {
+      n += list.length;
     }
-    final int words = _countWords(text);
-    return words == 0 ? 0.0 : (hits / words) * 100.0;
+    return (n / words) * 100.0;
   }
 
   /// 查找所有硬伤命中详情。
   ///
-  /// [paragraphs] 与 [adjacentSim] 由 [check] 预算好传入，避免同一批相邻段落对
-  /// 被重复分与硬伤详情各算一遍；`adjacentSim[i]` 即 paragraphs[i] 与
-  /// paragraphs[i + 1] 的相似度。
+  /// [paragraphs]、[adjacentSim] 与 [echoHits] 由 [check] 预算好传入，避免同一批
+  /// 相邻段落对/同一批 AI 囷痕命中被重复分与硬伤详情各算一遍；
+  /// `adjacentSim[i]` 即 paragraphs[i] 与 paragraphs[i + 1] 的相似度，
+  /// `echoHits[i]` 即 `_aiEchoPatterns[i]` 的命中列表。
   static List<QualityViolation> _findHardViolations(
     String text,
     List<String> paragraphs,
     List<double> adjacentSim,
+    List<List<RegExpMatch>> echoHits,
   ) {
     final List<QualityViolation> list = <QualityViolation>[];
-    for (final _AiEchoPattern p in _aiEchoPatterns) {
-      for (final RegExpMatch m in p.allMatches(text)) {
+    for (int pi = 0; pi < _aiEchoPatterns.length; pi++) {
+      final _AiEchoPattern p = _aiEchoPatterns[pi];
+      for (final RegExpMatch m in echoHits[pi]) {
         list.add(QualityViolation(
           type: QualityViolationType.aiEcho,
           description: p.description,
@@ -148,9 +161,10 @@ class NovelQualityChecker {
   /// ============================================================
   /// 4. 非视觉感官占比
   /// ============================================================
-  static double _calcSensoryScore(String text) {
+
+  /// [words] 由 [check] 预算好传入（三处指标共用同一份字数）。
+  static double _calcSensoryScore(String text, int words) {
     final int hits = _nonVisual.allMatches(text).length;
-    final int words = _countWords(text);
     return words == 0 ? 0.0 : (hits / words) * 100.0;
   }
 

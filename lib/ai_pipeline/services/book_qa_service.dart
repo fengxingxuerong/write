@@ -77,18 +77,39 @@ class BookQaService {
         chapterIndex: c.order,
       );
 
+      // 商业向指标与字数一次算好再复用：旧实现在「爽点过淡」判定与 _rowFor 明细里
+      // 各算一遍（thrill / surge / hasEndingHook / wordCount 每章白算两次），
+      // 相邻段落重复率与节奏失衡也共用同一份段落切分。
+      final ({double repetition, double rhythm}) rr =
+          PipelineQa.repetitionAndRhythm(text);
+      final double thrill = PipelineQa.thrillPerThousand(text);
+      final double surge = PipelineQa.surgePerThousand(text);
+      final bool hook = PipelineQa.hasEndingHook(text);
+      final double echo = PipelineQa.aiEchoPct(text);
+      final int words = c.wordCount();
+
       // 商业向指标告警（与 PipelineQa.chapterIssues 同口径）。
       final List<String> extra = <String>[];
-      if (!PipelineQa.hasEndingHook(text)) {
+      if (!hook) {
         extra.add('章末 200 字未检测到钩子信号（直白突变/威胁窥伺/身份伏笔）');
       }
-      if (c.wordCount() > 1500 &&
-          PipelineQa.thrillPerThousand(text) < 0.5 &&
-          PipelineQa.surgePerThousand(text) < 1.0) {
+      if (words > 1500 && thrill < 0.5 && surge < 1.0) {
         extra.add('爽点过淡（直白爽点 <0.5 且变强异动 <1.0/千字）');
       }
 
-      rows.add(_rowFor(c, text, novelReport, gate, extra));
+      rows.add(_rowFor(
+        c,
+        novelReport,
+        gate,
+        extra,
+        words: words,
+        echo: echo,
+        repetition: rr.repetition,
+        rhythm: rr.rhythm,
+        hook: hook,
+        thrill: thrill,
+        surge: surge,
+      ));
       prevContent = text;
     }
 
@@ -97,13 +118,22 @@ class BookQaService {
 }
 
 /// 组装单章明细。
+///
+/// 商业指标与字数由调用方算好传入（同一章会被「爽点过淡」判定与明细展示共用，
+/// 见 `BookQaService.check`），这里只做拼装，不再重复计算。
 BookChapterQa _rowFor(
   Chapter c,
-  String text,
   QualityReport novelReport,
   FanqieGateReport gate,
-  List<String> extra,
-) {
+  List<String> extra, {
+  required int words,
+  required double echo,
+  required double repetition,
+  required double rhythm,
+  required bool hook,
+  required double thrill,
+  required double surge,
+}) {
   double score = novelReport.overallScore * 0.5 + gate.score * 0.5;
   if (gate.hasVeto) score = score > 60 ? 60 : score;
   return BookChapterQa(
@@ -111,15 +141,15 @@ BookChapterQa _rowFor(
     score: score,
     pass: !gate.hasVeto && score >= BookQaService.passThreshold,
     hasVeto: gate.hasVeto,
-    words: c.wordCount(),
-    aiEcho: PipelineQa.aiEchoPct(text),
-    repetition: PipelineQa.adjacentRepetition(text),
-    rhythm: PipelineQa.rhythmScore(text),
+    words: words,
+    aiEcho: echo,
+    repetition: repetition,
+    rhythm: rhythm,
     dialogueRatio: gate.dialogueRatio,
     fillerRatio: gate.fillerRatio,
-    hasHook: PipelineQa.hasEndingHook(text),
-    thrill: PipelineQa.thrillPerThousand(text),
-    surge: PipelineQa.surgePerThousand(text),
+    hasHook: hook,
+    thrill: thrill,
+    surge: surge,
     novelIssues: novelReport.hardViolations
         .map((QualityViolation v) => '[${v.type.name}] ${v.description}')
         .toList(),

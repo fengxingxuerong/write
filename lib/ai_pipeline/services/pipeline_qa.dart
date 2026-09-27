@@ -56,11 +56,29 @@ class PipelineQa {
   }
 
   /// 相邻段落重复率：相邻段落二元组 Jaccard 相似度均值。
-  static double adjacentRepetition(String text) {
-    final List<String> paras = text
-        .split('\n\n')
-        .where((String p) => p.trim().length > 10)
-        .toList();
+  static double adjacentRepetition(String text) => _repetitionOf(_qaParas(text));
+
+  /// 节奏失衡：超长（>400 字）或超短（<30 字）段落占比。
+  static double rhythmScore(String text) => _rhythmOf(_qaParas(text));
+
+  /// 相邻段落重复率 + 节奏失衡率（同一份段落切分只做一次）。
+  ///
+  /// 两个指标的段落口径完全一致（`\n\n` 切分后只留 `trim().length > 10` 的段），
+  /// 旧实现各自切一遍；全书体检按章调用时是白扫的第二遍。单指标入口保留为
+  /// 薄封装，单独调用时不会多做另一项计算。
+  static ({double repetition, double rhythm}) repetitionAndRhythm(String text) {
+    final List<String> paras = _qaParas(text);
+    return (repetition: _repetitionOf(paras), rhythm: _rhythmOf(paras));
+  }
+
+  /// 商业指标共用的段落切分口径。
+  static List<String> _qaParas(String text) => text
+      .split('\n\n')
+      .where((String p) => p.trim().length > 10)
+      .toList();
+
+  /// 已切好的段落 → 相邻段落重复率。
+  static double _repetitionOf(List<String> paras) {
     if (paras.length < 2) return 0.0;
     double sum = 0.0;
     for (int i = 1; i < paras.length; i++) {
@@ -69,12 +87,8 @@ class PipelineQa {
     return sum / (paras.length - 1);
   }
 
-  /// 节奏失衡：超长（>400 字）或超短（<30 字）段落占比。
-  static double rhythmScore(String text) {
-    final List<String> paras = text
-        .split('\n\n')
-        .where((String p) => p.trim().length > 10)
-        .toList();
+  /// 已切好的段落 → 节奏失衡率。
+  static double _rhythmOf(List<String> paras) {
     if (paras.isEmpty) return 0.0;
     int bad = 0;
     for (final String p in paras) {
@@ -87,8 +101,11 @@ class PipelineQa {
   /// 生成一章节的质检摘要（供 UI 报告展示）。
   static Map<String, dynamic> chapterReport(PipelineChapter chapter) {
     final double echo = aiEchoPct(chapter.content);
-    final double rep = adjacentRepetition(chapter.content);
-    final double rhy = rhythmScore(chapter.content);
+    // 重复率与节奏共用同一份段落切分（口径见 repetitionAndRhythm）。
+    final ({double repetition, double rhythm}) rr =
+        repetitionAndRhythm(chapter.content);
+    final double rep = rr.repetition;
+    final double rhy = rr.rhythm;
     final Map<String, dynamic> deep = deepAiMetrics(chapter.content);
     return <String, dynamic>{
       'idx': chapter.idx,
