@@ -54,9 +54,7 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
       _running = true;
       _expanded.clear();
     });
-    // 计算放下一帧，让「体检中」先渲染。
-    await Future<void>.delayed(Duration.zero);
-    final BookQaReport r = _service.check(widget.novel);
+    final BookQaReport r = await _service.checkAsync(widget.novel);
     if (!mounted) return;
     setState(() {
       _report = r;

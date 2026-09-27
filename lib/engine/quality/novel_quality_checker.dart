@@ -1,7 +1,5 @@
 import 'dart:isolate';
 
-import 'package:characters/characters.dart';
-
 /// 小说生成结果的自动化质量检查器。
 ///
 /// 纯本地算法实现（无 LLM 调用、无网络），检测以下维度：
@@ -22,14 +20,24 @@ class NovelQualityChecker {
   /// 对 [text] 执行全套质检，返回 [QualityReport]。
   /// 纯同步方法；适合短线检查。
   static QualityReport check(String text) {
+    // 段落切分与相邻相似度只算一次再复用：重复分与硬伤详情用的是同一段落列表、
+    // 同一批相邻段落对，旧实现各算一遍；而 _similarity 要为每个 3-gram 在长段落
+    // 里做一次 contains，是整套质检里最贵的一步（全书体检时被白算了一倍）。
+    final List<String> paragraphs =
+        text.split('\n\n').where((String p) => p.trim().length > 10).toList();
+    final List<double> adjacentSim = List<double>.filled(
+        paragraphs.length < 2 ? 0 : paragraphs.length - 1, 0.0);
+    for (int i = 1; i < paragraphs.length; i++) {
+      adjacentSim[i - 1] = _similarity(paragraphs[i - 1], paragraphs[i]);
+    }
     return QualityReport(
       aiEchoScore: _calcAiEchoScore(text),
-      repetitionScore: _calcRepetitionScore(text),
+      repetitionScore: _repetitionScoreOf(adjacentSim),
       rhythmScore: _calcRhythmScore(text),
       sensoryScore: _calcSensoryScore(text),
       dialogueRatio: _calcDialogueRatio(text),
       totalWords: _countWords(text),
-      hardViolations: _findHardViolations(text),
+      hardViolations: _findHardViolations(text, paragraphs, adjacentSim),
     );
   }
 
@@ -65,7 +73,15 @@ class NovelQualityChecker {
   }
 
   /// 查找所有硬伤命中详情。
-  static List<QualityViolation> _findHardViolations(String text) {
+  ///
+  /// [paragraphs] 与 [adjacentSim] 由 [check] 预算好传入，避免同一批相邻段落对
+  /// 被重复分与硬伤详情各算一遍；`adjacentSim[i]` 即 paragraphs[i] 与
+  /// paragraphs[i + 1] 的相似度。
+  static List<QualityViolation> _findHardViolations(
+    String text,
+    List<String> paragraphs,
+    List<double> adjacentSim,
+  ) {
     final List<QualityViolation> list = <QualityViolation>[];
     for (final _AiEchoPattern p in _aiEchoPatterns) {
       for (final RegExpMatch m in p.allMatches(text)) {
@@ -78,10 +94,8 @@ class NovelQualityChecker {
       }
     }
     // 相邻段落重复检测（相似度 > 0.7 视为留痕）
-    final List<String> paragraphs =
-        text.split('\n\n').where((String p) => p.trim().length > 10).toList();
     for (int i = 1; i < paragraphs.length; i++) {
-      final double sim = _similarity(paragraphs[i - 1], paragraphs[i]);
+      final double sim = adjacentSim[i - 1];
       if (sim > 0.7) {
         list.add(QualityViolation(
           type: QualityViolationType.repetition,
@@ -99,18 +113,13 @@ class NovelQualityChecker {
   /// ============================================================
   /// 2. 相邻段落平均相似度
   /// ============================================================
-  static double _calcRepetitionScore(String text) {
-    final List<String> paragraphs =
-        text.split('\n\n').where((String p) => p.trim().length > 10).toList();
-    if (paragraphs.length < 2) return 0.0;
-
+  static double _repetitionScoreOf(List<double> adjacentSim) {
+    if (adjacentSim.isEmpty) return 0.0;
     double totalSim = 0.0;
-    int pairs = 0;
-    for (int i = 1; i < paragraphs.length; i++) {
-      totalSim += _similarity(paragraphs[i - 1], paragraphs[i]);
-      pairs++;
+    for (final double s in adjacentSim) {
+      totalSim += s;
     }
-    return pairs == 0 ? 0.0 : totalSim / pairs;
+    return totalSim / adjacentSim.length;
   }
 
   /// ============================================================
@@ -129,31 +138,35 @@ class NovelQualityChecker {
     return badCount / paragraphs.length;
   }
 
+  /// 非视觉感官描写模式（编译一次常驻，旧实现每次调用重编）。
+  static final RegExp _nonVisual = RegExp(
+    r'闻[到见]|气[味息]|听[到见]|声[音]|触[感]|摸[上去起来]|冰[冷凉]'
+    r'|滚[烫]|疼[痛]|寒冷|温暖|湿润|干燥|柔软|坚硬|芬芳|恶臭',
+    unicode: true,
+  );
+
   /// ============================================================
   /// 4. 非视觉感官占比
   /// ============================================================
   static double _calcSensoryScore(String text) {
-    final RegExp nonVisual = RegExp(
-      r'闻[到见]|气[味息]|听[到见]|声[音]|触[感]|摸[上去起来]|冰[冷凉]'
-      r'|滚[烫]|疼[痛]|寒冷|温暖|湿润|干燥|柔软|坚硬|芬芳|恶臭',
-      unicode: true,
-    );
-    final int hits = nonVisual.allMatches(text).length;
+    final int hits = _nonVisual.allMatches(text).length;
     final int words = _countWords(text);
     return words == 0 ? 0.0 : (hits / words) * 100.0;
   }
+
+  /// 行内对白模式（编译一次常驻，旧实现每次调用重编）。
+  static final RegExp _dialogueLine = RegExp(r'["「『"].+?["」』"]');
 
   /// ============================================================
   /// 5. 对话占比（含 「」"" 的行）
   /// ============================================================
   static double _calcDialogueRatio(String text) {
-    final List<String> lines = text.split(RegExp(r'[\n]'));
+    final List<String> lines = text.split('\n');
     if (lines.isEmpty) return 0.0;
 
-    final RegExp dialogueLine = RegExp(r'["「『"].+?["」』"]');
     int count = 0;
     for (final String l in lines) {
-      if (dialogueLine.hasMatch(l.trim())) count++;
+      if (_dialogueLine.hasMatch(l.trim())) count++;
     }
     return count / lines.length;
   }
@@ -162,13 +175,22 @@ class NovelQualityChecker {
   /// 工具方法
   /// ============================================================
 
-  /// 统计中文字符数（按字符而非字节）。
+  /// 统计正文字数（CJK + 数字，按字符而非字节）。
+  ///
+  /// 逐码点扫描替代 `text.characters.where(...)`：图素簇迭代要为每个字符建
+  /// 迭代器，全书体检下这段要跑上百万次，直接读 codeUnitAt 快一个量级。
+  /// 计数口径不变：CJK 统一表意文字与 ASCII 数字都在 BMP 内（代理对/组合符
+  /// 的首个码点落在区间外，与图素簇口径同样不计）。
   static int _countWords(String text) {
-    return text.characters.where((String c) {
-      final int code = c.codeUnitAt(0);
-      return (code >= 0x4E00 && code <= 0x9FFF) || // CJK
-          (code >= 0x30 && code <= 0x39); // 数字
-    }).length;
+    int n = 0;
+    for (int i = 0; i < text.length; i++) {
+      final int code = text.codeUnitAt(i);
+      if ((code >= 0x4E00 && code <= 0x9FFF) || // CJK
+          (code >= 0x30 && code <= 0x39)) {
+        n++; // 数字
+      }
+    }
+    return n;
   }
 
   /// 两个字符串的 3-gram 相似度（0~1），轻量级近似。
@@ -189,9 +211,16 @@ class NovelQualityChecker {
     }
     if (grams.isEmpty) return 0.0;
     final String longStr = a.length <= b.length ? b : a;
+    // 长串侧一次性建窗口集合再查：旧实现是「每个 gram 扫一遍长串」，
+    // 段落越长越接近 O(G×L)，是全书体检的主要开销。
+    // 口径不变：g 恒为 3 个长度单位，longStr.contains(g) ⟺ g ∈ longStr 的三元窗口集。
+    final Set<String> longGrams = <String>{};
+    for (int i = 0; i <= longStr.length - 3; i++) {
+      longGrams.add(longStr.substring(i, i + 3));
+    }
     int hitGrams = 0;
     for (final String g in grams) {
-      if (longStr.contains(g)) hitGrams++;
+      if (longGrams.contains(g)) hitGrams++;
     }
     return hitGrams / grams.length;
   }
@@ -204,9 +233,12 @@ class NovelQualityChecker {
   };
 
   /// 检查 [gram] 是否全部由停用字构成（true = 应跳过）。
+  ///
+  /// 逐码点比对替代图素簇迭代：gram 恒为 3 个长度单位，停用字表全是单码点
+  /// BMP 字符，命中口径一致；这个函数按 gram 数量放大，不值得建迭代器。
   static bool _isStopGram(String gram) {
-    for (final String ch in gram.characters) {
-      if (!_stopChars.contains(ch)) return false;
+    for (int i = 0; i < gram.length; i++) {
+      if (!_stopChars.contains(gram[i])) return false;
     }
     return true;
   }
@@ -274,6 +306,9 @@ class _AiEchoPattern {
   // ignore: prefer_const_constructors_in_immutables
   _AiEchoPattern(String this.keyword)
       : regex = null,
+        // 转义后编译一次并常驻：旧实现在每次 allMatches() 里重新
+        // RegExp(RegExp.escape(kw))，全书体检下 40 个模式 × 每章都要重编一遍。
+        matcher = RegExp(RegExp.escape(keyword), unicode: true),
         description = _describe(keyword);
 
   /// 直接子串关键词（匹配更快）。
@@ -282,14 +317,16 @@ class _AiEchoPattern {
   /// 复杂正则（仅特殊模式需要）。
   final RegExp? regex;
 
+  /// [keyword] 转义后的预编译匹配器（构造期编译，避免每次匹配重编正则）。
+  final RegExp matcher;
+
   /// 人类可读的描述。
   final String description;
 
   /// 执行匹配。
   Iterable<RegExpMatch> allMatches(String text) sync* {
     if (keyword != null) {
-      final RegExp r = RegExp(RegExp.escape(keyword!), unicode: true);
-      yield* r.allMatches(text);
+      yield* matcher.allMatches(text);
     } else if (regex != null) {
       yield* regex!.allMatches(text);
     }

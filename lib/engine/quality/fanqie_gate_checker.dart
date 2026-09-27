@@ -238,6 +238,20 @@ class FanqieGateChecker {
   static final RegExp _namePat = RegExp(
       r'([\u4e00-\u9fff]{2,3})[，,、]?(?:说|道|问|答|笑|喊|盯|看|抬头|转身|点头|摇头|皱眉|站|蹲|伸手|开口)');
 
+  /// 空白扁平化（去空白用）。旧实现在 6 处内联 `RegExp(r'\s+')`，
+  /// 其中两处位于段落两两比对的 O(n²) 循环里，每次配对都重编一次正则。
+  static final RegExp _ws = RegExp(r'\s+');
+
+  /// 专名合法性校验 / 引号内片段 / 尾缀虚词（编译一次常驻）。
+  static final RegExp _termOk = RegExp(r'^[\u4e00-\u9fffA-Za-z0-9·]{2,12}$');
+  static final RegExp _quotedTerm =
+      RegExp('[「『《“‘]([^\\n」』”’]{2,10})[」』”’]');
+  static final RegExp _termTail = RegExp(r'[的地了]+$');
+
+  /// 对白引号内片段（编译一次常驻）。
+  static final RegExp _dialogueQuote =
+      RegExp('[“"「『]([^”"」』]{1,200})[”"」』]');
+
   /// 冲突信号：首屏要带包袋。
   static const List<String> _conflict = <String>[
     '吼', '骂', '砸', '押', '欠', '逐', '抢', '抓', '审', '封门', '退婚', '断', '碎',
@@ -569,21 +583,19 @@ class FanqieGateChecker {
     };
     const String sepChars =
         '，。、；：！？（）()《》〈〉“”‘’「」『』【】[]{}\\/"\':;,·—-与和及／｜ \t\r\n';
-    final RegExp ok = RegExp(r'^[\u4e00-\u9fffA-Za-z0-9·]{2,12}$');
-    final RegExp quoted = RegExp('[「『《“‘]([^\\n」』”’]{2,10})[」』”’]');
     final Set<String> out = <String>{};
 
     void push(String raw) {
-      final String t = raw.trim().replaceAll(RegExp(r'[的地了]+$'), '');
-      if (!RegExp(r'[\u4e00-\u9fff]').hasMatch(t)) return;
+      final String t = raw.trim().replaceAll(_termTail, '');
+      if (!_han.hasMatch(t)) return;
       if (t.length < 2 || t.length > 12) return;
       if (generic.contains(t)) return;
-      if (!ok.hasMatch(t)) return;
+      if (!_termOk.hasMatch(t)) return;
       if (out.length < 14) out.add(t);
     }
 
     for (final String s in settingTexts) {
-      for (final RegExpMatch m in quoted.allMatches(s)) {
+      for (final RegExpMatch m in _quotedTerm.allMatches(s)) {
         push(m.group(1) ?? '');
       }
       final List<String> frag = <String>[];
@@ -606,12 +618,11 @@ class FanqieGateChecker {
 
   /// 对白占比（引号内字数 / 总字数）。
   static double dialogueRatioOf(String text) {
-    final RegExp q = RegExp(r'[“"「『]([^”"」』]{1,200})[”"」』]');
     final StringBuffer buf = StringBuffer();
-    for (final RegExpMatch m in q.allMatches(text)) {
+    for (final RegExpMatch m in _dialogueQuote.allMatches(text)) {
       buf.write(m.group(1));
     }
-    final int total = RegExp(r'[\u4e00-\u9fff]').allMatches(text).length;
+    final int total = _han.allMatches(text).length;
     if (total == 0) return 0;
     return _hanCount(buf.toString()) / total;
   }
@@ -644,7 +655,7 @@ class FanqieGateChecker {
   /// ① 扁平文本滑动指纹（完全相同的长块）；② 段落级近似比对（标点/个别用词微调）。
   /// `blocks` > 0 即判「重写」级事故（实测：第 3 章开头 800 字整块出现两遍）。
   static ({int blocks, int words, String sample}) intraRepeat(String text) {
-    final String flat = text.replaceAll(RegExp(r'\s+'), '');
+    final String flat = text.replaceAll(_ws, '');
     final List<List<int>> spans =
         flat.length >= intraRepeatMinBlock * 2 ? _dupSpans(flat) : <List<int>>[];
     if (spans.isNotEmpty) {
@@ -660,9 +671,13 @@ class FanqieGateChecker {
     final List<String> longParas = _paragraphs(text)
         .where((String p) => _hanCount(p) >= intraRepeatMinBlock)
         .toList();
+    // 二元组集合按段落只算一次：旧实现在下面的 O(n²) 配对里，
+    // 每一对都把这两段重新扁平化 + 重切一遍二元组（O(n²·L) 次冗余工作）。
+    final List<Set<String>> parasGrams =
+        longParas.map(_bigrams).toList(growable: false);
     for (int i = 1; i < longParas.length; i++) {
       for (int j = 0; j < i; j++) {
-        if (_bigramJaccard(longParas[j], longParas[i]) >= 0.85) {
+        if (_jaccardOf(parasGrams[j], parasGrams[i]) >= 0.85) {
           final String p = longParas[i];
           return (
             blocks: 1,
@@ -747,8 +762,8 @@ class FanqieGateChecker {
     final ({String level, List<String> hits, int count}) gd = genreDrift(p, genre);
     if (gd.level.isNotEmpty) return '题材漂移：${gd.hits.take(3).join('、')}';
     if (baseText.trim().isNotEmpty) {
-      final String flatP = p.replaceAll(RegExp(r'\s+'), '');
-      final String base = baseText.replaceAll(RegExp(r'\s+'), '');
+      final String flatP = p.replaceAll(_ws, '');
+      final String base = baseText.replaceAll(_ws, '');
       final String tail = base.length > 400 ? base.substring(base.length - 400) : base;
       final int top = flatP.length < 80 ? flatP.length : 80;
       for (int k = top; k > 19; k -= 5) {
@@ -760,21 +775,32 @@ class FanqieGateChecker {
     return null;
   }
 
-  /// 两段文字的汉字二元组 Jaccard 相似度（段落级近似重复判定用）。
-  static double _bigramJaccard(String a, String b) {
-    Set<String> grams(String s) {
-      final String t = s.replaceAll(RegExp(r'\s+'), '');
-      final Set<String> set = <String>{};
-      for (int i = 0; i + 1 < t.length; i++) {
-        set.add(t.substring(i, i + 2));
-      }
-      return set;
+  /// 段落字符二元组集合（去空白扁平化后取相邻两字）。
+  ///
+  /// 口径与旧实现里 `_bigramJaccard` 的内部闭包 grams() 完全一致；提出来是为了
+  /// 让 [intraRepeat] 的两两比对能把每个段落只算一次。
+  static Set<String> _bigrams(String s) {
+    final String t = s.replaceAll(_ws, '');
+    final Set<String> set = <String>{};
+    for (int i = 0; i + 1 < t.length; i++) {
+      set.add(t.substring(i, i + 2));
     }
+    return set;
+  }
 
-    final Set<String> ga = grams(a);
-    final Set<String> gb = grams(b);
+  /// 两个已算好的二元组集合的 Jaccard 相似度。
+  ///
+  /// 并集用容斥 |A∪B| = |A|+|B|-|A∩B| 算，省掉 `A.union(B)` 每次新建临时集合；
+  /// 交集遍历较小集合，计数与旧 `A.intersection(B).length` 完全一致。
+  static double _jaccardOf(Set<String> ga, Set<String> gb) {
     if (ga.isEmpty || gb.isEmpty) return 0.0;
-    return ga.intersection(gb).length / ga.union(gb).length;
+    final Set<String> small = ga.length <= gb.length ? ga : gb;
+    final Set<String> large = identical(small, ga) ? gb : ga;
+    int inter = 0;
+    for (final String g in small) {
+      if (large.contains(g)) inter++;
+    }
+    return inter / (ga.length + gb.length - inter);
   }
 
   /// 子串出现次数。
@@ -851,7 +877,7 @@ class FanqieGateChecker {
   /// 与上一章的 8-gram 重合率。
   static double _gramOverlap(String a, String b) {
     Set<String> grams(String s) {
-      final String t = s.replaceAll(RegExp(r'\s+'), '');
+      final String t = s.replaceAll(_ws, '');
       final Set<String> out = <String>{};
       for (int i = 0; i + 8 <= t.length; i += 3) {
         out.add(t.substring(i, i + 8));

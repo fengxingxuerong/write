@@ -304,10 +304,12 @@ class PipelineQa {
     };
   }
 
-  /// 按句末标点切分句子。
+  /// 按句末标点切分句子（正则编译一次常驻）。
+  static final RegExp _sentenceSplit = RegExp(r'[。！？!?…]+');
+
   static List<String> _splitSentences(String text) {
     return text
-        .split(RegExp(r'[。！？!?…]+'))
+        .split(_sentenceSplit)
         .where((String s) => s.trim().isNotEmpty)
         .toList();
   }

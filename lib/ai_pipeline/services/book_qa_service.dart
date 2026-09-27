@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/engine/quality/fanqie_gate_checker.dart';
@@ -24,9 +25,26 @@ class BookQaService {
   /// 达线阈值（与 Python `novel_pipeline.py --review-pass` 默认一致）。
   static const double passThreshold = 78;
 
+  /// 对整本 [novel] 执行体检（Isolate 化，不阻塞 UI）。
+  ///
+  /// 口径与 [NovelQualityChecker.checkAsync] 一致：短书（正文 < 5000 字）直接
+  /// 同步算，省掉 Isolate 启停开销；10 万字级要跑数秒，旧实现只在 UI 线程里
+  /// 让出一帧就开始算，整本体检期间界面是冻住的。
+  ///
+  /// 注意：5000 字这条线也决定了 widget 测试走哪条路——`flutter_test` 的假时钟
+  /// 推不动真 Isolate，测试夹具（约 3.3k 字）必须留在同步侧，否则会卡在「体检中」。
+  Future<BookQaReport> checkAsync(Novel novel) {
+    int total = 0;
+    for (final Chapter c in novel.chapters) {
+      total += c.content.length;
+    }
+    if (total < 5000) return Future<BookQaReport>.value(check(novel));
+    return Isolate.run<BookQaReport>(() => check(novel));
+  }
+
   /// 对整本 [novel] 执行体检。
   ///
-  /// 同步计算；10 万字级别约数秒，UI 侧可先弹「体检中」再 await。
+  /// 同步计算；10 万字级别约数秒，UI 侧请优先用 [checkAsync]。
   BookQaReport check(Novel novel) {
     final Character? protagonist = _detectProtagonist(novel.characters);
     final List<String> worldTerms = novel.worldSettings

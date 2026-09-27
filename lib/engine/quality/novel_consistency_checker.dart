@@ -251,6 +251,9 @@ class NovelConsistencyChecker {
     return false;
   }
 
+  /// 世界观断言分句用（编译一次常驻，旧实现在每章循环里重编）。
+  static final RegExp _negationSplit = RegExp(r'[。！？\n]+');
+
   /// ============================================================
   /// 2. 世界观设定冲突：找否定模式反转（"有 X" vs "没有 X"）
   /// ============================================================
@@ -267,7 +270,7 @@ class NovelConsistencyChecker {
     final Map<int, List<_Claim>> claims = <int, List<_Claim>>{};
     for (final Chapter ch in chapters) {
       final List<_Claim> chClaims = <_Claim>[];
-      final List<String> sentences = ch.content.split(RegExp(r'[。！？\n]+'));
+      final List<String> sentences = ch.content.split(_negationSplit);
       for (final String sent in sentences) {
         for (final String kw in keywords) {
           if (sent.contains(kw)) {

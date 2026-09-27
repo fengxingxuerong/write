@@ -336,4 +336,56 @@ void main() {
       expect(content, contains('第 2 章'));
     });
   });
+
+  group('BookQaService.checkAsync', () {
+    test('短文（正文 < 5000 字）→ 留在同步侧，与 check 结果一致', () async {
+      final Novel n = novel(
+        chapters: <Chapter>[chapter(1, passText())],
+        characters: <Character>[character('陈默', role: '主角')],
+      );
+      final BookQaReport a = await service.checkAsync(n);
+      final BookQaReport b = service.check(n);
+      expect(a.avgScore, b.avgScore);
+      expect(a.passCount, b.passCount);
+    });
+
+    test('长文（正文 > 5000 字）→ 走 Isolate，跨 isolate 结果逐项等于同步结果',
+        () async {
+      final Novel n = novel(
+        chapters: <Chapter>[
+          for (int i = 1; i <= 3; i++) chapter(i, passText()),
+        ],
+        characters: <Character>[character('陈默', role: '主角')],
+      );
+      // 先确认用例真的落在 Isolate 分支上（阈值 5000 字），否则本用例形同空转。
+      int total = 0;
+      for (final Chapter c in n.chapters) {
+        total += c.content.length;
+      }
+      expect(total, greaterThan(5000));
+
+      // 这条用例同时是「Novel / BookQaReport 能否跨 isolate 传递」的守门测试：
+      // 报告对象一旦新增不可传递字段（闭包、Controller 等），这里会直接抛错。
+      final BookQaReport iso = await service.checkAsync(n);
+      final BookQaReport sync = service.check(n);
+
+      expect(iso.totalChapters, sync.totalChapters);
+      expect(iso.totalWords, sync.totalWords);
+      expect(iso.vetoCount, sync.vetoCount);
+      expect(iso.passCount, sync.passCount);
+      expect(iso.avgScore, sync.avgScore);
+      expect(iso.allPass, sync.allPass);
+      expect(iso.rows.length, sync.rows.length);
+      for (int i = 0; i < iso.rows.length; i++) {
+        expect(iso.rows[i].score, sync.rows[i].score, reason: '第 $i 章分数');
+        expect(iso.rows[i].pass, sync.rows[i].pass, reason: '第 $i 章达线');
+        expect(iso.rows[i].novelIssues, sync.rows[i].novelIssues,
+            reason: '第 $i 章文笔卫生告警');
+        expect(iso.rows[i].gateIssues, sync.rows[i].gateIssues,
+            reason: '第 $i 章闸门告警');
+        expect(iso.rows[i].extraIssues, sync.rows[i].extraIssues,
+            reason: '第 $i 章商业告警');
+      }
+    });
+  });
 }
