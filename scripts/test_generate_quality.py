@@ -98,6 +98,18 @@ class QualityRepairCandidateTest(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertTrue(all(max_tokens >= 600 for _, max_tokens in calls))
 
+class SideReactionMetricTest(unittest.TestCase):
+    def test_side_reaction_density_zero_for_empty(self):
+        from generate_novel import side_reaction_per_thousand
+        self.assertEqual(side_reaction_per_thousand(''), 0.0)
+
+    def test_side_reaction_density_counts_hits(self):
+        from generate_novel import side_reaction_per_thousand
+        text = '全场倒吸一口凉气，众人失声惊呼，脸色惨白，难以置信。' * 20
+        d = side_reaction_per_thousand(text)
+        self.assertGreater(d, 1.0)
+
+
         failed_calls = []
 
         def fail_second_call(prompt, max_tokens):

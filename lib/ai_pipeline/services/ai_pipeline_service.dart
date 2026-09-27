@@ -581,7 +581,8 @@ class AiPipelineService {
         final String qaEv =
             '章末钩子检测：${PipelineQa.hasEndingHook(fullText) ? '命中 ✅' : '未命中 ❌（hook 维度不应高于 40 分）'}；'
             '直白爽点 ${PipelineQa.thrillPerThousand(fullText).toStringAsFixed(2)}/千字；'
-            '变强异动 ${PipelineQa.surgePerThousand(fullText).toStringAsFixed(2)}/千字';
+            '变强异动 ${PipelineQa.surgePerThousand(fullText).toStringAsFixed(2)}/千字；'
+            '侧面反响 ${PipelineQa.sideReactionPerThousand(fullText).toStringAsFixed(2)}/千字';
         final String qr = await call(
           AiRole.verifier,
           verifierSystemPrompt,

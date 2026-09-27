@@ -51,6 +51,8 @@ class CompositeQualityGate implements QualityGate {
     final double rep = PipelineQa.adjacentRepetition(text);
     final double thrill = PipelineQa.thrillPerThousand(text);
     final double surge = PipelineQa.surgePerThousand(text);
+    final double sideReaction = PipelineQa.sideReactionPerThousand(text);
+
     final bool hook = PipelineQa.hasEndingHook(text);
     final Map<String, dynamic> deep = PipelineQa.deepAiMetrics(text);
     final int deepLevel = deep['level'] as int? ?? 0;
@@ -111,6 +113,15 @@ class CompositeQualityGate implements QualityGate {
           message: '含蓄变强流（外显爽点偏少，直白爽点 <0.5/千字）',
           severity: QualitySeverity.note,
         ));
+      if (thrill >= 0.5 && sideReaction < 0.3) {
+        issues.add(const QualityGateIssue(
+          source: QualitySource.pipelineRules,
+          type: '侧面反响',
+          message: '侧面反响偏弱（震惊链 <0.3/千字，建议补齐三视角震惊环：反派/路人/权威）',
+          severity: QualitySeverity.note,
+        ));
+      }
+
       }
     }
     if (!hook && novel.totalWords > 0) {
@@ -157,6 +168,8 @@ class CompositeQualityGate implements QualityGate {
         'thrillPerK': thrill,
         'surgePerK': surge,
         'deepAiLevel': deepLevel.toDouble(),
+        'sideReactionPerK': sideReaction,
+
         'dialogueRatio': gate.dialogueRatio,
         'fillerRatio': gate.fillerRatio,
       },

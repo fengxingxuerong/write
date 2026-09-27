@@ -40,6 +40,8 @@ void main() {
       expect(r.metrics.containsKey('fanqieScore'), isTrue);
       expect(r.metrics.containsKey('thrillPerK'), isTrue);
       expect(r.metrics.containsKey('dialogueRatio'), isTrue);
+      expect(r.metrics.containsKey('sideReactionPerK'), isTrue);
+
       expect(r.summaries, isNotEmpty);
     });
 

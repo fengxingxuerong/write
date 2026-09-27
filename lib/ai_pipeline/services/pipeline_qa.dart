@@ -13,11 +13,11 @@ import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 /// - 世界观关键词冲突：同一关键词在不同章节「肯定/否定」表述相反
 ///
 /// 双端同步须知：本文件的词表常量（aiClicheWords / _hookWords /
-/// _openingStrong / _openingWeak / thrillWords / powerSurgeWords /
+/// _openingStrong / _openingWeak / thrillWords / powerSurgeWords / sideReactionWords /
 /// _aiAdverbs / _sentenceConnectors / _bodyReactionWords / worldKeywords）与
 /// deepAiMetrics 统计阈值（含句式指纹三项 styleFpLimits），与
 /// `scripts/generate_novel.py` 的对应常量（HOOK_WORDS /
-/// OPENING_STRONG / OPENING_WEAK / THRILL_WORDS / POWER_SURGE_WORDS /
+/// OPENING_STRONG / OPENING_WEAK / THRILL_WORDS / POWER_SURGE_WORDS / SIDE_REACTION_WORDS /
 /// AI_ADVERBS / SENTENCE_CONNECTORS / BODY_REACTION_WORDS / METAPHOR_PAT /
 /// STYLE_FP_LIMITS）及 deep_ai_metrics 阈值同步维护，
 /// 调优时必须同一次同时更新两端，防止标准漂移。
@@ -116,6 +116,7 @@ class PipelineQa {
       'hasHook': hasEndingHook(chapter.content),
       'thrillPerK': thrillPerThousand(chapter.content).toStringAsFixed(2),
       'surgePerK': surgePerThousand(chapter.content).toStringAsFixed(2),
+      'sideReactionPerK': sideReactionPerThousand(chapter.content).toStringAsFixed(2),
       'aiDeepLevel': deep['level'],
       // 口径与 chapterIssues 保持一致：词表密度、重复率或统计层 AI 味
       // （level>=3）任一超标即需润色，避免报告与告警列表矛盾。
@@ -245,6 +246,37 @@ class PipelineQa {
     final int words = AppConstants.countWords(text);
     return words == 0 ? 0.0 : (hits / words * 1000).clamp(0.0, 100.0);
   }
+  /// 侧面反响/震惊链信号词（三视角震惊环：反派崩溃/路人倒吸冷气/权威暗惊）。
+  ///
+  /// 网文爽感放大的核心机制：主角装逼或打脸时，若无配角与围观者的侧面反响，
+  /// 会沦为「自嗨式平铺」。本词表量化侧面反应密度，确保爽点产生波澜。
+  static const List<String> sideReactionWords = <String>[
+    // 围观路人震惊 / 失声 / 倒抽气
+    '倒吸一口凉气', '倒吸凉气', '倒吸一口气', '倒抽一口凉气', '倒抽凉气',
+    '失声', '惊呼', '骇然', '哗然', '炸开了锅', '全场哗然', '满座皆惊',
+    '瞠目结舌', '目瞪口呆', '呆若木鸡', '看怪物一样', '看疯子一样',
+    // 反派绝望 / 脸色骤变 / 怀疑人生
+    '难以置信', '不可置信', '绝不可能', '怎么可能', '不可能',
+    '脸色惨白', '面如死灰', '面色惨白', '脸色铁青', '面色铁青',
+    '两腿发软', '踉跄后退', '连连后退', '一屁股坐', '瘫坐在地',
+    '冷汗直流', '冷汗涔涔', '汗如雨下', '道心动摇', '道心崩溃',
+    // 权威重估 / 重新审视 / 暗自心惊
+    '暗自心惊', '心中巨震', '心头巨震', '瞳孔骤缩', '瞳孔猛缩',
+    '倒退数步', '倒退几步', '刮目相看', '重新审视', '倒吸冷气',
+  ];
+
+  /// 侧面反响密度（每千字命中数）。网文参考线：>=0.8 为合格，<0.3 偏淡。
+  static double sideReactionPerThousand(String text) {
+    if (text.isEmpty) return 0.0;
+    final TextIndex index = TextIndex(text);
+    int hits = 0;
+    for (final String w in sideReactionWords) {
+      if (index.mayContain(w)) hits += _countOccurrences(text, w);
+    }
+    final int words = AppConstants.countWords(text);
+    return words == 0 ? 0.0 : (hits / words * 1000).clamp(0.0, 100.0);
+  }
+
 
   /// AI 高频叠词修饰（轻轻/微微/淡淡…，AI 腔典型特征）。
   static const List<String> _aiAdverbs = <String>[
@@ -514,12 +546,17 @@ class PipelineQa {
     if (chapter.words > 1500) {
       final double thrill = thrillPerThousand(chapter.content);
       final double surge = surgePerThousand(chapter.content);
+      final double sideReaction = sideReactionPerThousand(chapter.content);
       if (thrill < 0.5 && surge < 1.0) {
         issues.add('第 ${chapter.idx} 章 爽点过淡（直白爽点 <0.5 且变强异动 <1.0/千字，'
             '建议安排打脸/升级/收获/揭露至少一处）');
       } else if (thrill < 0.5) {
         issues.add('第 ${chapter.idx} 章 含蓄变强流（外显爽点偏少，直白爽点 <0.5/千字，'
             '建议补充打脸/收获等外显爽点增强追读）');
+      }
+      if (thrill >= 0.5 && sideReaction < 0.3) {
+        issues.add('第 ${chapter.idx} 章 侧面反响偏弱（震惊链 <0.3/千字，'
+            '建议补齐三视角震惊环：反派难以置信/路人失声惊呼/权威重新审视）');
       }
     }
     // AI 味深度：句长均匀/的字过多/叠词/句首连接词（统计层 AI 腔）。

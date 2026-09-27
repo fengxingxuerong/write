@@ -33,7 +33,7 @@ from generate_novel import (count_words, parse_json_from_llm, quality_check,
                             append_state, load_state, export_txt,
                             planning_prompt_idea, scene_planning_prompt, scene_prompt, hook_for,
                             has_ending_hook, SYSTEM_PROMPT,
-                            thrill_per_thousand, surge_per_thousand,
+                            thrill_per_thousand, surge_per_thousand, side_reaction_per_thousand,
                             registry_block, facts_block, extract_registry_prompt,
                             merge_registry, merge_facts)  # noqa: E402
 from fanqie_review import (review_chapter, fix_prompt, patch_gate, local_hook_fallback,
@@ -474,10 +474,10 @@ def quality_review_prompt(text, qa_evidence=""):
         ev = f"\n【本地质检证据（规则引擎实测，评分时必须与之对照，不得与证据矛盾）】\n{qa_evidence}\n"
     return f"""请以网文编辑的眼光为下面的章节打分（每项 0~100）：
 1. opening：开篇是否快速进入事件、有代入感（黄金三章标准）
-2. thrill：爽点密度与强度（打脸/升级/收获/秘密揭露；含蓄变强具象化也算）
+2. thrill：爽点密度与强度（打脸/升级/收获/秘密揭露，以及三视角侧面反响/震惊链闭环）
 3. hook：章末钩子是否让人想看下一章（悬念/变故/威胁）
 4. motivation：人物动机是否清晰、行为是否合理
-5. rhythm：节奏是否张弛有度、无注水、无流水账
+5. rhythm：节奏是否张弛有度、无注水、无流水账（压抑蓄水后是否及时释放打脸）
 {ev}
 严格输出 JSON（不要 Markdown 包裹）：
 {{"scores":{{"opening":85,"thrill":60,"hook":90,"motivation":75,"rhythm":80}},"overall":78,"comment":"一句话点评（30字内）"}}
@@ -2098,7 +2098,8 @@ def main():
             # 本地质检证据注入：LLM 评审带证据打分，不与规则引擎矛盾（治「100 分无钩子」分裂）
             qa_ev = (f"章末钩子检测：{'命中 ✅' if has_ending_hook(final_text) else '未命中 ❌（hook 维度不应高于 40 分）'}；"
                      f"直白爽点 {thrill_per_thousand(final_text, args.genre)}/千字；"
-                     f"变强异动 {surge_per_thousand(final_text, args.genre)}/千字")
+                     f"变强异动 {surge_per_thousand(final_text, args.genre)}/千字；"
+                     f"侧面反响 {side_reaction_per_thousand(final_text)}/千字")
             qr = call_chain(VERIFIER_CHAIN, VERIFIER_SYS, quality_review_prompt(final_text, qa_ev), max_tokens=6000)
             parsed = parse_json_from_llm(qr, repair=False)
             overall, scores, comment = -1, None, ""

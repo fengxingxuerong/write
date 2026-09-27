@@ -654,7 +654,7 @@ NEGATION = ['不', '没', '无', '没有', '并未', '不曾', '决不', '毫无
 # ============================================================
 # 双端同步须知：以下词表与 Dart 端 lib/ai_pipeline/services/pipeline_qa.dart
 # 对应常量同步维护（HOOK_WORDS<->_hookWords、OPENING_STRONG/_WEAK、
-# THRILL_WORDS<thrillWords>、POWER_SURGE_WORDS<powerSurgeWords>、
+# THRILL_WORDS<thrillWords>、POWER_SURGE_WORDS<powerSurgeWords>、SIDE_REACTION_WORDS<sideReactionWords>、
 # AI_ADVERBS<_aiAdverbs>、SENTENCE_CONNECTORS<_sentenceConnectors>、
 # AI_ECHO<aiClicheWords>、NEGATION<negations>），以及 deep_ai_metrics
 # 四项统计阈值。调优时必须同一次同时更新两端，防止标准漂移。
@@ -798,6 +798,28 @@ def surge_per_thousand(text, genre=""):
         return 0.0
     words_list = GENRE_SURGE_ALL.get(genre, POWER_SURGE_WORDS) if genre else POWER_SURGE_WORDS
     hits = sum(text.count(w) for w in words_list)
+    words = count_words(text)
+    return round(hits / words * 1000, 2) if words > 0 else 0.0
+
+# 侧面反响/震惊链信号词（三视角震惊环，与 Dart PipelineQa 对齐）
+SIDE_REACTION_WORDS = [
+    '倒吸一口凉气', '倒吸凉气', '倒吸一口气', '倒抽一口凉气', '倒抽凉气',
+    '失声', '惊呼', '骇然', '哗然', '炸开了锅', '全场哗然', '满座皆惊',
+    '瞠目结舌', '目瞪口呆', '呆若木鸡', '看怪物一样', '看疯子一样',
+    '难以置信', '不可置信', '绝不可能', '怎么可能', '不可能',
+    '脸色惨白', '面如死灰', '面色惨白', '脸色铁青', '面色铁青',
+    '两腿发软', '踉跄后退', '连连后退', '一屁股坐', '瘫坐在地',
+    '冷汗直流', '冷汗涔涔', '汗如雨下', '道心动摇', '道心崩溃',
+    '暗自心惊', '心中巨震', '心头巨震', '瞳孔骤缩', '瞳孔猛缩',
+    '倒退数步', '倒退几步', '刮目相看', '重新审视', '倒吸冷气',
+]
+
+
+def side_reaction_per_thousand(text):
+    """侧面反响/震惊链密度（每千字命中数）。网文参考线：>=0.8 合格，<0.3 偏淡。"""
+    if not text:
+        return 0.0
+    hits = sum(text.count(w) for w in SIDE_REACTION_WORDS)
     words = count_words(text)
     return round(hits / words * 1000, 2) if words > 0 else 0.0
 

@@ -158,6 +158,8 @@ void main() {
       expect(r['rhythm'], isA<String>());
       expect(r['thrillPerK'], isA<String>());
       expect(r['surgePerK'], isA<String>());
+      expect(r['sideReactionPerK'], isA<String>());
+
       expect(r['aiDeepLevel'], isA<int>());
       expect(r['needsPolish'], isFalse);
     });
@@ -233,6 +235,22 @@ void main() {
       expect(issues.any((String e) => e.contains('爽点过淡')), isFalse);
       expect(issues.any((String e) => e.contains('AI 腔偏重')), isTrue);
     });
+    test('爽点存在但侧面反响偏弱：提示补齐三视角震惊环', () {
+      final String thrillWithoutReaction =
+          '系统激活！恭喜宿主获得神级奖励！\n\n' * 120;
+      final List<String> issues =
+          PipelineQa.chapterIssues(chapter(thrillWithoutReaction, idx: 2));
+      expect(issues.any((String e) => e.contains('侧面反响偏弱')), isTrue);
+    });
+
+    test('侧面反响充足时不报侧面反响偏弱', () {
+      final String thrillWithReaction =
+          '系统激活！周围众人倒吸一口凉气，失声惊呼：“这怎么可能？！”\n\n' * 120;
+      final List<String> issues =
+          PipelineQa.chapterIssues(chapter(thrillWithReaction, idx: 2));
+      expect(issues.any((String e) => e.contains('侧面反响偏弱')), isFalse);
+    });
+
   });
 
   group('PipelineQa.repetitionAndRhythm（合并入口）', () {
