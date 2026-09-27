@@ -41,8 +41,13 @@ function Resolve-FlutterBin {
 $flutterBin = Resolve-FlutterBin
 # dart.exe 优先用 SDK 内置的；找不到则回退 flutter.bat（flutter analyze 等价可用）。
 $flutterRoot = Split-Path -Parent (Split-Path -Parent $flutterBin)
-$dartBin = Join-Path $flutterRoot 'cache\dart-sdk\bin\dart.exe'
-if (-not (Test-Path $dartBin)) { $dartBin = $flutterBin }
+# 标准 Flutter SDK 布局是 <root>\bin\cache\dart-sdk\bin\dart.exe；旧路径 <root>\cache\...
+# 永远匹配不到，此前一直静默回退 flutter.bat（等于放弃了「普通权限直跑 dart analyze」）。
+$dartBin = Join-Path $flutterRoot 'bin\cache\dart-sdk\bin\dart.exe'
+if (-not (Test-Path $dartBin)) {
+    $legacyDart = Join-Path $flutterRoot 'cache\dart-sdk\bin\dart.exe'
+    if (Test-Path $legacyDart) { $dartBin = $legacyDart } else { $dartBin = $flutterBin }
+}
 # 提权仅在上一个环境需要；本机若无 sudo 则直接执行。
 $hasSudo = [bool](Get-Command sudo -ErrorAction SilentlyContinue)
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
