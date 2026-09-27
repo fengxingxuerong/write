@@ -65,6 +65,21 @@ void main() {
       final int n = r.hits.where((h) => h.word == '傻逼').length;
       expect(n, 2);
     });
+
+    test('码元预筛不改变命中集合（同起点多词都保留）', () {
+      // 「枪支」与「枪支弹药」在同一位置命中：预筛只挡必然不命中的词，
+      // 不得因为词表缓存/索引化而漏掉任何一个。
+      const String text = '他从木箱里摸出枪支弹药，又摸出炸药，低声骂了一句傻逼。';
+      final SensitiveCheckResult r = SensitiveWordsService().check(text);
+      final Set<String> words =
+          r.hits.map((SensitiveHit h) => h.word).toSet();
+      expect(words, contains('枪支'));
+      expect(words, contains('枪支弹药'));
+      expect(words, contains('炸药'));
+      expect(words, contains('傻逼'));
+      expect(words.every(text.contains), isTrue,
+          reason: '命中必须是文中真实出现的词（预筛不得凭空造命中）');
+    });
   });
 
   group('SensitiveWordsService 命中统计', () {

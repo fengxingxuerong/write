@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:novel_writer/core/utils/text_index.dart';
 import 'package:novel_writer/services/sensitive_words.dart';
 
 /// 定点修字数下限（与 Python 侧 `fanqie_review.FIX_MIN_RATIO` 同口径）。
@@ -329,6 +330,10 @@ class FanqieGateChecker {
   /// 章内重复指纹长度（与 Python 侧 INTRA_REPEAT_GRAM 同口径）。
   static const int _intraGram = 12;
 
+  /// 滑动指纹的滚动哈希底数与掩码（模 2^30 运算，保持 int 有界且不依赖平台）。
+  static const int _hashBase = 31;
+  static const int _hashMask = 0x3FFFFFFF;
+
   /// 番茄专有红线类别（其余类别走 [SensitiveWordsService] 内置词库）。
   static const Map<String, List<String>> _extraRedline = <String, List<String>>{
     '时政敏感': <String>[
@@ -618,13 +623,16 @@ class FanqieGateChecker {
 
   /// 对白占比（引号内字数 / 总字数）。
   static double dialogueRatioOf(String text) {
-    final StringBuffer buf = StringBuffer();
+    // 逐段累计汉字数，省掉「先拼成一整串、再整串数一遍」的 StringBuffer 与
+    // 全串二次扫描；单码点计数逐段相加与拼接后再数完全等价（计数单位不跨片段）。
+    int quoted = 0;
     for (final RegExpMatch m in _dialogueQuote.allMatches(text)) {
-      buf.write(m.group(1));
+      final String? g = m.group(1);
+      if (g != null) quoted += _hanCount(g);
     }
-    final int total = _han.allMatches(text).length;
+    final int total = _hanCount(text);
     if (total == 0) return 0;
-    return _hanCount(buf.toString()) / total;
+    return quoted / total;
   }
 
   /// 水段率：长度 ≥ 40 字、既无对白又无推进词的段落占比。
@@ -673,11 +681,18 @@ class FanqieGateChecker {
         .toList();
     // 二元组集合按段落只算一次：旧实现在下面的 O(n²) 配对里，
     // 每一对都把这两段重新扁平化 + 重切一遍二元组（O(n²·L) 次冗余工作）。
-    final List<Set<String>> parasGrams =
+    final List<Set<int>> parasGrams =
         longParas.map(_bigrams).toList(growable: false);
     for (int i = 1; i < longParas.length; i++) {
+      final Set<int> gi = parasGrams[i];
+      final int li = gi.length;
       for (int j = 0; j < i; j++) {
-        if (_jaccardOf(parasGrams[j], parasGrams[i]) >= 0.85) {
+        final Set<int> gj = parasGrams[j];
+        final int lj = gj.length;
+        // 尺寸预筛：Jaccard ≤ min(|A|,|B|)/max(|A|,|B|)，尺寸差超 15% 的段落对
+        // 数学上到不了 0.85，直接跳过集合比对（长章段落多时省掉大部分配对）。
+        if (lj < li ? lj * 100 < li * 85 : li * 100 < lj * 85) continue;
+        if (_jaccardOf(gj, gi) >= 0.85) {
           final String p = longParas[i];
           return (
             blocks: 1,
@@ -691,20 +706,60 @@ class FanqieGateChecker {
   }
 
   /// 滑动指纹找长重复块：返回 [起点, 终点] 列表（第二次出现的区间）。
+  ///
+  /// 窗口指纹用滚动哈希（旧实现是每个窗口 `substring` 出一个 12 字串当 Map 键：
+  /// 单章约 660 个窗口，每个窗口要分配一个 12 字串再做 12 次码元哈希）。哈希桶里
+  /// 按出现顺序存下标，取桶内**首个逐码元比对相等的窗口**，与「以子串为键、只记
+  /// 首次出现」完全等价：哈希冲突的窗口不会被误判为命中（后面还要连续比对够
+  /// [intraRepeatMinBlock] 个码元才算重复块，而这必然蕴含 12 元窗口本身相等）。
   static List<List<int>> _dupSpans(String t) {
-    final Map<String, int> seen = <String, int>{};
+    final int n = t.length;
     final List<List<int>> spans = <List<int>>[];
-    for (int i = 0; i + _intraGram <= t.length; i += 3) {
-      final String g = t.substring(i, i + _intraGram);
-      final int? first = seen[g];
-      if (first == null) {
-        seen[g] = i;
+    if (n < _intraGram) return spans;
+    final Map<int, List<int>> seen = <int, List<int>>{};
+    int h = 0;
+    for (int k = 0; k < _intraGram; k++) {
+      h = (h * _hashBase + t.codeUnitAt(k)) & _hashMask;
+    }
+    int pow = 1;
+    for (int k = 1; k < _intraGram; k++) {
+      pow = (pow * _hashBase) & _hashMask;
+    }
+    for (int i = 0; i + _intraGram <= n; i += 3) {
+      if (i > 0) {
+        // 窗口右移 3（步长与旧实现一致），滚动 3 次：h ← (h - 出窗*base^11)*base + 入窗
+        for (int s = 0; s < 3; s++) {
+          final int out = t.codeUnitAt(i - 3 + s);
+          h = ((h - out * pow) * _hashBase +
+                  t.codeUnitAt(i + _intraGram - 3 + s)) &
+              _hashMask;
+        }
+      }
+      int first = -1;
+      final List<int>? bucket = seen[h];
+      if (bucket != null) {
+        for (final int at in bucket) {
+          bool same = true;
+          for (int k = 0; k < _intraGram; k++) {
+            if (t.codeUnitAt(at + k) != t.codeUnitAt(i + k)) {
+              same = false;
+              break;
+            }
+          }
+          if (same) {
+            first = at;
+            break;
+          }
+        }
+      }
+      if (first < 0) {
+        (seen[h] ??= <int>[]).add(i);
         continue;
       }
       int k = 0;
-      while (first + k < t.length &&
-          i + k < t.length &&
-          t[first + k] == t[i + k]) {
+      while (first + k < n &&
+          i + k < n &&
+          t.codeUnitAt(first + k) == t.codeUnitAt(i + k)) {
         k++;
       }
       if (k >= intraRepeatMinBlock) spans.add(<int>[i, i + k]);
@@ -731,7 +786,10 @@ class FanqieGateChecker {
     final bool lock =
         g.isNotEmpty && _ancientGenres.any((String a) => g.contains(a));
     if (!lock) return (level: '', hits: <String>[], count: 0);
-    final List<String> hits = _modernMarkers.where(text.contains).toList();
+    // 现代词表 36 个，旧实现是逐个 contains 扫全文；先过 TextIndex 把必然
+    // 不命中的词挡掉（命中集合与顺序不变，只省扫描）。
+    final TextIndex index = TextIndex(text);
+    final List<String> hits = _modernMarkers.where(index.mayContain).toList();
     int count = 0;
     for (final String w in hits) {
       count += _countOccurrences(text, w);
@@ -775,15 +833,16 @@ class FanqieGateChecker {
     return null;
   }
 
-  /// 段落字符二元组集合（去空白扁平化后取相邻两字）。
+  /// 段落字符二元组集合（去空白扁平化后取相邻两码元）。
   ///
-  /// 口径与旧实现里 `_bigramJaccard` 的内部闭包 grams() 完全一致；提出来是为了
-  /// 让 [intraRepeat] 的两两比对能把每个段落只算一次。
-  static Set<String> _bigrams(String s) {
+  /// 用「高 16 位前码元 | 低 16 位后码元」的整数编码，替代旧的 2 字子串：
+  /// 相等判定不变（两字串相等 ⟺ 两码元对相等），但省掉每段 ~88 次子串分配。
+  /// 提出来是为了让 [intraRepeat] 的两两比对能把每个段落只算一次。
+  static Set<int> _bigrams(String s) {
     final String t = s.replaceAll(_ws, '');
-    final Set<String> set = <String>{};
+    final Set<int> set = <int>{};
     for (int i = 0; i + 1 < t.length; i++) {
-      set.add(t.substring(i, i + 2));
+      set.add((t.codeUnitAt(i) << 16) | t.codeUnitAt(i + 1));
     }
     return set;
   }
@@ -792,12 +851,12 @@ class FanqieGateChecker {
   ///
   /// 并集用容斥 |A∪B| = |A|+|B|-|A∩B| 算，省掉 `A.union(B)` 每次新建临时集合；
   /// 交集遍历较小集合，计数与旧 `A.intersection(B).length` 完全一致。
-  static double _jaccardOf(Set<String> ga, Set<String> gb) {
+  static double _jaccardOf(Set<int> ga, Set<int> gb) {
     if (ga.isEmpty || gb.isEmpty) return 0.0;
-    final Set<String> small = ga.length <= gb.length ? ga : gb;
-    final Set<String> large = identical(small, ga) ? gb : ga;
+    final Set<int> small = ga.length <= gb.length ? ga : gb;
+    final Set<int> large = identical(small, ga) ? gb : ga;
     int inter = 0;
-    for (final String g in small) {
+    for (final int g in small) {
       if (large.contains(g)) inter++;
     }
     return inter / (ga.length + gb.length - inter);
@@ -819,7 +878,20 @@ class FanqieGateChecker {
 
   // ---------------- 内部工具 ----------------
 
-  static int _hanCount(String s) => _han.allMatches(s).length;
+  /// 汉字数（CJK 基本区，按 UTF-16 码元计）。
+  ///
+  /// 逐码点扫描替代 `_han.allMatches(s).length`：正则匹配会为每个汉字建一个
+  /// RegExpMatch，而全书体检下单章要调它上百次（字数、段落长度、水段统计、
+  /// 章内重复都走这里），纯属白烧的分配。口径不变——[_han] 未开 unicode，
+  /// 按码元匹配，区间外码元（含代理对）同样不计。
+  static int _hanCount(String s) {
+    int n = 0;
+    for (int i = 0; i < s.length; i++) {
+      final int c = s.codeUnitAt(i);
+      if (c >= 0x4E00 && c <= 0x9FFF) n++;
+    }
+    return n;
+  }
 
   static List<String> _sentences(String t) => t
       .split(_sentSplit)
@@ -850,8 +922,12 @@ class FanqieGateChecker {
   }
 
   static int _countAny(String text, List<String> words) {
+    if (words.isEmpty || text.isEmpty) return 0;
+    // 主动/被动句词表各数十词，逐词 indexOf 扫全文；先挡掉必然不命中的词。
+    final TextIndex index = TextIndex(text);
     int n = 0;
     for (final String w in words) {
+      if (!index.mayContain(w)) continue;
       int i = text.indexOf(w);
       while (i != -1) {
         n++;
@@ -934,8 +1010,10 @@ class FanqieGateChecker {
       hits.add(FanqieRedlineHit(h.category, h.word, h.context, veto));
     }
     // 2) 番茄专有类别
+    final TextIndex index = TextIndex(text);
     _extraRedline.forEach((String cat, List<String> words) {
       for (final String w in words) {
+        if (!index.mayContain(w)) continue;
         int i = text.indexOf(w);
         while (i != -1) {
           final String wide = _window(text, i, w.length);

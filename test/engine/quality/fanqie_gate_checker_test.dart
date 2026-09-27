@@ -311,4 +311,59 @@ void main() {
           greaterThan(FanqieGateAction.note.penalty));
     });
   });
+
+  group('章内重复检测的口径护栏（滚动哈希 + 尺寸预筛）', () {
+    /// 无内部重复的段落（约 160 字）：二元组集合规模与字数同量级，
+    /// 这样「尾部加一句」对 Jaccard 的影响才接近真实长篇的行文形态。
+    const String varied = '雨水顺着屋檐连成线，砸在青石板上溅起细小的白雾。'
+        '他站在门内看着那条线一点点挪过来，脚边的泥已经湿透了。'
+        '铜铃在风里响了三下，檐角的鸽子扑棱着翅膀飞远了。'
+        '巷口那盏灯忽明忽暗，像是随时要灭，却又一直亮着。'
+        '远处传来打更的梆子声，一下，又一下，敲得人心里发紧。'
+        '他把手探进袖口，摸到半截冰凉的断刃，指腹被割出一道白痕。';
+
+    test('整块重复仍算重写级，重复长度不小于阈值', () {
+      final String block =
+          '他沿着崖壁往上攀，指节扣进石缝里，砂砾硌得掌心生疼，风从脚下灌上来。' * 5;
+      final ({int blocks, int words, String sample}) r =
+          FanqieGateChecker.intraRepeat('$block\n\n中间一句正常的过渡。\n\n$block');
+      expect(r.blocks, greaterThan(0));
+      expect(
+          r.words, greaterThanOrEqualTo(FanqieGateChecker.intraRepeatMinBlock));
+      expect(r.sample, isNotEmpty);
+    });
+
+    test('段落级近似（尾部多一句，尺寸差 <15%）仍按 0.85 命中', () {
+      final ({int blocks, int words, String sample}) r =
+          FanqieGateChecker.intraRepeat('$varied\n\n$varied他坐下来等天亮。');
+      expect(r.blocks, 1, reason: '尺寸预筛只该跳过必然不达标的配对，不能漏判近似段');
+    });
+
+    test('内容不同、长度相近的段落不误报', () {
+      const String other = '刀锋贴着鞘口滑出来，一线寒光落在青砖上。'
+          '他数着对方的呼吸，三长两短，脚跟在门槛上来回蹭。'
+          '门外雪一直下，屋里炉火将熄，他把刀横在膝上等着。'
+          '更声停了，风声也停了，只剩下对面那人咽口水的动静。';
+      final ({int blocks, int words, String sample}) r =
+          FanqieGateChecker.intraRepeat('$varied\n\n$other');
+      expect(r.blocks, 0);
+      expect(r.words, 0);
+    });
+
+    test('尺寸差悬殊且内容不同的段落不报重复', () {
+      const String tiny = '他坐下来等天亮。';
+      final ({int blocks, int words, String sample}) r =
+          FanqieGateChecker.intraRepeat('$varied\n\n$tiny\n\n${varied.substring(0, 60)}……');
+      expect(r.blocks, 0);
+    });
+
+    test('无重复的长章节不误报（40 段各自独立推进）', () {
+      final String text = List<String>.generate(
+        40,
+        (int i) => '第 $i 段：他走过长廊，脚步声在第 $i 块砖上敲出不同的回声，'
+            '停下来时天已经黑透了，廊下只剩一盏灯。',
+      ).join('\n\n');
+      expect(FanqieGateChecker.intraRepeat(text).blocks, 0);
+    });
+  });
 }

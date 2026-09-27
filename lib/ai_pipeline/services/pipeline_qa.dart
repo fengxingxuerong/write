@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:novel_writer/core/constants/app_constants.dart';
+import 'package:novel_writer/core/utils/text_index.dart';
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 
 /// 本地规则质检（零成本，不消耗 API）。
@@ -44,9 +45,12 @@ class PipelineQa {
   static double aiEchoPct(String text) {
     final int words = AppConstants.countWords(text);
     if (words == 0) return 0.0;
+    // 大词表先过 TextIndex：必然不命中的词直接跳过，计数口径不变
+    // （全书体检下这三处词表各有几十~上百词，逐个扫全文曾是主要开销）。
+    final TextIndex index = TextIndex(text);
     int hits = 0;
     for (final String w in aiClicheWords) {
-      hits += _countOccurrences(text, w);
+      if (index.mayContain(w)) hits += _countOccurrences(text, w);
     }
     return (hits / words * 100).clamp(0.0, 100.0);
   }
@@ -186,9 +190,10 @@ class PipelineQa {
   /// 爽点密度（每千字命中数）。网文参考线：≥1.5 为合格，<1.0 偏淡。
   static double thrillPerThousand(String text) {
     if (text.isEmpty) return 0.0;
+    final TextIndex index = TextIndex(text);
     int hits = 0;
     for (final String w in thrillWords) {
-      hits += _countOccurrences(text, w);
+      if (index.mayContain(w)) hits += _countOccurrences(text, w);
     }
     final int words = AppConstants.countWords(text);
     return words == 0 ? 0.0 : (hits / words * 1000).clamp(0.0, 100.0);
@@ -215,9 +220,10 @@ class PipelineQa {
   /// 变强异动密度（每千字命中数）。玄幻文参考线：>=1.0 为「含蓄变强流」。
   static double surgePerThousand(String text) {
     if (text.isEmpty) return 0.0;
+    final TextIndex index = TextIndex(text);
     int hits = 0;
     for (final String w in powerSurgeWords) {
-      hits += _countOccurrences(text, w);
+      if (index.mayContain(w)) hits += _countOccurrences(text, w);
     }
     final int words = AppConstants.countWords(text);
     return words == 0 ? 0.0 : (hits / words * 1000).clamp(0.0, 100.0);

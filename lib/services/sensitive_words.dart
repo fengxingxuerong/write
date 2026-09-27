@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:novel_writer/core/errors/app_exceptions.dart';
+import 'package:novel_writer/core/utils/text_index.dart';
 
 /// 敏感词命中。
 class SensitiveHit {
@@ -133,6 +134,18 @@ class SensitiveWordsService {
     _loadStats();
   }
 
+  /// 内置词库的「原文 + 归一化」缓存（含所属类别，保持 builtinWords 的声明顺序）。
+  ///
+  /// 词库是 const、归一化是纯函数，算一次即可常驻；旧实现在**每次** `check` 里
+  /// 对 ~130 个内置词逐个 `_normalize`（各建一次 StringBuffer 并 toLowerCase），
+  /// 全书体检按章调用时纯属重复劳动（实测该项占闸门耗时 18%）。
+  static final List<({String raw, String norm, String category})> _builtinNorm =
+      <({String raw, String norm, String category})>[
+    for (final MapEntry<String, List<String>> e in builtinWords.entries)
+      for (final String w in e.value)
+        (raw: w, norm: _normalize(w), category: e.key),
+  ];
+
   /// 历史累计命中统计（只读快照，按次数降序）。
   Map<String, int> get hitStats => Map<String, int>.unmodifiable(_hitStats);
 
@@ -242,12 +255,14 @@ class SensitiveWordsService {
   SensitiveCheckResult check(String text) {
     if (text.isEmpty) return const SensitiveCheckResult(<SensitiveHit>[]);
     final String normText = _normalize(text);
+    // 归一化文本的码元/二元组索引：130 个内置词里绝大多数首二元组根本不在文中，
+    // 先 O(1) 挡掉，避免逐词 indexOf 扫全文（口径与命中顺序都不变）。
+    final TextIndex index = TextIndex(normText);
     final List<SensitiveHit> hits = <SensitiveHit>[];
 
-    void scan(String word, String category) {
-      if (word.isEmpty) return;
-      final String normWord = _normalize(word);
-      if (normWord.isEmpty) return;
+    void scan(String word, String normWord, String category) {
+      if (word.isEmpty || normWord.isEmpty) return;
+      if (!index.mayContain(normWord)) return;
       int idx = normText.indexOf(normWord);
       while (idx >= 0) {
         // 白名单校验用原文（归一化为 1:1 映射，索引一致）。
@@ -265,13 +280,11 @@ class SensitiveWordsService {
       }
     }
 
-    builtinWords.forEach((String category, List<String> words) {
-      for (final String w in words) {
-        scan(w, category);
-      }
-    });
+    for (final ({String raw, String norm, String category}) w in _builtinNorm) {
+      scan(w.raw, w.norm, w.category);
+    }
     for (final String w in _customWords) {
-      scan(w, '自定义');
+      scan(w, _normalize(w), '自定义');
     }
     hits.sort((a, b) => a.start.compareTo(b.start));
     return SensitiveCheckResult(hits);
