@@ -1063,7 +1063,9 @@ def style_fingerprint_block(fp):
         "（段落呼吸与参考文一致）\n"
         "用词：的字密度 {de:.1f}%｜叠词 {ad}/千字｜句首连接词 {co:.0%}｜"
         "比喻 {me}/千字\n"
-        "写本章时让以上各项向参考文靠拢，其余仍按写作准则执行。\n"
+        "写本章时让以上各项向参考文靠拢，其余仍按写作准则执行；"
+        "与准则冲突时以准则为准（如对白占比 25%~45%、章末钩子硬门槛），\n"
+        "文风分布只在准则允许的范围内调节。\n"
     ).format(src=fp.get('source', '参考文'), w=fp['words'],
              sl=fp['sent_len_mean'], cv=fp['sent_len_cv'],
              dr=fp['dialogue_ratio'], pl=fp['para_len_mean'],
@@ -1088,6 +1090,47 @@ def fingerprint_distance(fp_a, fp_b):
         b = float(fp_b.get(k, 0.0))
         diffs.append(abs(a - b) / max(abs(a), abs(b), 1e-9))
     return round(sum(diffs) / len(diffs), 3)
+
+
+def load_style_block(path):
+    """读参考文并返回 (指纹注入块, 指纹 dict)；未配置/失败/空文返回 ("", None)。
+
+    novel_pipeline 与 generate_novel 两个入口共用（打印同一套 [文风] 行，
+    单一实现防止两端提取逻辑漂移）。
+    """
+    if not path:
+        return "", None
+    try:
+        with open(path, encoding="utf-8") as sf:
+            fp = style_fingerprint(sf.read(),
+                                   source=os.path.basename(path))
+    except OSError as e:
+        print(f"[文风] --style-ref 读取失败（{e}），本轮不注入")
+        return "", None
+    block = style_fingerprint_block(fp)
+    if not block:
+        print("[文风] 参考文为空/过短，未提取到指纹，本轮不注入")
+        return "", None
+    print(f"[文风] 参考文指纹已提取（{fp['words']} 字）：句长均值 "
+          f"{fp['sent_len_mean']}｜对白 {fp['dialogue_ratio']:.0%}｜"
+          f"段落均长 {fp['para_len_mean']} → 注入写手场景 prompt")
+    return block, fp
+
+
+def style_ev_fragment(ref_fp, text):
+    """评审证据串：本章文风与参考文的距离分解（REF_FP 模式注入 qa_ev）。
+
+    无参考（ref_fp 为空）返回空串——与钩子/落点/收尾证据并列，评审的
+    rhythm 维度拿它对照句段呼吸与对白密度，不空口评「节奏」。
+    """
+    if not ref_fp:
+        return ""
+    fp = style_fingerprint(text)
+    return (f"文风：与参考文距离 {fingerprint_distance(ref_fp, fp)}"
+            f"（句长均值 {fp['sent_len_mean']} vs 参考 {ref_fp['sent_len_mean']}"
+            f"｜对白 {fp['dialogue_ratio']:.0%} vs {ref_fp['dialogue_ratio']:.0%}"
+            f"｜段落均长 {fp['para_len_mean']} vs {ref_fp['para_len_mean']}）"
+            "——供 rhythm 维度对照句段呼吸与对白密度")
 
 
 def has_ending_hook(text):
@@ -1362,6 +1405,9 @@ def main():
     p.add_argument("--chapter-wait", type=float, default=2.0, help="每章之间的等待时间（秒），避免触发限流")
     p.add_argument("--skip-quality-repair", action="store_true",
                    help="跳过章节质量自动修复轮（调试/节省额度时使用）")
+    p.add_argument("--style-ref", default="",
+                   help="文风参考 txt 路径：提取文风指纹注入写手场景 prompt，"
+                        "逐章打印与参考文的指纹距离（与 novel_pipeline 同口径）")
     p.add_argument("--dry-run", action="store_true", help="只打印大纲不生成正文")
     args = p.parse_args()
     if args.total_words <= 0 or args.max_chapters <= 0:
@@ -1377,6 +1423,7 @@ def main():
     base_url_raw = args.base_url
 
     print(f"[INFO] model={args.model}  target={args.total_words}字  file={args.output}")
+    STYLE_BLOCK, REF_FP = load_style_block(args.style_ref)
     if args.dry_run:
         print("[DRY RUN] 将只打印大纲\n")
 
@@ -1500,7 +1547,8 @@ def main():
                                          hook=hook_for(idx) if si + 1 == len(scenes) else "",
                                          registry=registry_block(registry),
                                          facts=facts_block(registry),
-                                         world_terms=world_terms),
+                                         world_terms=world_terms,
+                                         style_block=STYLE_BLOCK),
                             api_key, int(tw * 1.8), args.temperature)
             text = text.strip()
             w = count_words(text)
@@ -1611,6 +1659,10 @@ def main():
             for _cf in merge_registry(registry, _ext, idx):
                 print(f"  [户籍] ⚠ 穿帮警示：{_cf}")
         append_state(args.output, "registry", registry)
+        if REF_FP is not None:
+            print(f"  [文风] 本章与参考文指纹距离 "
+                  f"{fingerprint_distance(REF_FP, style_fingerprint(full_text))}"
+                  "（0=同分布，逐章对比看是否收敛）")
         print(f"  [完成] 第 {idx} 章：{w} 字 | 累计 {total_words} 字")
         if args.chapter_wait > 0 and idx < args.max_chapters and total_words < args.total_words:
             time.sleep(args.chapter_wait)

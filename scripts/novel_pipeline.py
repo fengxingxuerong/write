@@ -35,8 +35,9 @@ from generate_novel import (count_words, parse_json_from_llm, quality_check,
                             has_ending_hook, SYSTEM_PROMPT,
                             thrill_per_thousand, surge_per_thousand, side_reaction_per_thousand,
                             release_ev_fragment,
-                            style_fingerprint, style_fingerprint_block,
-                            fingerprint_distance,
+                            style_fingerprint,
+                            fingerprint_distance, load_style_block,
+                            style_ev_fragment,
                             registry_block, facts_block, extract_registry_prompt,
                             merge_registry, merge_facts)  # noqa: E402
 from fanqie_review import (review_chapter, fix_prompt, patch_gate, local_hook_fallback,
@@ -430,14 +431,18 @@ def needs_fix(rv, review_pass):
 
 
 
-def editor_prompt(text):
+def editor_prompt(text, style_block=""):
+    keep = ""
+    if style_block:
+        keep = ("\n5. 下列文风分布必须保持（改稿同样向其靠拢，不得把这些指标"
+                "改离参考文）：\n" + style_block)
     return f"""请把下面的小说章节改写得更像真人网文作者的手笔：
 
 1. 全篇「仿佛/似乎/宛如」合计不超过 2 次；清除「嘴角勾起」「眼底闪过」「空气凝固」「深吸一口气」「空气像是被人抽走」等 AI 高频表达
 2. 情节、人物、伏笔、章节结尾的钩子必须全部保留，不新增、不删减剧情
 3. 对话更口语化、更有潜台词；描写更具体（数字、颜色、气味、声响），允许更「糙」、更有网文节奏
 4. 保持原有段落结构
-
+{keep}
 只输出改写后的完整正文，不要任何解释或前缀。
 
 【章节正文】
@@ -1042,7 +1047,9 @@ def generate_appended_chapter(ch, ctx):
             w = count_words(final_text)
 
     edited = call_chain(EDITOR_CHAIN, EDITOR_SYS,
-                        editor_prompt(final_text), max_tokens=int(w * 2.0) + 800)
+                        editor_prompt(final_text,
+                                      style_block=ctx.get("style_block", "")),
+                        max_tokens=int(w * 2.0) + 800)
     edited = apply_text_patch(final_text, edited, args.genre, tag="润色")
     if edited != final_text:
         final_text = edited
@@ -1807,24 +1814,8 @@ def main():
             prev_summary = pf.read().strip()
 
     # ===== 文风指纹（P1-1）：--style-ref 模式提取参考文指纹并注入写手 =====
-    STYLE_BLOCK = ""
-    REF_FP = None
-    if args.style_ref:
-        try:
-            with open(args.style_ref, encoding="utf-8") as sf:
-                REF_FP = style_fingerprint(
-                    sf.read(), source=os.path.basename(args.style_ref))
-            STYLE_BLOCK = style_fingerprint_block(REF_FP)
-            if STYLE_BLOCK:
-                print(f"[文风] 参考文指纹已提取（{REF_FP['words']} 字）：句长均值 "
-                      f"{REF_FP['sent_len_mean']}｜对白 {REF_FP['dialogue_ratio']:.0%}｜"
-                      f"段落均长 {REF_FP['para_len_mean']} → 注入写手场景 prompt")
-            else:
-                REF_FP = None
-                print("[文风] 参考文为空/过短，未提取到指纹，本轮不注入")
-        except OSError as e:
-            REF_FP = None
-            print(f"[文风] --style-ref 读取失败（{e}），本轮不注入")
+    # 提取逻辑与 generate_novel 共用 load_style_block（单一实现防两端漂移）
+    STYLE_BLOCK, REF_FP = load_style_block(args.style_ref)
 
     setup_keys()
     if args.skip_amd:
@@ -2046,7 +2037,9 @@ def main():
 
         # 3) 去AI味润色（editor）——字数下限守卫：润色是去AI味不是删内容，
         #    低于原文 85% 视为过度压缩（实测曾有 3805→1921 砍半案例），拒绝采纳
-        edited = call_chain(EDITOR_CHAIN, EDITOR_SYS, editor_prompt(full_text), max_tokens=int(w * 2.0) + 800)
+        edited = call_chain(EDITOR_CHAIN, EDITOR_SYS,
+                            editor_prompt(full_text, style_block=STYLE_BLOCK),
+                            max_tokens=int(w * 2.0) + 800)
         if edited:
             w_edited = count_words(edited)
             ok_ed, why_ed = patch_gate(edited, genre=args.genre, max_words=10 ** 9)
@@ -2128,12 +2121,14 @@ def main():
         # 注意：max_tokens 必须 ≥6000——pro 思考链实测烧 2000-2900，给小了正文必空（旧值 1000 曾致评分永久静默失效）
         if idx % 3 == 0:
             # 本地质检证据注入：LLM 评审带证据打分，不与规则引擎矛盾（治「100 分无钩子」分裂）
+            _style_ev = style_ev_fragment(REF_FP, final_text)
             qa_ev = (f"章末钩子检测：{'命中 ✅' if has_ending_hook(final_text) else '未命中 ❌（hook 维度不应高于 40 分）'}；"
                      f"直白爽点 {thrill_per_thousand(final_text, args.genre)}/千字；"
                      f"变强异动 {surge_per_thousand(final_text, args.genre)}/千字；"
                      f"侧面反响 {side_reaction_per_thousand(final_text)}/千字；"
                      f"{release_ev_fragment(final_text)}；"
-                     f"{ending_ev_fragment(final_text)}")
+                     f"{ending_ev_fragment(final_text)}"
+                     + (f"；{_style_ev}" if _style_ev else ""))
             qr = call_chain(VERIFIER_CHAIN, VERIFIER_SYS, quality_review_prompt(final_text, qa_ev), max_tokens=6000)
             parsed = parse_json_from_llm(qr, repair=False)
             overall, scores, comment = -1, None, ""

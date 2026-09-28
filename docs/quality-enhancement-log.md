@@ -922,3 +922,34 @@
 
 
 
+---
+
+## 二十五、2026-09-28 文风指纹 P1-1 收口：共享装载 + 评审证据 + 编辑保文风 + 双入口 + 真机单发验证
+
+### 背景：二十四留下的三个半成品面
+
+二十四把指纹「可注入、可度量」做出来了，但只接了 `novel_pipeline` 单入口：`generate_novel` 独立入口即将复制第二份装载逻辑；评审侧看不到收敛证据；编辑链不知有文风约束，可能把注入的节奏改回「编辑腔」。另有注入前检查发现的准则冲突（见改动 4）。
+
+### 改动（Python-only，Dart 无此 CLI 面无漂移）
+
+1. **共享装载器 `load_style_block(path)`**（`generate_novel` 定义，`novel_pipeline` 复用）：读参考 txt → 指纹 + 注入块；读取失败打印 `[文风] --style-ref 读取失败…本轮不注入` 降级——「默认空 = 旧调用零变化」语义不变，装载逻辑单点不漂移
+2. **评审证据 `style_ev_fragment(gen_fp, ref_fp)`**：逐章「与参考文的距离分解」注入 `qa_ev`（与落点/三件套证据同款套路），收敛过程从终端打印升级为**评审可见**；`novel_pipeline` qa_ev 同流
+3. **编辑保文风条款**：`editor_prompt(..., style_block=...)` 增「保留本章句式节奏与段落呼吸，仅可修错别字与事实错误；与风格块冲突以风格块为准」——主循环润色与定点修**两处调用点**都传入，堵「写手学了风格、编辑改回去」的链路抵消
+4. **指纹块优先级条款**：注入前检查发现参考文对白 6% 与准则 25%~45% 直接冲突——描述性数字会诱导模型少写对白，`style_fingerprint_block` 块头加「与准则冲突时以准则为准」，防「学分布」变「学低对白」
+5. **第二入口 `generate_novel --style-ref`**：独立生成入口同款注入 + 逐章打印距离
+
+### 真机单发验证：`tool/style_live_probe.py` → PROBE_OK，distance=0.48
+
+整章真机跑在本会话不可行（30s 命令上限 + 后台进程回收反复杀任务），验证面缩到**一次**真实写手调用：106660 字真书指纹装载 → `scene_prompt` 注入 → 商汤 `deepseek-v4-flash` 单发 → 对真实产出算 `fingerprint_distance`。23s 守护线程硬闸保证单次预算，`--key-slot K1|K2|K3` 支持 429 换 Key 重试。
+
+- **调试轨迹（三轮真机失败各留下一个真实教训）**：① AMD 流式响应两次拖过 18s 闸（「慢速但持续」的流，socket timeout 拦不住）→ 换商汤 dsf-flash；② 商汤 K1 撞 429（tpm 配额），`llm_call` 内部重试「等 20s」直接吞掉闸预算 → 探针改 `retries=0` 快速失败 + Key 槽换配额桶；③ 非 429 时是**真实生成中** 20s 压线 → 闸提 23s + 样例限 400 字 → **PROBE_OK**
+- **结果**：`chars=982 words=823 distance=0.48`；gen 指纹句长 17.9 / 对白 12% / 段落 41.1 vs ref 22.1 / 6% / 53.9；产出开头「裴照垂着眼，看那枚青玉简在执律长老指间碎成两截。玉屑落在第三级石阶上。」——短句 + 具体物象，贴参考文节奏且非照抄
+- **度量解读（单点不证收敛）**：0.48 与既有跨书基线 0.467 同量级——本轮真机证明的是「**注入链路真机通、度量可跑、产出可用**」，不是风格已收敛；982 字单样本对九维分布比值偏噪，收敛验收须看真机 `--style-ref` **多章距离下降趋势**（见遗留）
+
+### 验证
+
+- `python -m unittest discover -s scripts -p "test_*.py"` → **Ran 103 tests OK**（100→103：`LoadStyleBlockAndEvidenceTest` 装载成功/失败降级不注入 + `EditorPromptStyleKeepTest` 保文风条款透传/空块不注入）
+- `ruff check --select=F,E9 scripts tool` 全绿；`compileall` 0
+- 真机 PROBE_OK（上）；探针与主链共用同一 `scene_prompt`/`load_style_block`，无第二套组装路径
+- **遗留**：① 多章收敛趋势需真机 `--style-ref` 全链长跑（会话进程回收限制，待下轮）；② Dart 侧指纹分析器/导入 UI 后续阶段；③ 探针可复用：`python tool/style_live_probe.py [K1|K2|K3]`（先装载 `.env.local`）
+

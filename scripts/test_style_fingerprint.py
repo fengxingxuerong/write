@@ -85,5 +85,53 @@ class ScenePromptStyleInjectionTest(unittest.TestCase):
         self.assertNotIn("目标文风指纹", p)
 
 
+class LoadStyleBlockAndEvidenceTest(unittest.TestCase):
+    def test_load_from_file_and_missing(self):
+        import tempfile
+        from generate_novel import load_style_block
+        # 空路径 → 不注入
+        self.assertEqual(load_style_block(""), ("", None))
+        with tempfile.NamedTemporaryFile(
+                "w", suffix=".txt", delete=False,
+                encoding="utf-8") as f:
+            f.write(DIALOGUE_STYLE)
+            path = f.name
+        try:
+            block, fp = load_style_block(path)
+            self.assertIn("目标文风指纹", block)
+            self.assertGreater(fp["words"], 0)
+            # source 用文件名（提示词里展示《xxx》）
+            self.assertTrue(path.endswith(fp["source"]) or
+                            fp["source"] in path)
+        finally:
+            Path(path).unlink(missing_ok=True)
+        # 不存在的路径 → ("", None) 不抛异常
+        self.assertEqual(
+            load_style_block(path + ".nope"), ("", None))
+
+    def test_style_ev_fragment(self):
+        from generate_novel import style_ev_fragment
+        self.assertEqual(style_ev_fragment(None, DIALOGUE_STYLE), "")
+        ref = style_fingerprint(DIALOGUE_STYLE, source="ref")
+        ev = style_ev_fragment(ref, NARRATIVE_STYLE)
+        self.assertIn("文风：与参考文距离", ev)
+        self.assertIn("句长均值", ev)
+        self.assertIn("rhythm", ev)
+
+
+class EditorPromptStyleKeepTest(unittest.TestCase):
+    def test_editor_prompt_with_and_without_style(self):
+        from novel_pipeline import editor_prompt
+        plain = editor_prompt("正文")
+        self.assertNotIn("文风分布", plain)
+        self.assertIn("【章节正文】", plain)
+        block = style_fingerprint_block(
+            style_fingerprint(DIALOGUE_STYLE, source="ref"))
+        kept = editor_prompt("正文", style_block=block)
+        self.assertIn("不得把这些指标改离参考文", kept)
+        self.assertIn("目标文风指纹", kept)
+        self.assertIn("【章节正文】", kept)
+
+
 if __name__ == "__main__":
     unittest.main()
