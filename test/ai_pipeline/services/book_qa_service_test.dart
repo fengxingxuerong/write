@@ -244,6 +244,21 @@ void main() {
       );
     });
 
+    test('长文爽点前置泄洪 → extraIssues 含落点告警', () {
+      // 汉字 1604 > 1500 过字数门；2 处爽点全在前半段（后半段零释放）。
+      final String front =
+          '顿悟。${'文字填充。' * 80}识破。${'文字填充。' * 320}';
+      final BookQaReport r = service.check(novel(
+        chapters: <Chapter>[chapter(1, front)],
+      ));
+      final BookChapterQa row = r.rows[0];
+      expect(row.words, greaterThan(1500));
+      expect(
+        row.extraIssues.any((String s) => s.contains('爽点前置泄洪')),
+        isTrue,
+      );
+    });
+
     test('达标长文 → pass true、无 extra 告警、状态「达线」', () {
       final BookQaReport r = service.check(novel(
         chapters: <Chapter>[chapter(1, passText())],

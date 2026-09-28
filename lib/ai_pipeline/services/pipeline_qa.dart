@@ -15,11 +15,12 @@ import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 /// 双端同步须知：本文件的词表常量（aiClicheWords / _hookWords /
 /// _openingStrong / _openingWeak / thrillWords / powerSurgeWords / sideReactionWords /
 /// _aiAdverbs / _sentenceConnectors / _bodyReactionWords / worldKeywords）与
-/// deepAiMetrics 统计阈值（含句式指纹三项 styleFpLimits），与
+/// deepAiMetrics 统计阈值（含句式指纹三项 styleFpLimits），
+/// releaseProfile 落点判定（n>=2 适用线 + 0.6/0.5 阈值），与
 /// `scripts/generate_novel.py` 的对应常量（HOOK_WORDS /
 /// OPENING_STRONG / OPENING_WEAK / THRILL_WORDS / POWER_SURGE_WORDS / SIDE_REACTION_WORDS /
 /// AI_ADVERBS / SENTENCE_CONNECTORS / BODY_REACTION_WORDS / METAPHOR_PAT /
-/// STYLE_FP_LIMITS）及 deep_ai_metrics 阈值同步维护，
+/// STYLE_FP_LIMITS / release_profile）及 deep_ai_metrics 阈值同步维护，
 /// 调优时必须同一次同时更新两端，防止标准漂移。
 class PipelineQa {
   PipelineQa._();
@@ -117,6 +118,7 @@ class PipelineQa {
       'thrillPerK': thrillPerThousand(chapter.content).toStringAsFixed(2),
       'surgePerK': surgePerThousand(chapter.content).toStringAsFixed(2),
       'sideReactionPerK': sideReactionPerThousand(chapter.content).toStringAsFixed(2),
+      'release': releaseProfile(chapter.content).verdict,
       'aiDeepLevel': deep['level'],
       // 口径与 chapterIssues 保持一致：词表密度、重复率或统计层 AI 味
       // （level>=3）任一超标即需润色，避免报告与告警列表矛盾。
@@ -277,6 +279,80 @@ class PipelineQa {
     return words == 0 ? 0.0 : (hits / words * 1000).clamp(0.0, 100.0);
   }
 
+  /// 压抑释放结构（爽点落点）——先抑后扬是否成立。
+  ///
+  /// 规则来源：写作准则「爽点放在章内后半段：压抑蓄水不超过全章 60%，
+  /// 后半段瞬间释放」——该规则此前只有 prompt 承诺、没有检测器
+  /// （与 Python `generate_novel.release_profile` 同口径：n>=2 才有结构可言，
+  /// first>0.6 判 late_start、last<0.5 判 front_loaded；真实成书 156 章校准，
+  /// note 级「标记供人工复核」，与句式指纹同定位）。
+  ///
+  /// 只用基础 [thrillWords] 判落点（题材加成词仅 Python 侧存在，用了会破坏双端同口径）。
+  static ({String verdict, int hits, double first, double last}) releaseProfile(
+    String text,
+  ) {
+    if (text.isEmpty) {
+      return (verdict: 'none', hits: 0, first: 0.0, last: 0.0);
+    }
+    final TextIndex index = TextIndex(text);
+    final List<int> positions = <int>[];
+    for (final String w in thrillWords) {
+      if (!index.mayContain(w)) continue;
+      int start = 0;
+      while (true) {
+        final int i = text.indexOf(w, start);
+        if (i < 0) break;
+        positions.add(i);
+        start = i + w.length;
+      }
+    }
+    if (positions.isEmpty) {
+      return (verdict: 'none', hits: 0, first: 0.0, last: 0.0);
+    }
+    positions.sort();
+    final double denom = text.length.toDouble();
+    final double first =
+        ((positions.first / denom) * 100).roundToDouble() / 100;
+    final double last = ((positions.last / denom) * 100).roundToDouble() / 100;
+    final int hits = positions.length;
+    final String verdict;
+    if (hits < 2) {
+      verdict = 'single';
+    } else if (first > 0.6) {
+      verdict = 'late_start';
+    } else if (last < 0.5) {
+      verdict = 'front_loaded';
+    } else {
+      verdict = 'ok';
+    }
+    return (verdict: verdict, hits: hits, first: first, last: last);
+  }
+
+  /// 评审证据串：爽点落点（注入 qualityReviewPrompt 的 qaEvidence，
+  /// 与 Python `release_ev_fragment` 同文，双端评审读到同一份证据）。
+  static String releaseEvFragment(String text) {
+    final ({String verdict, int hits, double first, double last}) p =
+        releaseProfile(text);
+    switch (p.verdict) {
+      case 'none':
+        return '爽点落点：无外显爽点命中（落点不适用，按密度指标判 thrill）';
+      case 'single':
+        return '爽点落点：仅 ${p.hits} 处命中于 ${_releasePct(p.first)}'
+            '（单点无结构，落点不适用）';
+      case 'ok':
+        return '爽点落点：首现 ${_releasePct(p.first)}、末现 ${_releasePct(p.last)}'
+            '（先抑后扬结构正常 ✅）';
+      case 'late_start':
+        return '爽点落点：首现 ${_releasePct(p.first)} ⚠ 压抑超过全章 60% 才首次释放'
+            '（先抑后扬失衡，rhythm 维度不应高于 60 分）';
+      default: // front_loaded
+        return '爽点落点：末现 ${_releasePct(p.last)} ⚠ 爽点全在前半段、后半段零释放'
+            '（前置泄洪，rhythm 维度不应高于 60 分）';
+    }
+  }
+
+  /// 落点百分比渲染（与 Python f-string `{:.0%}` 同口径）。
+  static String _releasePct(double v) => '${(v * 100).round()}%';
 
   /// AI 高频叠词修饰（轻轻/微微/淡淡…，AI 腔典型特征）。
   static const List<String> _aiAdverbs = <String>[
@@ -557,6 +633,18 @@ class PipelineQa {
       if (thrill >= 0.5 && sideReaction < 0.3) {
         issues.add('第 ${chapter.idx} 章 侧面反响偏弱（震惊链 <0.3/千字，'
             '建议补齐三视角震惊环：反派难以置信/路人失声惊呼/权威重新审视）');
+      }
+      // 压抑释放结构（爽点落点）：先抑后扬是否成立，note 级供人工复核。
+      final ({String verdict, int hits, double first, double last}) rel =
+          releaseProfile(chapter.content);
+      if (rel.verdict == 'late_start') {
+        issues.add('第 ${chapter.idx} 章 压抑过长（首个爽点在全章 '
+            '${(rel.first * 100).round()}% 处才释放，先抑后扬要求压抑不超过 60%，'
+            '建议把释放点前移或在中段补一处小释放）');
+      } else if (rel.verdict == 'front_loaded') {
+        issues.add('第 ${chapter.idx} 章 爽点前置泄洪（末个爽点在全章 '
+            '${(rel.last * 100).round()}% 处，后半段零释放，'
+            '建议后半章补一处打脸/收获落地）');
       }
     }
     // AI 味深度：句长均匀/的字过多/叠词/句首连接词（统计层 AI 腔）。

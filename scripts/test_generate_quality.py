@@ -98,18 +98,9 @@ class QualityRepairCandidateTest(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertTrue(all(max_tokens >= 600 for _, max_tokens in calls))
 
-class SideReactionMetricTest(unittest.TestCase):
-    def test_side_reaction_density_zero_for_empty(self):
-        from generate_novel import side_reaction_per_thousand
-        self.assertEqual(side_reaction_per_thousand(''), 0.0)
-
-    def test_side_reaction_density_counts_hits(self):
-        from generate_novel import side_reaction_per_thousand
-        text = '全场倒吸一口凉气，众人失声惊呼，脸色惨白，难以置信。' * 20
-        d = side_reaction_per_thousand(text)
-        self.assertGreater(d, 1.0)
-
-
+    def test_chunked_repair_aborts_when_one_chunk_fails(self):
+        # 回归护栏：本方法体曾在 2026-09-28 被 SideReactionMetricTest 类插入截走，
+        # 沦为类级永不执行代码（覆盖静默丢失）——恢复后必须继续被发现器执行。
         failed_calls = []
 
         def fail_second_call(prompt, max_tokens):
@@ -123,6 +114,85 @@ class SideReactionMetricTest(unittest.TestCase):
             fail_second_call, max_chars=5)
         self.assertEqual(failed, '')
         self.assertEqual(len(failed_calls), 2)
+
+
+class SideReactionMetricTest(unittest.TestCase):
+    def test_side_reaction_density_zero_for_empty(self):
+        from generate_novel import side_reaction_per_thousand
+        self.assertEqual(side_reaction_per_thousand(''), 0.0)
+
+    def test_side_reaction_density_counts_hits(self):
+        from generate_novel import side_reaction_per_thousand
+        text = '全场倒吸一口凉气，众人失声惊呼，脸色惨白，难以置信。' * 20
+        d = side_reaction_per_thousand(text)
+        self.assertGreater(d, 1.0)
+
+
+class ReleaseProfileTest(unittest.TestCase):
+    """压抑释放结构（爽点落点）——双端口径同测（Dart PipelineQa.releaseProfile）。"""
+
+    FILLER = '文字填充。'  # 不含任何 THRILL_WORDS 的中性填充
+
+    def test_empty_and_no_hit_is_none(self):
+        from generate_novel import release_profile
+        self.assertEqual(release_profile('')['verdict'], 'none')
+        self.assertEqual(
+            release_profile(self.FILLER * 200)['verdict'], 'none')
+
+    def test_single_hit_is_single_not_structure(self):
+        from generate_novel import release_profile
+        # 单点即使位置极端也判 single：落点无结构可言，密度指标负责
+        text = self.FILLER * 180 + '顿悟。' + self.FILLER * 10
+        p = release_profile(text)
+        self.assertEqual(p['verdict'], 'single')
+        self.assertEqual(p['hits'], 1)
+
+    def test_front_loaded_when_all_hits_in_first_half(self):
+        from generate_novel import release_profile
+        text = ('顿悟。' + self.FILLER * 60 + '识破。'
+                + self.FILLER * 150)
+        p = release_profile(text)
+        self.assertEqual(p['verdict'], 'front_loaded')
+        self.assertEqual(p['hits'], 2)
+        self.assertLess(p['last'], 0.5)
+
+    def test_late_start_when_first_hit_after_60pct(self):
+        from generate_novel import release_profile
+        text = (self.FILLER * 160 + '顿悟。'
+                + self.FILLER * 40 + '识破。')
+        p = release_profile(text)
+        self.assertEqual(p['verdict'], 'late_start')
+        self.assertGreater(p['first'], 0.6)
+
+    def test_ok_when_release_spans_second_half(self):
+        from generate_novel import release_profile
+        text = (self.FILLER * 70 + '顿悟。'
+                + self.FILLER * 60 + '识破。'
+                + self.FILLER * 60)
+        p = release_profile(text)
+        self.assertEqual(p['verdict'], 'ok')
+        self.assertGreaterEqual(p['last'], 0.5)
+        self.assertLessEqual(p['first'], 0.6)
+
+    def test_ev_fragment_carries_review_evidence(self):
+        from generate_novel import release_ev_fragment
+        ok_text = (self.FILLER * 70 + '顿悟。'
+                   + self.FILLER * 60 + '识破。' + self.FILLER * 60)
+        self.assertIn('结构正常', release_ev_fragment(ok_text))
+        late_text = self.FILLER * 160 + '顿悟。' + self.FILLER * 40 + '识破。'
+        self.assertIn('rhythm 维度不应高于 60', release_ev_fragment(late_text))
+        front_text = ('顿悟。' + self.FILLER * 60 + '识破。'
+                      + self.FILLER * 150)
+        self.assertIn('前置泄洪', release_ev_fragment(front_text))
+        self.assertIn('不适用', release_ev_fragment(self.FILLER * 200))
+
+    def test_quality_check_records_release_verdict(self):
+        from generate_novel import quality_check
+        content = '顿悟。' + self.FILLER * 60 + '识破。' + self.FILLER * 150
+        chapters = [{'idx': 1, 'content': content}]
+        report = quality_check(chapters)
+        self.assertEqual(report[0]['release'], 'front_loaded')
+        self.assertEqual(chapters[0]['_release'], 'front_loaded')
 
 
 if __name__ == '__main__':

@@ -24,7 +24,7 @@ except Exception:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generate_novel import (has_ending_hook, has_quick_opening, count_words,
                             thrill_per_thousand, surge_per_thousand, AI_CLICHE,
-                            deep_ai_metrics)
+                            deep_ai_metrics, release_profile)
 
 
 CHAPTER_RE = re.compile(r"^第\s*(\d+)\s*章")
@@ -363,6 +363,8 @@ def main():
             "hook": hook, "opening": opening,
             "ai_echo_pct": echo, "thrill_per_k": thrill,
             "surge_per_k": surge_per_thousand(content, args.genre),
+            # 压抑释放结构（爽点落点）：late_start/front_loaded 为异常
+            "release": release_profile(content)["verdict"],
         })
 
     if args.json:
@@ -403,6 +405,10 @@ def main():
                 print("      ↳ 爽点过淡（💥<0.5 且 ✨<1.0/千字）")
             else:
                 print("      ↳ 含蓄变强流（💥<0.5 但 ✨>=1.0，建议补外显爽点）")
+        if r.get("release") == "late_start":
+            print("      ↳ 压抑过长（首个爽点晚于全章 60% 才释放，先抑后扬失衡）")
+        elif r.get("release") == "front_loaded":
+            print("      ↳ 爽点前置泄洪（所有爽点在前半段，后半段零释放）")
 
     # ===== 爽点密度曲线（ASCII） =====
     print("\n【爽点密度曲线】每章每千字爽点数（💥 参考线：1.5 合格 / 1.0 及格 / 0.5 过淡）")

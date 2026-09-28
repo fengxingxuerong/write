@@ -191,6 +191,40 @@ void main() {
         isTrue,
       );
     });
+
+    test('回归：爽点达标且侧面反响 <0.3 → 必须出侧面反响 note（12e7ffa 死代码修复）', () {
+      // 该检查曾被插进 else-if(thrill<0.5) 块内部（条件要求 thrill>=0.5 →
+      // 永不可达），侧面反响告警在组合门禁里从未生效；本用例钉死其可达性。
+      final String thrillNoReaction =
+          '系统激活！恭喜宿主获得神级奖励！\n\n' * 120;
+      final QualityGateReport r = gate.check(thrillNoReaction);
+      expect(r.metrics['thrillPerK']!, greaterThanOrEqualTo(0.5));
+      expect(
+        r.issues.any((QualityGateIssue e) =>
+            e.type == '侧面反响' && e.severity == QualitySeverity.note),
+        isTrue,
+      );
+      // 爽点均匀铺满全章（首末现跨前后半段）→ 落点正常，不出落点告警。
+      expect(r.issues.any((QualityGateIssue e) => e.type == '落点'), isFalse);
+    });
+
+    test('爽点前置泄洪 → 落点 note（后半段零释放，只提示不阻断）', () {
+      final String front =
+          '顿悟。${'文字填充。' * 80}识破。${'文字填充。' * 320}';
+      final QualityGateReport r = gate.check(front);
+      expect(
+        r.issues.any((QualityGateIssue e) =>
+            e.type == '落点' &&
+            e.severity == QualitySeverity.note &&
+            e.message.contains('前置泄洪')),
+        isTrue,
+      );
+      expect(
+        r.blockingIssues
+            .every((QualityGateIssue e) => e.type != '落点'),
+        isTrue,
+      );
+    });
   });
 
 }

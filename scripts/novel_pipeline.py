@@ -34,6 +34,7 @@ from generate_novel import (count_words, parse_json_from_llm, quality_check,
                             planning_prompt_idea, scene_planning_prompt, scene_prompt, hook_for,
                             has_ending_hook, SYSTEM_PROMPT,
                             thrill_per_thousand, surge_per_thousand, side_reaction_per_thousand,
+                            release_ev_fragment,
                             registry_block, facts_block, extract_registry_prompt,
                             merge_registry, merge_facts)  # noqa: E402
 from fanqie_review import (review_chapter, fix_prompt, patch_gate, local_hook_fallback,
@@ -467,7 +468,7 @@ def verifier_prompt(outline, chapters):
 def quality_review_prompt(text, qa_evidence=""):
     """语义级五维评分（开篇/爽点/钩子/动机/节奏），输出 JSON。
 
-    qa_evidence：本地质检证据（钩子有无/爽点密度/AI 味），注入后 LLM 评审带证据打分，
+    qa_evidence：本地质检证据（钩子有无/爽点密度/AI 味/爽点落点），注入后 LLM 评审带证据打分，
     避免与本地检测互相矛盾（终审官实测抓到「评审 100 分但钩子无」的分裂案例）。"""
     ev = ""
     if qa_evidence:
@@ -2099,7 +2100,8 @@ def main():
             qa_ev = (f"章末钩子检测：{'命中 ✅' if has_ending_hook(final_text) else '未命中 ❌（hook 维度不应高于 40 分）'}；"
                      f"直白爽点 {thrill_per_thousand(final_text, args.genre)}/千字；"
                      f"变强异动 {surge_per_thousand(final_text, args.genre)}/千字；"
-                     f"侧面反响 {side_reaction_per_thousand(final_text)}/千字")
+                     f"侧面反响 {side_reaction_per_thousand(final_text)}/千字；"
+                     f"{release_ev_fragment(final_text)}")
             qr = call_chain(VERIFIER_CHAIN, VERIFIER_SYS, quality_review_prompt(final_text, qa_ev), max_tokens=6000)
             parsed = parse_json_from_llm(qr, repair=False)
             overall, scores, comment = -1, None, ""
@@ -2307,7 +2309,12 @@ def main():
         flag = "⚠" if conflicts else "✓"
         hook_flag = "🪝" if ch.get("_has_hook") else "✗无钩"
         open_flag = "⚡" if ch.get("_has_quick_opening", True) else "✗开场慢"
-        print(f"  {flag} 第 {ch['idx']} 章：{ch.get('_words',0)} 字｜AI味 {ch.get('_ai_echo_pct',0)}%｜{hook_flag}｜{open_flag}")
+        rel_flag = {"late_start": "⚠压抑过长", "front_loaded": "⚠前置泄洪"}.get(ch.get("_release"), "✓")
+        print(f"  {flag} 第 {ch['idx']} 章：{ch.get('_words',0)} 字｜AI味 {ch.get('_ai_echo_pct',0)}%｜{hook_flag}｜{open_flag}｜落点{rel_flag}")
+        if ch.get("_release") == "late_start":
+            print("      → 压抑过长（首个爽点晚于全章 60% 才释放，先抑后扬失衡）")
+        elif ch.get("_release") == "front_loaded":
+            print("      → 爽点前置泄洪（后半段零释放，后半章平铺掉追读）")
     print(f"  世界观冲突：{total_conflicts} 处 | 审校问题：{sum(len(c.get('issues',[])) for c in state['chapters'])} 处")
 
     # ===== Phase 3.5：终审官总评 + 打回重写权（第 10 角色，全书唯一通读级 LLM 评审）=====

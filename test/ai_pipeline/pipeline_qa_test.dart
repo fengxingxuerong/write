@@ -159,6 +159,8 @@ void main() {
       expect(r['thrillPerK'], isA<String>());
       expect(r['surgePerK'], isA<String>());
       expect(r['sideReactionPerK'], isA<String>());
+      // 落点判定（无爽点命中）→ none；字段必在，供 UI/报告展示。
+      expect(r['release'], 'none');
 
       expect(r['aiDeepLevel'], isA<int>());
       expect(r['needsPolish'], isFalse);
@@ -251,6 +253,81 @@ void main() {
       expect(issues.any((String e) => e.contains('侧面反响偏弱')), isFalse);
     });
 
+    test('爽点前置泄洪：爽点全在前半段 → 落点告警', () {
+      // 命中 2 处且都落在前半段；汉字 >1500 过落点判定的字数门。
+      final String front =
+          '顿悟。${'文字填充。' * 80}识破。${'文字填充。' * 320}';
+      final List<String> issues =
+          PipelineQa.chapterIssues(chapter(front, idx: 2));
+      expect(issues.any((String e) => e.contains('爽点前置泄洪')), isTrue);
+      expect(issues.any((String e) => e.contains('压抑过长')), isFalse);
+    });
+
+    test('压抑过长：首个爽点晚于全章 60% → 落点告警', () {
+      final String late =
+          '${'文字填充。' * 400}顿悟。${'文字填充。' * 100}识破。';
+      final List<String> issues =
+          PipelineQa.chapterIssues(chapter(late, idx: 2));
+      expect(issues.any((String e) => e.contains('压抑过长')), isTrue);
+      expect(issues.any((String e) => e.contains('爽点前置泄洪')), isFalse);
+    });
+  });
+
+  group('PipelineQa.releaseProfile（爽点落点·压抑释放结构）', () {
+    // 中性填充：不含任何 thrillWords，保证只测落点不测密度。
+    const String filler = '文字填充。';
+
+    test('空文本 / 无命中 → none', () {
+      expect(PipelineQa.releaseProfile('').verdict, 'none');
+      expect(PipelineQa.releaseProfile(filler * 200).verdict, 'none');
+    });
+
+    test('单点命中 → single（单点无结构，密度指标负责）', () {
+      final ({String verdict, int hits, double first, double last}) p =
+          PipelineQa.releaseProfile(filler * 180 + '顿悟。' + filler * 10);
+      expect(p.verdict, 'single');
+      expect(p.hits, 1);
+    });
+
+    test('全部爽点在前半段 → front_loaded', () {
+      final ({String verdict, int hits, double first, double last}) p =
+          PipelineQa.releaseProfile(
+              '顿悟。' + filler * 60 + '识破。' + filler * 150);
+      expect(p.verdict, 'front_loaded');
+      expect(p.hits, 2);
+      expect(p.last, lessThan(0.5));
+    });
+
+    test('首个爽点晚于 60% → late_start', () {
+      final ({String verdict, int hits, double first, double last}) p =
+          PipelineQa.releaseProfile(
+              filler * 160 + '顿悟。' + filler * 40 + '识破。');
+      expect(p.verdict, 'late_start');
+      expect(p.first, greaterThan(0.6));
+    });
+
+    test('爽点跨越后半段 → ok', () {
+      final ({String verdict, int hits, double first, double last}) p =
+          PipelineQa.releaseProfile(
+              filler * 70 + '顿悟。' + filler * 60 + '识破。' + filler * 60);
+      expect(p.verdict, 'ok');
+      expect(p.first, lessThanOrEqualTo(0.6));
+      expect(p.last, greaterThanOrEqualTo(0.5));
+    });
+
+    test('评审证据串：异常档带 rhythm 限分，正常档带 ✅（与 Python 同文）', () {
+      final String ok =
+          filler * 70 + '顿悟。' + filler * 60 + '识破。' + filler * 60;
+      expect(PipelineQa.releaseEvFragment(ok), contains('结构正常'));
+      final String late = filler * 160 + '顿悟。' + filler * 40 + '识破。';
+      expect(PipelineQa.releaseEvFragment(late),
+          contains('rhythm 维度不应高于 60'));
+      final String front =
+          '顿悟。' + filler * 60 + '识破。' + filler * 150;
+      expect(PipelineQa.releaseEvFragment(front), contains('前置泄洪'));
+      expect(PipelineQa.releaseEvFragment(filler * 200),
+          contains('落点不适用'));
+    });
   });
 
   group('PipelineQa.repetitionAndRhythm（合并入口）', () {

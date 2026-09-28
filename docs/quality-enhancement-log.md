@@ -772,6 +772,64 @@
 - `ruff check` 零报错；`py_compile` 零报错
 - `python scripts/run_smoke_gate.py --check-only --output data/generated/smoke_gate_v7.jsonl`：第 17 项输出 `[WARN] 场景规划来源无记录（历史产物，仅提示不拦截）`，历史基线兼容正常
 
+---
+
+## 二十二、2026-09-28 商业爽点闭环二轮：压抑释放结构（爽点落点） + 上轮两处「指标静默失效」修复
+
+> 上一轮 `12e7ffa`（三视角震惊环 + 侧面反响密度检测，未记日志）之后，本轮先按「真实成书回测」方法论选题，再补记上轮内容与其引入的两处残留缺陷。
+
+### 选题证据（先确认问题在哪一层）
+
+`tool/probe_quality_gaps.py` 扫 `data/generated/` 真实成书 14 本 156 章（≥800 字）量化各候选短板：
+
+| 候选 | 实测 | 结论 |
+|---|---|---|
+| 跨章句子复读 | 0~0.76%/本 | 已被相邻段重复率等防线压住，非当前短板 |
+| `仿佛/似乎/宛如` 超限（≤2/章） | 156 章仅 2 章 | 规则已基本被遵守 |
+| 「不是…而是…」超限（≤1/章） | 0 章 | 同上 |
+| **先抑后扬/压抑释放（爽点落点）** | **有指令、无检测** | ✅ 本轮选题 |
+
+「爽点落点」是全文唯一「有指令无检测」的商业结构规则：`fanqie_prompts` 规则 27「爽点放在章内后半段：先压后扬，压抑蓄水不超过全章 60%，后半段瞬间打脸释放」、`scene_planning_prompt`「爽点场景放后半段」、`writing_guidelines` 全都承诺了，双端却没有任何指标核对——上轮 commit 标题里的「压抑释放张力」只改了评审 prompt 措辞，没有落地为检测器。
+
+### 先修上轮残留缺陷两处（12e7ffa 引入，本轮发现）
+
+1. **`composite_quality_gate.dart` 侧面反响 note 是永不可达的死代码**：该检查被插进 `else if (thrill < 0.5)` 块**内部**，而条件要求 `thrill >= 0.5` → 恒假；上轮新增断言只查 `metrics` 含 `sideReactionPerK` key、没查 issue 触发，CI 照常绿——正是本项目一直在猎杀的「指标静默失效」形态。修复：移出为与 if/else-if 平级的兄弟分支，补**可达性回归测试**（thrill≥0.5 且侧面反响 <0.3/千字必须出 note，且落点告警不出）。
+2. **`scripts/test_generate_quality.py` 测试体被截走**：`class SideReactionMetricTest` 插在 `test_chunked_repair_reassembles_only_after_all_chunks_succeed` 方法体**中间**，后半段（`failed_calls` 两行断言）沦为类级永不执行代码——「分块修复失败即整章弃修」的保护断言**静默丢失**（发现器只跑 `test_*`，套件照常 OK）。修复：恢复为独立方法 `test_chunked_repair_aborts_when_one_chunk_fails`，方法体注记回归缘由防再犯。
+
+### 新能力：压抑释放结构（爽点落点）双端检测
+
+**指标**：`generate_novel.release_profile(text)` ↔ `PipelineQa.releaseProfile(text)`（双端同文、阈值同源）
+
+- 只用基础 `THRILL_WORDS` 判落点（题材加成词仅 Python 侧存在，用了会破坏双端同口径）；
+- 命中 n≥2 才有结构可言：`none`（0 命中）/ `single`（1 命中，单点无结构，密度指标负责）；
+- `late_start`（压抑过长）= 首个爽点 > 全章 60%；`front_loaded`（前置泄洪）= 末个爽点 < 50%、后半段零释放；否则 `ok`。
+
+**阈值校准**（`tool/probe_release_profile.py` 可复跑复现）：真实成书 157 章 → 适用章 61（39%），`ok` 51 / `late_start` 7（11%）/ `front_loaded` 3（5%）——信号存在且不构成大规模误报；按句式指纹（STYLE_FP）同定位为 **note 级「标记供人工复核」，不扣分、不阻断、不进冒烟门禁 FAIL 口径**。
+
+**接线（检测 → 证据 → 评审 → 展示）**：
+
+| 端 | 位置 | 内容 |
+|---|---|---|
+| Py | `generate_novel.release_ev_fragment` | 评审证据串，异常档带「rhythm 维度不应高于 60 分」（与钩子证据同风格） |
+| Py | `novel_pipeline` qa_ev | 五维评审证据扩为 钩子/爽点密度/变强异动/侧面反响/**爽点落点** |
+| Py | `quality_check` | 落 `_release` + report 行 `release` 字段；生成收尾逐章落点告警 |
+| Py | `qa_scan_existing` | 逐章 `release` 字段（`--json` 含）+ 异常 ↳ 明细行 |
+| Dart | `PipelineQa.releaseEvFragment` | 与 Python **同文**的证据串，接 `ai_pipeline_service` qaEv（评审双端同证据） |
+| Dart | `PipelineQa.chapterIssues` / `chapterReport` | 落点告警 + `release` 摘要键 |
+| Dart | `CompositeQualityGate` | `type=落点` note（与死代码修复同一块） |
+| Dart | `BookQaService` | extraIssues 落点告警——全书体检 GUI 直接可见，零模型改动 |
+
+**写手/规划侧数值对齐**（检测阈值与指令同源）：`writing_guidelines.webNovelStructure` 明示「首个爽点不晚于全章 60% 处、末个必须落在 50% 之后」；`scene_planning_prompt` 同步 60%/50% 数值；`fanqie_prompts` 规则 27 原本就有——本轮是**给既有承诺补上检测器**，不是新增套路。
+
+### 验证
+
+- `python -m unittest discover -s scripts -p "test_*.py"` → **Ran 75 tests OK**（67→75：落点 7 项含 quality_check 落字段与证据串四档 + 恢复分块中断 1 项）
+- `ruff check --select=F,E9 scripts tool` 全绿；`compileall` 0；`python -m scripts.generate_novel --help` 等模块入口回归（CI 同款）
+- 真书复测：`release_profile` 全量 157 章 verdict 分布与校准探针一致（适用 61 = ok 51 / late 7 / front 3）
+- `python scripts/qa_scan_existing.py data/generated/smoke_gate_v7.txt` 干跑正常：v7 四章落点均非异常、报告结构与列宽不变
+- **Dart 侧未验证项**：本机无 Flutter/Dart SDK，`pipeline_qa` / `composite_quality_gate` / `book_qa_service` / `ai_pipeline_service` 改动与 3 个测试文件（pipeline_qa_test +8、composite_quality_gate_test +2、book_qa_service_test +1）只经人工审读，须由 CI `dart analyze --fatal-infos` + `flutter test --coverage` 复核
+- **观察项**：落点告警只提示、无自动定点修（移动爽点风险高于收益，先观察告警质量）；冒烟门禁不加第 18 项——note 级口径未经真机门禁验证前不进 FAIL 判据
+
 
 
 

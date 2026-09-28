@@ -197,7 +197,7 @@ def scene_planning_prompt(outline, prev_summary, state="", protagonist="", genre
   · 秘密揭露：关键身份或真相反转，在场人物震惊；
   · 若选升级：必须写出外部可见反应（威压外放/众人震惊/对手变色/境界显化），
     不能只停留在内心与身体感受；
-- 爽点场景放在章内后半段（先抑后扬，压抑后释放）；
+- 爽点场景放在章内后半段：先抑后扬，压抑蓄水不超过全章 60%，全章最后一个爽点必须落在 50% 之后（质检按「爽点落点」核对）；
 - 最后一个场景必须是「合」：负责收束本章并埋下章末钩子（未落地悬念）；
 - 黄金三章：若这是全书第 1 章，第一个场景必须在 300 字内触发变故/异象/羞辱/获得；
 - 【禁止重复线】状态清单中标注「已完成」的物品获得/事件（如已取走遗物、已获传承、已对峙过某反派），本章不得重复设计同一情节；收获类场景必须换新机缘或推进原线。
@@ -655,6 +655,7 @@ NEGATION = ['不', '没', '无', '没有', '并未', '不曾', '决不', '毫无
 # 双端同步须知：以下词表与 Dart 端 lib/ai_pipeline/services/pipeline_qa.dart
 # 对应常量同步维护（HOOK_WORDS<->_hookWords、OPENING_STRONG/_WEAK、
 # THRILL_WORDS<thrillWords>、POWER_SURGE_WORDS<powerSurgeWords>、SIDE_REACTION_WORDS<sideReactionWords>、
+# release_profile<->releaseProfile（落点判定：n>=2 适用线 + 0.6/0.5 阈值）、
 # AI_ADVERBS<_aiAdverbs>、SENTENCE_CONNECTORS<_sentenceConnectors>、
 # AI_ECHO<aiClicheWords>、NEGATION<negations>），以及 deep_ai_metrics
 # 四项统计阈值。调优时必须同一次同时更新两端，防止标准漂移。
@@ -824,6 +825,73 @@ def side_reaction_per_thousand(text):
     return round(hits / words * 1000, 2) if words > 0 else 0.0
 
 
+def release_profile(text):
+    """压抑释放结构（爽点落点）——先抑后扬是否成立。
+
+    规则来源：FANQIE_SYSTEM_PROMPT 规则 27「爽点放在章内后半段：先压后扬，
+    压抑蓄水不超过全章 60%，后半段瞬间打脸释放」。该规则此前**只有 prompt 承诺、
+    没有任何检测器**（2026-09-28 补齐，与 Dart PipelineQa.releaseProfile 对齐）。
+
+    只用基础 THRILL_WORDS 判落点（题材加成词仅 Python 侧存在，用它会破坏双端同口径）。
+    判定（命中 n>=2 才有结构可言，n=0/1 由密度指标「爽点过淡」负责）：
+    - none         : 无外显爽点命中（落点判定不适用）
+    - single       : 仅 1 处命中（单点无结构，落点判定不适用）
+    - late_start   : 压抑过长——首个爽点晚于全章 60%（慢热掉追读）
+    - front_loaded : 前置泄洪——末个爽点仍在前半段，后半段零释放（后半章平铺）
+    - ok           : 结构正常
+
+    阈值校准：真实成书 156 章（tool/probe_release_profile.py 复跑可复现）——
+    适用章 61（39%），late_start 11%、front_loaded 5%，信号存在且不构成大规模误报；
+    按 STYLE_FP 同定位为「标记供人工复核」，note 级不阻断。
+    """
+    if not text:
+        return {"verdict": "none", "hits": 0, "first": 0.0, "last": 0.0}
+    denom = max(1, len(text))
+    positions = []
+    for w in THRILL_WORDS:
+        start = 0
+        while True:
+            i = text.find(w, start)
+            if i < 0:
+                break
+            positions.append(i)
+            start = i + len(w)
+    if not positions:
+        return {"verdict": "none", "hits": 0, "first": 0.0, "last": 0.0}
+    positions.sort()
+    first = round(positions[0] / denom, 2)
+    last = round(positions[-1] / denom, 2)
+    n = len(positions)
+    if n < 2:
+        verdict = "single"
+    elif first > 0.6:
+        verdict = "late_start"
+    elif last < 0.5:
+        verdict = "front_loaded"
+    else:
+        verdict = "ok"
+    return {"verdict": verdict, "hits": n, "first": first, "last": last}
+
+
+def release_ev_fragment(text):
+    """评审证据串：爽点落点（注入 quality_review_prompt 的 qa_ev，评审带数打分）。"""
+    p = release_profile(text)
+    v = p["verdict"]
+    if v == "none":
+        return "爽点落点：无外显爽点命中（落点不适用，按密度指标判 thrill）"
+    if v == "single":
+        return (f"爽点落点：仅 {p['hits']} 处命中于 {p['first']:.0%} 处"
+                "（单点无结构，落点不适用）")
+    if v == "ok":
+        return (f"爽点落点：首现 {p['first']:.0%}、末现 {p['last']:.0%}"
+                "（先抑后扬结构正常 ✅）")
+    if v == "late_start":
+        return (f"爽点落点：首现 {p['first']:.0%} ⚠ 压抑超过全章 60% 才首次释放"
+                "（先抑后扬失衡，rhythm 维度不应高于 60 分）")
+    return (f"爽点落点：末现 {p['last']:.0%} ⚠ 爽点全在前半段、后半段零释放"
+            "（前置泄洪，rhythm 维度不应高于 60 分）")
+
+
 # ============================================================
 # AI 味深度检测（统计层：句长均匀度 / 的字密度 / 叠词 / 句首连接词）
 # ============================================================
@@ -978,6 +1046,8 @@ def quality_check(chapters):
         ch["_has_quick_opening"] = has_quick_opening(text)
         ch["_thrill_per_k"] = thrill_per_thousand(text)
         ch["_surge_per_k"] = surge_per_thousand(text)
+        # 压抑释放结构（爽点落点）：先抑后扬是否成立，note 级不阻塞
+        ch["_release"] = release_profile(text)["verdict"]
         ch["_ai_deep_level"] = deep_ai_metrics(text)["level"]
         # 世界观关键词（灵气/斗气/筑基 等）
         for kw in ["灵气", "斗气", "筑基", "金丹", "元婴", "灵石", "灵根"]:
@@ -998,6 +1068,7 @@ def quality_check(chapters):
             "has_hook": ch["_has_hook"],
             "thrill_per_k": ch["_thrill_per_k"],
             "surge_per_k": ch["_surge_per_k"],
+            "release": ch["_release"],
         })
     return report
 
@@ -1476,6 +1547,10 @@ def main():
             print("      → 爽点过淡（直白爽点 <0.5 且变强异动 <1.0/千字，建议安排打脸/升级/收获/揭露至少一处）")
         elif ch.get("idx", 99) > 0 and ch.get("_thrill_per_k", 1) < 0.5:
             print("      → 含蓄变强流（外显爽点偏少，建议补充打脸/收获等外显爽点增强追读）")
+        if ch.get("_release") == "late_start":
+            print("      → 压抑过长（首个爽点晚于全章 60% 才释放，先抑后扬失衡，读者中段易流失）")
+        elif ch.get("_release") == "front_loaded":
+            print("      → 爽点前置泄洪（所有爽点在前半段，后半段零释放，后半章平铺掉追读）")
     print(f"\n  世界观冲突：{total_issues} 处")
     _chars = registry.get("characters", [])
     _facts = registry.get("facts", [])

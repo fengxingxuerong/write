@@ -577,12 +577,14 @@ class AiPipelineService {
       if (task.config.useQualityReview &&
           idx % task.config.qualityReviewEvery == 0) {
         // 本地质检证据注入：LLM 评审带证据打分，不与规则引擎矛盾
-        // （治「100 分无钩子」分裂，与 Python 端 qa_ev 同口径）。
+        // （治「100 分无钩子」分裂，与 Python 端 qa_ev 同口径；落点证据串
+        // 与 Python release_ev_fragment 同文）。
+        final String releaseEv = PipelineQa.releaseEvFragment(fullText);
         final String qaEv =
             '章末钩子检测：${PipelineQa.hasEndingHook(fullText) ? '命中 ✅' : '未命中 ❌（hook 维度不应高于 40 分）'}；'
             '直白爽点 ${PipelineQa.thrillPerThousand(fullText).toStringAsFixed(2)}/千字；'
             '变强异动 ${PipelineQa.surgePerThousand(fullText).toStringAsFixed(2)}/千字；'
-            '侧面反响 ${PipelineQa.sideReactionPerThousand(fullText).toStringAsFixed(2)}/千字';
+            '侧面反响 ${PipelineQa.sideReactionPerThousand(fullText).toStringAsFixed(2)}/千字；$releaseEv';
         final String qr = await call(
           AiRole.verifier,
           verifierSystemPrompt,

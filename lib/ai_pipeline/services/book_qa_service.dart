@@ -96,6 +96,19 @@ class BookQaService {
       if (words > 1500 && thrill < 0.5 && surge < 1.0) {
         extra.add('爽点过淡（直白爽点 <0.5 且变强异动 <1.0/千字）');
       }
+      // 压抑释放结构（爽点落点）：与 PipelineQa.chapterIssues 同口径，
+      // n>=2 才有结构可言（releaseProfile 内部已判），note 级随 extraIssues 展示。
+      if (words > 1500) {
+        final ({String verdict, int hits, double first, double last}) rel =
+            PipelineQa.releaseProfile(text);
+        if (rel.verdict == 'late_start') {
+          extra.add('压抑过长（首个爽点在全章 ${(rel.first * 100).round()}% 处才释放，'
+              '先抑后扬要求压抑不超过 60%，建议把释放点前移或中段补一处小释放）');
+        } else if (rel.verdict == 'front_loaded') {
+          extra.add('爽点前置泄洪（末个爽点在全章 ${(rel.last * 100).round()}% 处，'
+              '后半段零释放，建议后半章补一处打脸/收获落地）');
+        }
+      }
 
       rows.add(_rowFor(
         c,

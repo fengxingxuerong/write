@@ -113,6 +113,10 @@ class CompositeQualityGate implements QualityGate {
           message: '含蓄变强流（外显爽点偏少，直白爽点 <0.5/千字）',
           severity: QualitySeverity.note,
         ));
+      }
+      // 回归护栏（12e7ffa 残留缺陷）：本检查原先被插进上面 else-if（thrill<0.5）
+      // 块的内部，而条件要求 thrill>=0.5 → 永不可达，侧面反响告警在组合门禁里
+      // 从未生效过；必须保持为与 if/else-if 平级的兄弟分支。
       if (thrill >= 0.5 && sideReaction < 0.3) {
         issues.add(const QualityGateIssue(
           source: QualitySource.pipelineRules,
@@ -121,7 +125,26 @@ class CompositeQualityGate implements QualityGate {
           severity: QualitySeverity.note,
         ));
       }
-
+      // 压抑释放结构（爽点落点）：先抑后扬是否成立（与 PipelineQa.chapterIssues
+      // 同口径，n>=2 才有结构可言），note 级供人工复核、不扣分。
+      final ({String verdict, int hits, double first, double last}) rel =
+          PipelineQa.releaseProfile(text);
+      if (rel.verdict == 'late_start') {
+        issues.add(QualityGateIssue(
+          source: QualitySource.pipelineRules,
+          type: '落点',
+          message: '压抑过长（首个爽点在全章 ${(rel.first * 100).round()}% 处才释放，'
+              '先抑后扬要求压抑不超过 60%，建议把释放点前移或中段补一处小释放）',
+          severity: QualitySeverity.note,
+        ));
+      } else if (rel.verdict == 'front_loaded') {
+        issues.add(QualityGateIssue(
+          source: QualitySource.pipelineRules,
+          type: '落点',
+          message: '爽点前置泄洪（末个爽点在全章 ${(rel.last * 100).round()}% 处，'
+              '后半段零释放，建议后半章补一处打脸/收获落地）',
+          severity: QualitySeverity.note,
+        ));
       }
     }
     if (!hook && novel.totalWords > 0) {
@@ -169,7 +192,6 @@ class CompositeQualityGate implements QualityGate {
         'surgePerK': surge,
         'deepAiLevel': deepLevel.toDouble(),
         'sideReactionPerK': sideReaction,
-
         'dialogueRatio': gate.dialogueRatio,
         'fillerRatio': gate.fillerRatio,
       },
