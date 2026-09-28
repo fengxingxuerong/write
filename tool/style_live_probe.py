@@ -53,14 +53,17 @@ def main():
     import novel_pipeline as nppl
     provider = dict(nppl.TITLER)
     provider["key"] = os.environ[key_env]
-    provider["max_tokens"] = 2000  # dsf-flash 思维链会吃 400+ token
+    # 1200 上限：思考链（enable_thinking 常被忽略，实测吃 400+）+ 正文合计封顶，
+    # 最坏生成时长 ≈ 1200 token / ~45 tok/s ≈ 27s 内可完成；截断可容忍——
+    # 噪声采样只度量已产出文本的分布，且 400 字提示与上限双保险提速。
+    provider["max_tokens"] = 1200
     result = {}
 
     def _run():
         try:
             result["out"] = nppl.llm_call(
                 provider, SYSTEM_PROMPT, prompt,
-                max_tokens=2000, retries=0)
+                max_tokens=1200, retries=0)
         except Exception as e:  # noqa: BLE001 探针要打印任何失败原因
             result["err"] = f"{type(e).__name__}: {e}"
 
