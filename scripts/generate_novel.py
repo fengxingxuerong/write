@@ -366,14 +366,15 @@ def emotion_fix_prompt(full_text, registry):
 
 def scene_prompt(scene_no, total_scenes, stage, goal, beats, prev_text, genre_hint="玄幻",
                  state="", protagonist="", world="", hook="", is_opening=False,
-                 registry="", facts="", world_terms=()):
+                 registry="", facts="", world_terms=(), style_block=""):
     """单场景生成。state 为跨章状态清单（人物伤势/修为/物品/承诺）。
     genre_hint 为题材（见 GENRE_SPECS）；protagonist/world 为本书已确立的主角名与世界观，
     必须显式注入——缺这两项时写手会自己另起一个故事。
     world_terms 为大纲世界观专名清单：评审按**字面命中**判定「世界观是否落地」，
     只给整段 world 描述时写手会自由转述、专名一个都不落纸面（门禁 v7 第 13 项
     三章连挂「世界观未落地」）。给了清单要求逐场景带出。
-    is_opening 为全书第 1 章第 1 场景标记，强制开场变故硬约束。"""
+    is_opening 为全书第 1 章第 1 场景标记，强制开场变故硬约束。
+    style_block 为文风指纹注入块（novel_pipeline --style-ref 模式；空串=不注入）。"""
     spec = GENRE_SPECS.get(genre_hint, GENRE_SPECS["玄幻"])
     s = ""
     if genre_hint:
@@ -430,6 +431,8 @@ def scene_prompt(scene_no, total_scenes, stage, goal, beats, prev_text, genre_hi
                   "禁止用发热/发光/苏醒类身体异动收束。\n")
         else:
             s += "这是本章最后一个场景：结尾必须留下未落地的钩子（悬念/变故/威胁逼近/秘密将揭），让读者必须看下一章。\n"
+    if style_block:
+        s += f"\n{style_block}"
     if prev_text:
         s += f"\n上一段的情境（必须承接）：\n{prev_text[-150:]}\n"
     s += "\n只输出场景正文："
@@ -1006,6 +1009,85 @@ def deep_ai_metrics(text):
            'level': level}
     out.update(fp)
     return out
+
+
+def style_fingerprint(text, source=""):
+    """文风指纹（P1-1 文风仿写第一阶段）：把参考文的可统计风格压成九项分布指标。
+
+    全部复用 deep_ai_metrics / dialogue_ratio 既有口径（不另起标准），
+    供 `novel_pipeline --style-ref` 注入写手 prompt 与收敛度量
+    （fingerprint_distance）。返回值只含分布数值，**不含任何可照抄内容**。
+    """
+    zero = {'source': source, 'words': 0, 'sent_len_mean': 0.0,
+            'sent_len_cv': 0.0, 'dialogue_ratio': 0.0, 'para_len_mean': 0.0,
+            'single_para_rate': 0.0, 'de_density': 0.0,
+            'adverb_density': 0.0, 'connector_rate': 0.0,
+            'metaphor_density': 0.0}
+    if not text:
+        return zero
+    deep = deep_ai_metrics(text)
+    lens = [n for n in (count_words(s) for s in _split_sentences(text)) if n > 0]
+    para_lens = [n for n in (count_words(p)
+                             for p in re.split(r"\n\s*\n", text)) if n > 0]
+    if not lens or not para_lens:
+        return zero
+    return {
+        'source': source,
+        'words': count_words(text),
+        'sent_len_mean': round(sum(lens) / len(lens), 1),
+        'sent_len_cv': deep['sentence_cv'],
+        'dialogue_ratio': dialogue_ratio(text),
+        'para_len_mean': round(sum(para_lens) / len(para_lens), 1),
+        'single_para_rate': deep['single_para_rate'],
+        'de_density': deep['de_density'],
+        'adverb_density': deep['adverb_density'],
+        'connector_rate': deep['connector_rate'],
+        'metaphor_density': deep['metaphor_density'],
+    }
+
+
+def style_fingerprint_block(fp):
+    """把文风指纹渲染成写手场景 prompt 注入块（学分布，不抄内容）。
+
+    数字目标外必须带「向分布靠拢」的可执行翻译（长短句错落、对白密度、
+    段落呼吸），否则模型面对裸数字无从下手；禁抄条款防文风仿写变成抄袭。
+    """
+    if not fp or not fp.get('words'):
+        return ""
+    return (
+        "\n【目标文风指纹（参考《{src}》，共 {w} 字）——只学分布与节奏，"
+        "禁止照抄其句子、情节与人名】\n"
+        "句长：均值 {sl} 字、变异系数 {cv}（长短句错落，忌句长均匀——"
+        "紧张处压短句，舒缓处放长句）\n"
+        "结构：对白占比 {dr:.0%}｜段落均长 {pl} 字｜单句成段 {sp:.0f}%"
+        "（段落呼吸与参考文一致）\n"
+        "用词：的字密度 {de:.1f}%｜叠词 {ad}/千字｜句首连接词 {co:.0%}｜"
+        "比喻 {me}/千字\n"
+        "写本章时让以上各项向参考文靠拢，其余仍按写作准则执行。\n"
+    ).format(src=fp.get('source', '参考文'), w=fp['words'],
+             sl=fp['sent_len_mean'], cv=fp['sent_len_cv'],
+             dr=fp['dialogue_ratio'], pl=fp['para_len_mean'],
+             sp=fp['single_para_rate'], de=fp['de_density'],
+             ad=fp['adverb_density'], co=fp['connector_rate'],
+             me=fp['metaphor_density'])
+
+
+def fingerprint_distance(fp_a, fp_b):
+    """两份文风指纹的归一化距离（0=同分布，越大差异越大）。
+
+    每项 |a-b|/max(|a|,|b|) 后取均值——比值式让量纲自归一，无需逐项定权；
+    双零项记 0 差异（分母取 1e-9 防除零）。用于真机跑后验收「新章是否向
+    参考文收敛」（--style-ref 模式逐章打印）。
+    """
+    keys = ('sent_len_mean', 'sent_len_cv', 'dialogue_ratio',
+            'para_len_mean', 'single_para_rate', 'de_density',
+            'adverb_density', 'connector_rate', 'metaphor_density')
+    diffs = []
+    for k in keys:
+        a = float(fp_a.get(k, 0.0))
+        b = float(fp_b.get(k, 0.0))
+        diffs.append(abs(a - b) / max(abs(a), abs(b), 1e-9))
+    return round(sum(diffs) / len(diffs), 3)
 
 
 def has_ending_hook(text):

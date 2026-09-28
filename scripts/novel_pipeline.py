@@ -35,6 +35,8 @@ from generate_novel import (count_words, parse_json_from_llm, quality_check,
                             has_ending_hook, SYSTEM_PROMPT,
                             thrill_per_thousand, surge_per_thousand, side_reaction_per_thousand,
                             release_ev_fragment,
+                            style_fingerprint, style_fingerprint_block,
+                            fingerprint_distance,
                             registry_block, facts_block, extract_registry_prompt,
                             merge_registry, merge_facts)  # noqa: E402
 from fanqie_review import (review_chapter, fix_prompt, patch_gate, local_hook_fallback,
@@ -932,11 +934,13 @@ def structure_fix_prompt(outline, chapters, state_track, foreshadow_ledger, genr
 1. 若「伏笔悬空/缺结局/主线未收束」确需收尾：输出 1~{max_new} 个收尾章章纲。收尾章必须：
    - 自然回收上面列出的主要伏笔（goal 里点名回收哪几条、怎么收）
    - 给主线冲突一个阶段性交代（大典/决战/摊牌），并留续作余韵
-   - idx 从 {last_idx + 1} 顺延；title 不超过 8 字；goal 60~120 字写清事件+回收哪些伏笔+章末钩子
+   - idx 从 {last_idx + 1} 顺延；title 不超过 8 字；goal 按四元组
+  （新信息=…｜变化=…｜主角选择=…｜钩子=…，各键值 15~40 字）外加「回收伏笔=…」键，
+  缺任一四元组键视为不合格
 2. 若判定现有章节已能自洽收尾、加章反而注水：输出空数组，并给出一句话理由。
 3. 严格沿用已有世界观、人物与设定，不得新增主角、不改已有设定。
 4. 只输出 JSON（不要 Markdown 代码块）：
-{{"new_chapters": [{{"idx": {last_idx + 1}, "title": "不超过8字", "goal": "60~120字", "hook": "章末钩子一句话"}}], "reason": "一句话理由"}}"""
+{{"new_chapters": [{{"idx": {last_idx + 1}, "title": "不超过8字", "goal": "新信息=…｜变化=…｜主角选择=…｜钩子=…｜回收伏笔=…", "hook": "章末钩子一句话"}}], "reason": "一句话理由"}}"""
 
 
 def generate_appended_chapter(ch, ctx):
@@ -1000,7 +1004,8 @@ def generate_appended_chapter(ch, ctx):
                                            is_opening=False,
                                            registry=registry_block(registry),
                                            facts=facts_block(registry),
-                                           world_terms=ctx["review_world_terms"]),
+                                           world_terms=ctx["review_world_terms"],
+                                           style_block=ctx.get("style_block", "")),
                               max_tokens=int(tw * 3.0))
             if text.strip():
                 break
@@ -1782,6 +1787,10 @@ def main():
                    help="终审每轮采样次数取中位数（默认 2，治单轮评分方差；1 恢复单轮）")
     p.add_argument("--prev-summary-file", default="",
                    help="前情提要文件（续写模式：规划官须承接该剧情）")
+    p.add_argument("--style-ref", default="",
+                   help="文风参考 txt 路径：提取文风指纹注入写手场景 prompt，"
+                        "向参考文分布收敛（只学节奏与密度，禁抄句子/情节，"
+                        "逐章打印与参考文的指纹距离）")
     args = p.parse_args()
     if args.total_words <= 0 or args.max_chapters <= 0:
         p.error("--total-words 与 --max-chapters 必须为正数")
@@ -1796,6 +1805,26 @@ def main():
     if args.prev_summary_file and os.path.exists(args.prev_summary_file):
         with open(args.prev_summary_file, encoding="utf-8") as pf:
             prev_summary = pf.read().strip()
+
+    # ===== 文风指纹（P1-1）：--style-ref 模式提取参考文指纹并注入写手 =====
+    STYLE_BLOCK = ""
+    REF_FP = None
+    if args.style_ref:
+        try:
+            with open(args.style_ref, encoding="utf-8") as sf:
+                REF_FP = style_fingerprint(
+                    sf.read(), source=os.path.basename(args.style_ref))
+            STYLE_BLOCK = style_fingerprint_block(REF_FP)
+            if STYLE_BLOCK:
+                print(f"[文风] 参考文指纹已提取（{REF_FP['words']} 字）：句长均值 "
+                      f"{REF_FP['sent_len_mean']}｜对白 {REF_FP['dialogue_ratio']:.0%}｜"
+                      f"段落均长 {REF_FP['para_len_mean']} → 注入写手场景 prompt")
+            else:
+                REF_FP = None
+                print("[文风] 参考文为空/过短，未提取到指纹，本轮不注入")
+        except OSError as e:
+            REF_FP = None
+            print(f"[文风] --style-ref 读取失败（{e}），本轮不注入")
 
     setup_keys()
     if args.skip_amd:
@@ -1964,7 +1993,8 @@ def main():
                                                is_opening=(idx == 1 and si == 0),
                                                registry=registry_block(registry),
                                                facts=facts_block(registry),
-                                               world_terms=review_world_terms),
+                                               world_terms=review_world_terms,
+                                               style_block=STYLE_BLOCK),
                                   max_tokens=int(tw * 3.0))
                 if text.strip():
                     break
@@ -2299,6 +2329,11 @@ def main():
             else:
                 print("  [读者] 反馈获取失败，下一章规划不注入")
 
+        if REF_FP is not None:
+            _style_dist = fingerprint_distance(
+                REF_FP, style_fingerprint(final_text))
+            print(f"  [文风] 本章与参考文指纹距离 {_style_dist}"
+                  "（0=同分布，逐章对比看是否收敛）")
         print(f"  [完成] 第 {idx} 章：{chapter_record['words']} 字 | 累计 {total_words} 字")
 
     # ===== Phase 3：质检汇总 =====
@@ -2498,7 +2533,8 @@ def main():
                             "foreshadow_ledger": foreshadow_ledger}
                 ctx = {"args": args, "outline": outline, "state": state, "reviews": reviews,
                        "trackers": trackers, "protagonist": protagonist, "world_str": world_str,
-                       "review_world_terms": review_world_terms, "registry": registry}
+                       "review_world_terms": review_world_terms, "registry": registry,
+                       "style_block": STYLE_BLOCK}
                 for c in new_chs:
                     generate_appended_chapter(c, ctx)
                 # 同步回 main 局部变量，供三审与后续导出使用
