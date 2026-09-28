@@ -225,6 +225,19 @@ void main() {
         isTrue,
       );
     });
+
+    test('章末三件套收尾 → 收尾 warn + 钩子 warn（降级生效，规则20）', () {
+      const String filler = '他数着砖缝，一共三百二十一道。';
+      final QualityGateReport r = gate.check('${filler * 20}掌心发烫。');
+      expect(
+        r.issues.any((QualityGateIssue e) =>
+            e.type == '收尾' &&
+            e.severity == QualitySeverity.warn &&
+            e.message.contains('发烫')),
+        isTrue,
+      );
+      expect(r.issues.any((QualityGateIssue e) => e.type == '钩子'), isTrue);
+    });
   });
 
 }

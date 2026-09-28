@@ -39,6 +39,7 @@ from generate_novel import (count_words, parse_json_from_llm, quality_check,
                             merge_registry, merge_facts)  # noqa: E402
 from fanqie_review import (review_chapter, fix_prompt, patch_gate, local_hook_fallback,
                            extract_world_terms, dedup_intra_repeat,
+                           ending_ev_fragment,
                            FIX_MIN_RATIO)  # noqa: E402
 from fanqie_prompts import first_screen_rewrite_prompt, pack_prompt  # noqa: E402
 
@@ -2101,7 +2102,8 @@ def main():
                      f"直白爽点 {thrill_per_thousand(final_text, args.genre)}/千字；"
                      f"变强异动 {surge_per_thousand(final_text, args.genre)}/千字；"
                      f"侧面反响 {side_reaction_per_thousand(final_text)}/千字；"
-                     f"{release_ev_fragment(final_text)}")
+                     f"{release_ev_fragment(final_text)}；"
+                     f"{ending_ev_fragment(final_text)}")
             qr = call_chain(VERIFIER_CHAIN, VERIFIER_SYS, quality_review_prompt(final_text, qa_ev), max_tokens=6000)
             parsed = parse_json_from_llm(qr, repair=False)
             overall, scores, comment = -1, None, ""
@@ -2315,6 +2317,9 @@ def main():
             print("      → 压抑过长（首个爽点晚于全章 60% 才释放，先抑后扬失衡）")
         elif ch.get("_release") == "front_loaded":
             print("      → 爽点前置泄洪（后半段零释放，后半章平铺掉追读）")
+        if ch.get("_ending_triad"):
+            print(f"      → 章末三件套收尾：命中「{ch['_ending_triad']}」"
+                  "（规则20禁止身体异动/发光物件收束）")
     print(f"  世界观冲突：{total_conflicts} 处 | 审校问题：{sum(len(c.get('issues',[])) for c in state['chapters'])} 处")
 
     # ===== Phase 3.5：终审官总评 + 打回重写权（第 10 角色，全书唯一通读级 LLM 评审）=====

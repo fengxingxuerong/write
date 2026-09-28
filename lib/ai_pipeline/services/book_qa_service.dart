@@ -93,6 +93,11 @@ class BookQaService {
       if (!hook) {
         extra.add('章末 200 字未检测到钩子信号（直白突变/威胁窥伺/身份伏笔）');
       }
+      final String triad = PipelineQa.endingTriad(text);
+      if (triad.isNotEmpty) {
+        extra.add('章末三件套收尾：命中「$triad」'
+            '（规则20禁止身体异动/发光物件收束，建议换成未落地悬念）');
+      }
       if (words > 1500 && thrill < 0.5 && surge < 1.0) {
         extra.add('爽点过淡（直白爽点 <0.5 且变强异动 <1.0/千字）');
       }

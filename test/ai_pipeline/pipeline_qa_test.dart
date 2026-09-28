@@ -161,6 +161,8 @@ void main() {
       expect(r['sideReactionPerK'], isA<String>());
       // 落点判定（无爽点命中）→ none；字段必在，供 UI/报告展示。
       expect(r['release'], 'none');
+      // 三件套收尾（干净文本无命中）→ 空串。
+      expect(r['endingTriad'], '');
 
       expect(r['aiDeepLevel'], isA<int>());
       expect(r['needsPolish'], isFalse);
@@ -271,6 +273,14 @@ void main() {
       expect(issues.any((String e) => e.contains('压抑过长')), isTrue);
       expect(issues.any((String e) => e.contains('爽点前置泄洪')), isFalse);
     });
+
+    test('章末三件套收尾 → 三件套告警 + 无钩告警（降级生效）', () {
+      const String filler = '他数着砖缝，一共三百二十一道。';
+      final List<String> issues = PipelineQa.chapterIssues(
+          chapter('${filler * 8}掌心发烫。', idx: 2));
+      expect(issues.any((String e) => e.contains('章末三件套收尾')), isTrue);
+      expect(issues.any((String e) => e.contains('章末疑似缺少钩子')), isTrue);
+    });
   });
 
   group('PipelineQa.releaseProfile（爽点落点·压抑释放结构）', () {
@@ -327,6 +337,55 @@ void main() {
       expect(PipelineQa.releaseEvFragment(front), contains('前置泄洪'));
       expect(PipelineQa.releaseEvFragment(filler * 200),
           contains('落点不适用'));
+    });
+  });
+
+  group('PipelineQa.endingTriad（章末三件套收尾·规则20）', () {
+    const String filler = '他数着砖缝，一共三百二十一道。';
+
+    test('末句命中 → 返回词；窗口（末 60 字）外 → 空串', () {
+      expect(PipelineQa.endingTriad('他摊开手一看，掌心发烫。'), '发烫');
+      expect(PipelineQa.endingTriad('掌心发烫。$filler${filler * 10}'), '');
+    });
+
+    test('天亮了排除（时间过渡）、玉符亮了命中（发光物件）', () {
+      expect(PipelineQa.endingTriad('他收剑回鞘，天亮了。'), '');
+      expect(PipelineQa.endingTriad('他摊开手，玉符亮了。'), '亮了');
+      expect(PipelineQa.endingTriad('他摊开手，玉符亮了起来。'), '亮了起来');
+    });
+
+    test('空文本 → 空串', () {
+      expect(PipelineQa.endingTriad(''), '');
+    });
+  });
+
+  group('PipelineQa.hasEndingHook 三件套降级（检测矛盾修正）', () {
+    const String filler = '他数着砖缝，一共三百二十一道。';
+
+    test('三件套是唯一尾钩信号 → 判无钩（旧逻辑误判有钩）', () {
+      expect(PipelineQa.hasEndingHook('${filler * 8}掌心发烫。'), isFalse);
+    });
+
+    test('三件套 + 真实钩子词 → 仍有钩', () {
+      expect(
+        PipelineQa.hasEndingHook('${filler * 8}掌心发烫，脚步声骤然逼近。'),
+        isTrue,
+      );
+    });
+
+    test('三件套 + 问号悬念 → 仍有钩（悬念通道优先）', () {
+      expect(
+        PipelineQa.hasEndingHook('${filler * 8}掌心发烫，是谁？'),
+        isTrue,
+      );
+    });
+
+    test('常规钩子词不受降级影响', () {
+      expect(
+        PipelineQa.hasEndingHook('${filler * 8}就在这时，门外传来一阵脚步声。'),
+        isTrue,
+      );
+      expect(PipelineQa.hasEndingHook(filler * 8), isFalse);
     });
   });
 

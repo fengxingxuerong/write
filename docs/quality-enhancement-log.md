@@ -830,6 +830,53 @@
 - **Dart 侧未验证项**：本机无 Flutter/Dart SDK，`pipeline_qa` / `composite_quality_gate` / `book_qa_service` / `ai_pipeline_service` 改动与 3 个测试文件（pipeline_qa_test +8、composite_quality_gate_test +2、book_qa_service_test +1）只经人工审读，须由 CI `dart analyze --fatal-infos` + `flutter test --coverage` 复核
 - **观察项**：落点告警只提示、无自动定点修（移动爽点风险高于收益，先观察告警质量）；冒烟门禁不加第 18 项——note 级口径未经真机门禁验证前不进 FAIL 判据
 
+---
+
+## 二十三、2026-09-28 章末三件套收尾检测 + 钩子检测矛盾修正（规则 20 落地）
+
+### 选题证据（有指令无检测 + 检测互相矛盾）
+
+- **规则层全端承诺、检测层空白**：FANQIE 规则 20「禁止『三件套』收尾：发烫、亮起、苏醒（含『像有什么东西醒了』）」、规则 10「钩子禁止自行改成身体异动/发光物件」、`scene_prompt`/Dart `scenePrompt` 末场景「禁止用发热/发光/苏醒类身体异动收束」、`writing_guidelines` 第 8 条——四层提示词全都有，没有任何检测器核对。
+- **检测矛盾实锤**（`tool/probe_ending_triad.py`，真实成书 116 章）：`has_ending_hook` 把「发烫」「醒了过来」当钩子词 → 末 200 字命中三件套的 **30 章里 93% 反被判「有钩」**。历史事故「实测 52% 章节落在发光物件+苏醒一种钩子上」（HOOK_TYPES 轮换的立项依据）正是它纵容的形态——当年用提示词侧轮换压制，检测侧一直没补。
+- **窗口 × 词表校准**：
+
+| 窗口 | core 词表 | core+亮了 |
+|---|---|---|
+| 末句 | 5 章（4.3%） | 8 章（6.9%） |
+| **末 60 字（采用）** | 9 章（7.8%） | **13 章（11.2%）** |
+| 末 200 字 | 22 章（19.0%） | 30 章（25.9%） |
+
+取**末 60 字**收束窗口：200 字会把「尾部另有真钩、三件套只在中段」的章误伤；末句太窄（漏跨句收束）。`亮了` 收录但带**天字排除**（实测末句「天亮了」= 0 章，`玉符亮了`类才是发光物件）。钩子降级对拍（旧语义任一钩词即有钩 → 新语义全三件套词无问号悬念即无钩）：116 章语料仅 **1 章**翻转，157 章全语料（含短章）3 章——降级半径极小、方向正确。
+
+### 改动（检测 → 评审 → 修复回路，全部复用既有机制）
+
+| 端 | 位置 | 内容 |
+|---|---|---|
+| Py | `fanqie_review` | `TRIAD_END_WORDS`（长词优先 + 亮字族天字逐位置排除）/ `TRIAD_HOOK_ONLY` / `TRIAD_END_WINDOW=60` / `ending_triad()` / `ending_ev_fragment()` |
+| Py | `fanqie_review.review_chapter` | 新增「收尾」**修改级**问题（-4 分，`fix_prompt` 收「修改」级 → **自动进定点修链路**） |
+| Py | `generate_novel.has_ending_hook` | 降级：存在任一**非三件套**尾钩词才算钩；全是三件套词且无 ？/… → 无钩 |
+| Py | `quality_check` | 落 `_ending_triad` + report 行字段；生成收尾逐章告警 |
+| Py | `novel_pipeline` | qa_ev 追加 `ending_ev_fragment`（评审证据第六项：钩子/爽点/异动/侧面反响/落点/收尾）；Phase 3 汇总打印 |
+| Py | `qa_scan_existing` | 逐章 `ending_triad` 字段（`--json` 含）+ 异常 ↳ 明细 |
+| Dart | `PipelineQa` | `_triadEndWords` / `_triadHookOnly` / `endingTriad()` / `endingEvFragment()`（与 Python 同文）/ `hasEndingHook` 同款降级 / chapterIssues 告警 / chapterReport `endingTriad` 键 |
+| Dart | `CompositeQualityGate` | `type=收尾` **warn** 级（与钩子 warn 并列） |
+| Dart | `BookQaService` | extraIssues 三件套告警（全书体检 GUI） |
+| Dart | `ai_pipeline_service` | qaEv 追加 `endingEvFragment` |
+
+**零新增 LLM 调用点亮三条既有修复回路**（降级判无钩自动触发）：① Python `apply_hook_patch` 章末钩子兜底补写（2 处调用）② `review_chapter(has_hook=False)` 重写级问题 + `fix_prompt` 定点修 ③ Dart「章末缺钩，自动补写钩子」。
+
+**写手侧零改动**：四层提示词承诺本就存在——本轮仍是「给既有承诺补检测器」。
+
+### 验证
+
+- `python -m unittest discover -s scripts -p "test_*.py"` → **Ran 92 tests OK**（75→92：`test_ending_triad.py` 17 项——窗口/天亮排除/长词优先/降级四态/证据串/评审收尾问题/fix_prompt 透传/quality_check 落字段）
+- `ruff check --select=F,E9 scripts tool` 全绿；`compileall` 0；`generate_novel/novel_pipeline/fanqie_review` 模块入口回归（CI 同款）
+- 真书生产口径复测：157 章 → `ending_triad` 命中 **16 章（10.2%）**，其中仅 **1 章**因降级判无钩（其余 15 章尾部另有真实钩子信号，钩子判定不动）——与校准探针一致
+- `qa_scan_existing` v7 干跑正常、报告结构不变；探针改名 `tool/probe_ending_triad.py`（比喻复用候选本轮放弃：长度≥6 归一化全等仅 5 处/全语料，信号太弱）
+- **冒烟门禁零影响（导入面证明 + 实测对拍）**：`run_smoke_gate` 只 import `blocking_reasons/genre_drift/intra_repeat/meta_talk/prompt_leak/_sidecar_path`（均未改动），不触钩子/评审函数；v7 `--check-only` 改动前后同为 FAIL 14/16（与文档 13/16 的差异系历史 live 与 replay 口径差，非本轮引入）
+- **Dart 侧未验证项**：4 个 lib 文件 + 3 个测试文件（pipeline_qa_test +8 断言组、composite +1、book_qa +1）本机无 SDK 只经人工审读，须 CI `dart analyze --fatal-infos` + `flutter test` 复核
+- **观察项**：`收尾` 在门禁为 warn 级、不进 FAIL 判据（与落点同口径，待真机门禁观察）
+
 
 
 

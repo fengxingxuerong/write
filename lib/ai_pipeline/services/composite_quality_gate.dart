@@ -155,6 +155,15 @@ class CompositeQualityGate implements QualityGate {
         severity: QualitySeverity.warn,
       ));
     }
+    final String triad = PipelineQa.endingTriad(text);
+    if (triad.isNotEmpty) {
+      issues.add(QualityGateIssue(
+        source: QualitySource.pipelineRules,
+        type: '收尾',
+        message: '章末三件套收尾：命中「$triad」（规则20禁止身体异动/发光物件收束，AI味一眼假）',
+        severity: QualitySeverity.warn,
+      ));
+    }
     if (deepLevel >= 3) {
       issues.add(QualityGateIssue(
         source: QualitySource.pipelineRules,

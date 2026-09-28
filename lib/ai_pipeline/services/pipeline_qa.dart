@@ -16,7 +16,9 @@ import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 /// _openingStrong / _openingWeak / thrillWords / powerSurgeWords / sideReactionWords /
 /// _aiAdverbs / _sentenceConnectors / _bodyReactionWords / worldKeywords）与
 /// deepAiMetrics 统计阈值（含句式指纹三项 styleFpLimits），
-/// releaseProfile 落点判定（n>=2 适用线 + 0.6/0.5 阈值），与
+/// releaseProfile 落点判定（n>=2 适用线 + 0.6/0.5 阈值），
+/// endingTriad/endingEvFragment 三件套收尾（末 60 字窗口 + TRIAD_END_WORDS
+/// 词表 + TRIAD_HOOK_ONLY 降级，定义在 `scripts/fanqie_review.py`），与
 /// `scripts/generate_novel.py` 的对应常量（HOOK_WORDS /
 /// OPENING_STRONG / OPENING_WEAK / THRILL_WORDS / POWER_SURGE_WORDS / SIDE_REACTION_WORDS /
 /// AI_ADVERBS / SENTENCE_CONNECTORS / BODY_REACTION_WORDS / METAPHOR_PAT /
@@ -119,6 +121,7 @@ class PipelineQa {
       'surgePerK': surgePerThousand(chapter.content).toStringAsFixed(2),
       'sideReactionPerK': sideReactionPerThousand(chapter.content).toStringAsFixed(2),
       'release': releaseProfile(chapter.content).verdict,
+      'endingTriad': endingTriad(chapter.content),
       'aiDeepLevel': deep['level'],
       // 口径与 chapterIssues 保持一致：词表密度、重复率或统计层 AI 味
       // （level>=3）任一超标即需润色，避免报告与告警列表矛盾。
@@ -136,6 +139,11 @@ class PipelineQa {
   /// ③ 悬而未决/监视/异常（有什么探出/暗处那只眼/将落未落/又闪又响）。
   /// 词表经《碎脉铸仙录》33 章成书结尾全量实测校准（人工基线 91% 覆盖率，
   /// 规则命中 39% → 升级后目标 90%+），避免「睁眼瞎」漏判。
+  ///
+  /// **三件套不算钩**（FANQIE 规则 20/10）：尾部命中若全是三件套词
+  /// （发烫/醒了过来）且末 60 字无问号/省略号悬念 → 判无钩。修正
+  /// 「三件套收尾反被判有钩」的检测矛盾（真实成书 116 章实测 93% 反向
+  /// 奖励；回测仅 1/116 章因此翻转，其余三件套章尾部另有真实钩子信号）。
   static const List<String> _hookWords = <String>[
     // 直白突变 / 意外
     '突然', '猛然', '竟然', '就在这时', '就在此时', '刹那', '一瞬',
@@ -152,6 +160,23 @@ class PipelineQa {
     '看不清', '看不透', '将落未落', '还没有断', '没断', '发烫', '滴水',
     '黑影', '还没', '尚未', '来不及', '远远没', '不知何时', '轰', '嗡',
   ];
+
+  /// 章末三件套收尾词表（FANQIE 规则 20「禁止发烫/亮起/苏醒收尾」+
+  /// 规则 10 + scene_prompt「禁止发热/发光/苏醒收束」——与 Python
+  /// `fanqie_review.TRIAD_END_WORDS` 同步）。
+  ///
+  /// 长词在前（像有什么东西醒了 > 醒了过来 > 醒了、亮了起来 > 亮了）；
+  /// 「亮」字族带天字排除（「天亮了」是时间过渡，不是发光物件收束）。
+  /// 校准：tool/probe_ending_and_simile.py 三窗口敏感性——末句 6.9% /
+  /// 末60字 11.2% / 末200字 25.9%，取末 60 字收束窗口（与 Python
+  /// TRIAD_END_WINDOW 同步）。
+  static const List<String> _triadEndWords = <String>[
+    '像有什么东西醒了', '醒了过来', '亮了起来', '亮起来',
+    '发烫', '发热', '亮起', '苏醒', '醒来', '醒了', '发光', '亮了',
+  ];
+
+  /// [_hookWords] 中属三件套性质的成员：作为**唯一**尾部钩子信号时不采信。
+  static const Set<String> _triadHookOnly = <String>{'发烫', '醒了过来'};
 
   /// 开场节奏·强信号词（双字/特定短语，1 个即视为快速进入事件）。
   ///
@@ -574,17 +599,61 @@ class PipelineQa {
   }
 
   /// 章末钩子检测：结尾 200 字内是否有未落地悬念信号。
+  ///
+  /// 三件套不算钩（规则 20/10）：尾部命中若全是三件套词（发烫/醒了过来）
+  /// 且末 60 字无问号/省略号悬念 → 判无钩（与 Python `has_ending_hook` 同步）。
   static bool hasEndingHook(String text) {
     if (text.isEmpty) return false;
     final String tail =
         text.length > 200 ? text.substring(text.length - 200) : text;
-    for (final String w in _hookWords) {
-      if (tail.contains(w)) return true;
-    }
-    // 结尾 60 字内出现疑问句或省略号悬念。
+    // 结尾 60 字内出现疑问句或省略号悬念（悬念通道优先于三件套降级）。
     final String last60 =
         tail.length > 60 ? tail.substring(tail.length - 60) : tail;
-    return last60.contains('？') || last60.contains('?') || last60.contains('……');
+    if (last60.contains('？') ||
+        last60.contains('?') ||
+        last60.contains('……')) {
+      return true;
+    }
+    // 存在任一**非三件套**尾部钩子词才算钩；全是三件套词（发烫/醒了过来）
+    // → 不采信（检测矛盾修正）；无任何命中 → 无钩。
+    for (final String w in _hookWords) {
+      if (tail.contains(w) && !_triadHookOnly.contains(w)) return true;
+    }
+    return false;
+  }
+
+  /// 章末三件套收尾检测：收束区域（末 60 字）命中规则 20 词表则返回该词，
+  /// 未命中返回空串。只管收尾位置——正文中段的发烫/苏醒是正常身体异动
+  /// （POWER_SURGE 通道），不算本违规（与 Python `ending_triad` 同步）。
+  static String endingTriad(String text) {
+    if (text.isEmpty) return '';
+    final String seg =
+        text.length > 60 ? text.substring(text.length - 60) : text;
+    for (final String w in _triadEndWords) {
+      int start = 0;
+      while (true) {
+        final int i = seg.indexOf(w, start);
+        if (i < 0) break;
+        // 「天亮了」是时间推进，不是发光物件收束（逐个出现位置排除，
+        // 同窗内「天亮了」在前、「玉符亮了」在后时仍能命中后者）。
+        if (w.startsWith('亮') && i > 0 && seg[i - 1] == '天') {
+          start = i + w.length;
+          continue;
+        }
+        return w;
+      }
+    }
+    return '';
+  }
+
+  /// 评审证据串：章末收尾（注入 qualityReviewPrompt 的 qaEvidence，
+  /// 与 Python `ending_ev_fragment` 同文）。
+  static String endingEvFragment(String text) {
+    final String w = endingTriad(text);
+    if (w.isNotEmpty) {
+      return '章末收尾：三件套命中「$w」⚠（规则20禁止身体异动/发光物件收束，需换成未落地悬念）';
+    }
+    return '章末收尾：未见三件套 ✅';
   }
 
   /// 开场节奏检测（黄金三章）：前 300 字是否进入变故/冲突。
@@ -612,6 +681,11 @@ class PipelineQa {
     final List<String> issues = <String>[];
     if (!hasEndingHook(chapter.content)) {
       issues.add('第 ${chapter.idx} 章 章末疑似缺少钩子（结尾 200 字未见悬念信号）');
+    }
+    final String triad = endingTriad(chapter.content);
+    if (triad.isNotEmpty) {
+      issues.add('第 ${chapter.idx} 章 章末三件套收尾：命中「$triad」'
+          '（规则20禁止身体异动/发光物件收束，建议换成未落地悬念）');
     }
     if (chapter.idx <= 3 && !hasQuickOpening(chapter.content)) {
       issues.add('第 ${chapter.idx} 章 开场 300 字未检测到变故/冲突信号'

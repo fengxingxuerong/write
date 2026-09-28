@@ -48,11 +48,13 @@ for _stream in (sys.stdout, sys.stderr):
 from fanqie_prompts import FANQIE_SYSTEM_PROMPT as SYSTEM_PROMPT  # noqa: E402
 from fanqie_review import (  # noqa: E402
     dialogue_ratio,
+    ending_triad,
     extract_world_terms,
     filler_ratio,
     fix_prompt,
     review_chapter,
     self_repeat_ratio,
+    TRIAD_HOOK_ONLY,
 )
 
 
@@ -656,6 +658,9 @@ NEGATION = ['不', '没', '无', '没有', '并未', '不曾', '决不', '毫无
 # 对应常量同步维护（HOOK_WORDS<->_hookWords、OPENING_STRONG/_WEAK、
 # THRILL_WORDS<thrillWords>、POWER_SURGE_WORDS<powerSurgeWords>、SIDE_REACTION_WORDS<sideReactionWords>、
 # release_profile<->releaseProfile（落点判定：n>=2 适用线 + 0.6/0.5 阈值）、
+# ending_triad/ending_ev_fragment<->endingTriad/endingEvFragment（三件套收束窗口 60 +
+# TRIAD_END_WORDS/TRIAD_HOOK_ONLY 词表，定义于 fanqie_review.py；fanqie_review 不得
+# 反向 import 本文件，防循环依赖）、
 # AI_ADVERBS<_aiAdverbs>、SENTENCE_CONNECTORS<_sentenceConnectors>、
 # AI_ECHO<aiClicheWords>、NEGATION<negations>），以及 deep_ai_metrics
 # 四项统计阈值。调优时必须同一次同时更新两端，防止标准漂移。
@@ -1004,15 +1009,24 @@ def deep_ai_metrics(text):
 
 
 def has_ending_hook(text):
-    """章末钩子检测：结尾 200 字内是否有未落地悬念信号。"""
+    """章末钩子检测：结尾 200 字内是否有未落地悬念信号。
+
+    三件套不算钩（FANQIE 规则 20/10）：尾部钩子词命中若**全是**三件套词
+    （发烫/醒了过来），且末 60 字无问号/省略号悬念 → 判无钩——此前三件套
+    收尾反而被本检测判「有钩」（真实成书 116 章实测 93% 反向奖励，历史事故
+    「52% 章节落在发光物件+苏醒」即此形态）。回测：仅 1/116 章因此翻转，
+    其余三件套章尾部另有真实钩子信号，不受影响。
+    """
     if not text:
         return False
     tail = text[-200:] if len(text) > 200 else text
-    for w in HOOK_WORDS:
-        if w in tail:
-            return True
     last60 = tail[-60:] if len(tail) > 60 else tail
-    return '？' in last60 or '?' in last60 or '……' in last60
+    if '？' in last60 or '?' in last60 or '……' in last60:
+        return True
+    # 存在任一**非三件套**尾部钩子词才算钩；全是三件套词（发烫/醒了过来）
+    # → 不采信（检测矛盾修正）；无任何命中 → 无钩。
+    return any(w not in TRIAD_HOOK_ONLY
+               for w in HOOK_WORDS if w in tail)
 
 
 def has_quick_opening(text):
@@ -1048,6 +1062,8 @@ def quality_check(chapters):
         ch["_surge_per_k"] = surge_per_thousand(text)
         # 压抑释放结构（爽点落点）：先抑后扬是否成立，note 级不阻塞
         ch["_release"] = release_profile(text)["verdict"]
+        # 章末三件套收尾（规则20）：命中词供逐章打印与报告展示
+        ch["_ending_triad"] = ending_triad(text)
         ch["_ai_deep_level"] = deep_ai_metrics(text)["level"]
         # 世界观关键词（灵气/斗气/筑基 等）
         for kw in ["灵气", "斗气", "筑基", "金丹", "元婴", "灵石", "灵根"]:
@@ -1069,6 +1085,7 @@ def quality_check(chapters):
             "thrill_per_k": ch["_thrill_per_k"],
             "surge_per_k": ch["_surge_per_k"],
             "release": ch["_release"],
+            "ending_triad": ch["_ending_triad"],
         })
     return report
 
@@ -1551,6 +1568,9 @@ def main():
             print("      → 压抑过长（首个爽点晚于全章 60% 才释放，先抑后扬失衡，读者中段易流失）")
         elif ch.get("_release") == "front_loaded":
             print("      → 爽点前置泄洪（所有爽点在前半段，后半段零释放，后半章平铺掉追读）")
+        if ch.get("_ending_triad"):
+            print(f"      → 章末三件套收尾：命中「{ch['_ending_triad']}」"
+                  "（规则20禁止身体异动/发光物件收束，换成未落地悬念）")
     print(f"\n  世界观冲突：{total_issues} 处")
     _chars = registry.get("characters", [])
     _facts = registry.get("facts", [])

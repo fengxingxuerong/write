@@ -24,7 +24,7 @@ except Exception:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generate_novel import (has_ending_hook, has_quick_opening, count_words,
                             thrill_per_thousand, surge_per_thousand, AI_CLICHE,
-                            deep_ai_metrics, release_profile)
+                            deep_ai_metrics, release_profile, ending_triad)
 
 
 CHAPTER_RE = re.compile(r"^第\s*(\d+)\s*章")
@@ -365,6 +365,8 @@ def main():
             "surge_per_k": surge_per_thousand(content, args.genre),
             # 压抑释放结构（爽点落点）：late_start/front_loaded 为异常
             "release": release_profile(content)["verdict"],
+            # 章末三件套收尾（规则20）：非空串 = 命中词
+            "ending_triad": ending_triad(content),
         })
 
     if args.json:
@@ -409,6 +411,9 @@ def main():
             print("      ↳ 压抑过长（首个爽点晚于全章 60% 才释放，先抑后扬失衡）")
         elif r.get("release") == "front_loaded":
             print("      ↳ 爽点前置泄洪（所有爽点在前半段，后半段零释放）")
+        if r.get("ending_triad"):
+            print(f"      ↳ 章末三件套收尾：命中「{r['ending_triad']}」"
+                  "（规则20禁止身体异动/发光物件收束）")
 
     # ===== 爽点密度曲线（ASCII） =====
     print("\n【爽点密度曲线】每章每千字爽点数（💥 参考线：1.5 合格 / 1.0 及格 / 0.5 过淡）")

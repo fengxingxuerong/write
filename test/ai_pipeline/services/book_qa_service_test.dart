@@ -259,6 +259,19 @@ void main() {
       );
     });
 
+    test('章末三件套收尾 → extraIssues 含三件套告警、hasHook 降级为 false', () {
+      const String filler = '他数着砖缝，一共三百二十一道。';
+      final BookQaReport r = service.check(novel(
+        chapters: <Chapter>[chapter(1, '${filler * 20}掌心发烫。')],
+      ));
+      final BookChapterQa row = r.rows[0];
+      expect(
+        row.extraIssues.any((String s) => s.contains('章末三件套收尾')),
+        isTrue,
+      );
+      expect(row.hasHook, isFalse);
+    });
+
     test('达标长文 → pass true、无 extra 告警、状态「达线」', () {
       final BookQaReport r = service.check(novel(
         chapters: <Chapter>[chapter(1, passText())],

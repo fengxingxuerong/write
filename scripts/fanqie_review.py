@@ -92,6 +92,58 @@ CLICHE_SENTENCES = [
     "不服来战", "莫欺少年穷", "三十年河东三十年河西",
 ]
 
+# ============================================================
+# 3) 章末三件套收尾（FANQIE 规则 20 / 规则 10 / scene_prompt 双端承诺的检测器）
+#    背景：三件套（发烫/亮起/苏醒…）是 AI 网文读者一眼假的收尾套路，规则层
+#    全端禁止，但检测侧长期空白——且 has_ending_hook 把「发烫」「醒了过来」
+#    当钩子词，三件套收尾反被判「有钩」（真实成书 116 章实测 93% 反向奖励，
+#    历史事故「52% 章节落在发光物件+苏醒」即此形态）。2026-09-28 补齐。
+# ============================================================
+# 收束区域判定词表：长词在前（像有什么东西醒了 > 醒了过来 > 醒了、亮了起来 > 亮了）。
+# 「亮」字族带天字排除（「天亮了」是时间过渡，不是发光物件收束）。
+TRIAD_END_WORDS = [
+    "像有什么东西醒了", "醒了过来", "亮了起来", "亮起来",
+    "发烫", "发热", "亮起", "苏醒", "醒来", "醒了", "发光", "亮了",
+]
+# HOOK_WORDS 中属于三件套性质的成员：作为**唯一**尾部钩子信号时不采信。
+TRIAD_HOOK_ONLY = {"发烫", "醒了过来"}
+# 收束区域窗口（校准：tool/probe_ending_and_simile.py 三窗口 × 词表敏感性——
+# 末句 6.9% / 末60字 11.2% / 末200字 25.9%；取末 60 字，200 字窗会把
+# 「尾部另有真钩子、三件套只出现在中段」的章误伤）。
+TRIAD_END_WINDOW = 60
+
+
+def ending_triad(text):
+    """章末三件套收尾检测：收束区域（末 60 字）命中规则 20 词表则返回该词。
+
+    返回命中的词（如「发烫」），未命中返回空串。只管收尾位置——正文中段
+    出现发烫/苏醒是正常身体异动描写（POWER_SURGE 通道），不算本违规。
+    """
+    if not text:
+        return ""
+    seg = text[-TRIAD_END_WINDOW:]
+    for w in TRIAD_END_WORDS:
+        start = 0
+        while True:
+            i = seg.find(w, start)
+            if i < 0:
+                break
+            # 「天亮了」是时间推进，不是发光物件收束（逐个出现位置排除，
+            # 同窗内「天亮了」在前、「玉符亮了」在后时仍能命中后者）
+            if w.startswith("亮") and i > 0 and seg[i - 1] == "天":
+                start = i + len(w)
+                continue
+            return w
+    return ""
+
+
+def ending_ev_fragment(text):
+    """评审证据串：章末收尾（注入 qa_ev，与 Dart endingEvFragment 同文）。"""
+    w = ending_triad(text)
+    if w:
+        return f"章末收尾：三件套命中「{w}」⚠（规则20禁止身体异动/发光物件收束，需换成未落地悬念）"
+    return "章末收尾：未见三件套 ✅"
+
 # 段落"推进力"检测用的动词/信息词（有则视为该段在推进剧情）
 DRIVE_WORDS = [
     "说", "道", "问", "答", "喊", "笑", "看", "抓", "推", "砸", "拔", "转身",
@@ -674,6 +726,13 @@ def review_chapter(text, prev_text="", idx=1, genre="", protagonist="", world_te
     if has_hook is False:
         probs.append(("钩子", "本章无章末钩子（本地钩子检测直白+隐喻双通道均未命中）"
                       "——追读命门，结尾必须收在悬念/变故/威胁上", "重写"))
+    triad = ending_triad(text)
+    if triad:
+        # 修改级：扣 4 分并进 fix_prompt（fix_prompt 收「修改」级问题）。
+        # 若三件套同时是唯一尾钩信号，has_hook 已判 False 另计重写级，两条不重复。
+        probs.append(("收尾", f"章末三件套收尾：以「{triad}」收束"
+                      "（规则20禁止发烫/亮起/苏醒类「身体异动+发光物件」收尾，"
+                      "读者一眼判定 AI 文）——换成未落地的悬念/威胁/反常细节", "修改"))
     fs_probs, _ = first_screen_check(text)
     probs += [("首屏", m, a) for m, a in fs_probs]
 
