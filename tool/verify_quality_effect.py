@@ -75,9 +75,18 @@ def load_book(path):
                 for it in (data.get("issues") or []):
                     if isinstance(it, dict) and it.get("type") == "payoff_repair":
                         repairs.append(it)
+            elif t == "style_ref":
+                # 2026-09-29 流水线新增：`--style-ref` 提取的指纹落盘（九项分布
+                # 数值，不含参考文任何原文）。有它才能算「是否真在向参考文收敛」。
+                fp = data.get("fingerprint")
+                if isinstance(fp, dict):
+                    style_ref = (
+                        {k: float(v) for k, v in fp.items()
+                         if isinstance(v, (int, float))},
+                        str(data.get("source", "")),
+                    )
             elif t == "outline":
-                # style_ref 若已随项目落盘，jsonl 里可能带（当前流水线未落，
-                # 桌面端走 Novel.styleRef）——有就取，没有就报「未设置」。
+                # 兼容早期把 style_ref 挂在 outline 上的形态
                 sr = data.get("style_ref")
                 if isinstance(sr, dict) and isinstance(sr.get("fingerprint"), dict):
                     style_ref = (sr.get("fingerprint"), sr.get("source", ""))

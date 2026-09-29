@@ -20,6 +20,7 @@ import random
 import re
 import sys
 import time
+from pathlib import Path
 import urllib.error
 import urllib.request
 
@@ -2001,6 +2002,16 @@ def main():
     # ===== 文风指纹（P1-1）：--style-ref 模式提取参考文指纹并注入写手 =====
     # 提取逻辑与 generate_novel 共用 load_style_block（单一实现防两端漂移）
     STYLE_BLOCK, REF_FP = load_style_block(args.style_ref)
+    if REF_FP:
+        # 指纹落盘：否则事后无从判断「是否真在向参考文收敛」——注入与否、注入的
+        # 是什么分布，都只能靠翻日志。落的是九项**分布数值**（不含参考文任何
+        # 原文），与注入块同源，可被 tool/verify_quality_effect.py 直接读取算收敛。
+        append_state(args.output, "style_ref", {
+            "source": Path(args.style_ref).name if args.style_ref else "",
+            "fingerprint": REF_FP,
+            "block": STYLE_BLOCK,
+        })
+        print("  [文风] 指纹已落盘（type=style_ref），可供事后算收敛")
 
     setup_keys()
     if args.skip_amd:
