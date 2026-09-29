@@ -56,6 +56,8 @@ from fanqie_review import (  # noqa: E402
     self_repeat_ratio,
     TRIAD_HOOK_ONLY,
 )
+# 字数唯一定义在 fanqie_review（下方 count_words 只做薄转发，见该处说明）。
+from fanqie_review import count_words as _count_words  # noqa: E402
 
 
 from fanqie_prompts import GOLDEN3_SPEC as _GOLDEN3, GOAL_FORMAT as _GOAL_FORMAT  # noqa: E402
@@ -626,28 +628,14 @@ def parse_json_from_llm(text, repair=True):
 
 
 # ============================================================
-# 字数统计（复用 Dart countWords 逻辑）
+# 字数统计：薄转发（唯一定义在 fanqie_review.count_words）
 # ============================================================
+# 2026-09-29 收敛：此处原有一份与 Dart `AppConstants.countWords` **近乎相同但不等价**
+# 的复制品（少算 CJK 扩展A、且把数字单独计词），注释还写着「复用 Dart countWords
+# 逻辑」——实测同一本书两端差 0.028%（正文）/ 最多 20%（ASCII 密集的报表）。
+# 现改为转发到 fanqie_review 的唯一定义，杜绝双份实现再次各自漂移。
 def count_words(text):
-    if not text:
-        return 0
-    count = 0
-    in_ascii = False
-    for ch in text:
-        r = ord(ch)
-        if 0x4E00 <= r <= 0x9FFF or 0xF900 <= r <= 0xFAFF:
-            count += 1
-            in_ascii = False
-        elif 0x30 <= r <= 0x39:
-            count += 1
-            in_ascii = False
-        elif (0x41 <= r <= 0x5A) or (0x61 <= r <= 0x7A):
-            if not in_ascii:
-                count += 1
-                in_ascii = True
-        else:
-            in_ascii = False
-    return count
+    return _count_words(text)
 
 
 # ============================================================
