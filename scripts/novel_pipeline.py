@@ -140,6 +140,24 @@ WRITER_CHAIN = [
     dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8, max_tokens=6000),    # AMD（稳定 30s，思考死循环免疫，排 NV 前）
     dict(url=NVIDIA, model="deepseek-ai/deepseek-v4.1-flash", key="", temp=0.8, max_tokens=6000),  # NV 末备（-0731 已 410 下架，2026-09-23 换代；端点排队严重仅象征性兜底）
 ]
+
+
+def scene_budget(target_words, factor=3.0, floor=4000):
+    """场景写作的 max_tokens = 目标字数 × factor，并给**思考链**留出生存空间。
+
+    2026-09-30 真机实锤：写手链是 dsf/glm 这类**思考链**模型，且端点忽略
+    `enable_thinking=False`——thinking 会先烧掉 token。正文要活下来，预算不能
+    只按字数算。原先写手调用点一律 `int(tw * 3.0)`，600 字场景 = 1800 token，
+    dsf/glm 思考链把 1800 吃满 → **正文恒空**；每个场景白白烧 2 次失败调用
+    （dsf+glm），最后落到慢的 AMD（159s）兜底，整书又慢又失真。
+    这与规划位/大纲终审位是**同一个病根**：思考链预算不足导致「吃满→正文空」。
+
+    floor=4000 的依据：写手槽位本身配的就是 6000~8000，仓库里「思考链模型需
+    数千 token 才有正文」是反复验证过的；这里取 4000 作场景级保守下限——场景
+    短（数百字），正文需求小，主要成本是 thinking 本身。字数大时 ×factor 自然
+    超过 floor，不受此下限影响。
+    """
+    return max(int(target_words * factor), floor)
 EDITOR_CHAIN = [
     dict(url=SENSE, model="kimi-k3", key="", temp=1.0, max_tokens=4000),           # K2 kimi 主（temp=1 硬约束）
     dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),           # K3 glm 备
@@ -1218,7 +1236,7 @@ def generate_appended_chapter(ch, ctx):
                                            facts=facts_block(registry),
                                            world_terms=ctx["review_world_terms"],
                                            style_block=ctx.get("style_block", "")),
-                              max_tokens=int(tw * 3.0))
+                              max_tokens=scene_budget(tw))
             if text.strip():
                 break
             if sretry < 2:
@@ -1644,9 +1662,14 @@ def review_outline(outline, genre, total_words, max_chapters, output_path):
     返回 (outline_used, review_dict_or_None)。"""
     print("=" * 60)
     print("[大纲终审] 写前守门：结构级评审大纲...")
+    # max_tokens=12000：与 OUTLINE_REVIEWER_CHAIN 槽位配置对齐。槽位注释明写
+    # 「思考链+修订版大纲全量 JSON 曾吃满 8000 致截断」，但此处曾硬编码 8000 覆盖
+    # 槽位的 12000（call_chain 的调用方传参优先）——即配了 12000 却一直按 8000 跑，
+    # pro 思考链吃满→正文空→退回 glm，glm 同样吃满→守门静默失效。真机
+    # （verify_effect 第 35 节）实测复现，诊断日志「实发 8000 / 槽位配 12000」。
     raw = call_chain(OUTLINE_REVIEWER_CHAIN, OUTLINE_REVIEWER_SYS,
                      outline_review_prompt(outline, genre, total_words, max_chapters),
-                     max_tokens=8000)
+                     max_tokens=12000)
     rv = parse_json_from_llm(raw)
     if not rv or not isinstance(rv, dict):
         print("  [大纲终审] LLM 评审失败/无有效 JSON，放行原大纲继续（不阻塞生成）")
@@ -2213,7 +2236,7 @@ def main():
                                                facts=facts_block(registry),
                                                world_terms=review_world_terms,
                                                style_block=STYLE_BLOCK),
-                                  max_tokens=int(tw * 3.0))
+                                  max_tokens=scene_budget(tw))
                 if text.strip():
                     break
                 if sretry < 2:
