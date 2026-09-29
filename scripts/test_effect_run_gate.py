@@ -57,6 +57,36 @@ class HealthGateTest(unittest.TestCase):
             V.health_check, V.run_book = orig_h, orig_r
         self.assertEqual(ran, [], "体检 0 通过时仍调了 run_book —— 会白烧配额")
 
+    def test_check_only_never_runs_book(self):
+        """`--check-only` 是「只体检」的承诺：即使体检全通过也**绝不能**跑书。
+
+        这条最容易被后续重构悄悄破坏——比如有人把 `if a.check_only: return`
+        挪到 run_book 之后，语法上毫无问题，但「只体检」会变成真跑一本书，
+        而这正是本脚本存在的意义所要防止的白烧配额。离线钉死。
+        """
+        import contextlib
+        import io as _io
+
+        orig_h, orig_r = V.health_check, V.run_book
+        ran = []
+        # 体检**全部通过**——比「体检失败」更严苛：只有「通过」才可能诱使代码继续往下走
+        V.health_check = lambda: ([{"model": "x", "ok": True, "chars": V.PROBE_CHARS,
+                                    "sec": 1, "note": "mock"}], 1)
+        V.run_book = lambda a: ran.append(1) or "x"
+        argv = sys.argv
+        try:
+            sys.argv = ["verify_effect_run.py", "--check-only"]
+            with contextlib.redirect_stdout(_io.StringIO()), \
+                    contextlib.redirect_stderr(_io.StringIO()):
+                try:
+                    V.main()
+                except SystemExit:
+                    pass
+        finally:
+            sys.argv = argv
+            V.health_check, V.run_book = orig_h, orig_r
+        self.assertEqual(ran, [], "--check-only 仍调了 run_book —— 「只体检」名不副实")
+
     def test_runs_when_gate_passes(self):
         """体检通过 → 才允许拉起流水线。"""
         import contextlib
