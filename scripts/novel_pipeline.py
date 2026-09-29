@@ -158,6 +158,14 @@ def scene_budget(target_words, factor=3.0, floor=4000):
     超过 floor，不受此下限影响。
     """
     return max(int(target_words * factor), floor)
+
+
+# 思考链模型（dsf/glm 系，端点忽略 enable_thinking=False）调用小任务时的
+# max_tokens 保底：任务本身正文很短（钩子/补全/续写/专名/读者官），但 thinking
+# 仍要先烧 token。2026-09-30 真机实锤：max_tokens=300 喂 glm 思考链必然「吃满→
+# 正文空」，钩子补写（追读命门）长期只能靠本地兜底撑着；=800 喂规划链同理。
+# 给一个能容纳 thinking 的下限，避免小预算调用恒空。
+THINKING_FLOOR_TOKENS = 2000
 EDITOR_CHAIN = [
     dict(url=SENSE, model="kimi-k3", key="", temp=1.0, max_tokens=4000),           # K2 kimi 主（temp=1 硬约束）
     dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),           # K3 glm 备
@@ -433,7 +441,7 @@ def apply_hook_patch(final_text, hook_hint, protagonist, genre, tag=""):
         f"请接着补写 30~80 字的钩子句（悬念/变故/威胁逼近/秘密将揭，按{genre}题材），"
         "不新增情节、不改变已发生的事，只把结尾收在悬念上。"
         "只输出补写内容本身，不要任何解释、说明或字数报告：\n\n" + final_text[-300:],
-        max_tokens=300)
+        max_tokens=THINKING_FLOOR_TOKENS)
     ok, why = patch_gate(add, base_text=final_text, genre=genre, max_words=160)
     if ok:
         print(f"  [钩子{tag}] 已补写钩子：{add.strip()[:40]}...")
@@ -1602,7 +1610,7 @@ def ensure_complete_ending(final_text, genre, max_rounds=2):
         add = call_chain(WRITER_CHAIN, SYSTEM_PROMPT,
                          f"下面是本章结尾，句子似乎没写完（可能被截断）。请接着补全 50~120 字，"
                          f"把话说完、收束本章并保持原有语气与伏笔，不要另起新情节。只输出补全内容：\n\n{final_text[-200:]}",
-                         max_tokens=400)
+                         max_tokens=THINKING_FLOOR_TOKENS)
         if add and len(add.strip()) > 10:
             final_text = final_text.rstrip() + add.strip()
             repaired = True
@@ -1967,7 +1975,7 @@ def concretize_world(outline, genre):
            f"请只把这些字段改成**自拟的具体专名与数值**（题材：{genre}），"
            "不要改动书名、主角名与章节结构。只输出 JSON 对象，键与下面完全一致：\n"
            + json.dumps({k: w[k] for k in vague}, ensure_ascii=False))
-    raw = call_chain(PLANNER_CHAIN, PLANNER_SYS, ask, max_tokens=800)
+    raw = call_chain(PLANNER_CHAIN, PLANNER_SYS, ask, max_tokens=THINKING_FLOOR_TOKENS)
     fixed = parse_json_from_llm(raw)
     if isinstance(fixed, dict):
         merged = dict(w)
@@ -2254,7 +2262,7 @@ def main():
             if w < tw * 0.4 and len(text) > 50:
                 add = call_chain(WRITER_CHAIN, SYSTEM_PROMPT,
                                  f"请续写 300 字，承接：\n{text[-100:]}\n\n只输出续写正文：",
-                                 max_tokens=600)
+                                 max_tokens=THINKING_FLOOR_TOKENS)
                 if add.strip():
                     scene_texts.append("\n\n" + add.strip())
             time.sleep(args.chapter_wait)
@@ -2649,7 +2657,8 @@ def main():
         if not args.no_reader_proxy:
             rf = llm_call(READER_PROXY,
                           "你是一位番茄小说重度读者，凭真实读感直说，只输出被要求的内容。",
-                          reader_proxy_prompt(final_text, args.genre), max_tokens=500)
+                          reader_proxy_prompt(final_text, args.genre),
+                          max_tokens=THINKING_FLOOR_TOKENS)
             if rf and rf.strip():
                 reader_hint = rf.strip()
                 append_state(args.output, "reader_feedback",

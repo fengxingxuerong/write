@@ -49,6 +49,20 @@ class PlannerChainDiversityTest(unittest.TestCase):
         self.assertEqual(sent.get("max_tokens"), 4000,
                          "调用方传的 max_tokens 未生效（应优先于槽位配置 8000）")
 
+    def test_no_small_budget_feeds_thinking_chain_models(self):
+        """思考链模型（写手/规划/读者链）不得用 <1000 的小 max_tokens 调用。
+
+        2026-09-30 真机：钩子补写 max_tokens=300 喂 glm 思考链恒空（追读命门长期
+        靠本地兜底），=800 喂规划链（世界专名具体化）同理，=400/500/600 补全/续写/
+        读者官亦然。任务正文虽短，thinking 仍要先烧 token，故一律走
+        THINKING_FLOOR_TOKENS 下限。防止新增小预算调用点重蹈覆辙。
+        """
+        self.assertGreaterEqual(np.THINKING_FLOOR_TOKENS, 2000,
+                                "思考链保底预算过低：装不下 thinking，正文仍会恒空")
+        # 场景写作的 floor 也须够 thinking（dsf/glm 场景曾 1800 恒空）
+        self.assertGreaterEqual(np.scene_budget(300), 2000,
+                                "场景预算下限过低：思考链模型场景正文会恒空")
+
     def test_planner_chain_covers_all_endpoints(self):
         urls = {s["url"] for s in np.PLANNER_CHAIN}
         self.assertIn(np.SENSE, urls)
