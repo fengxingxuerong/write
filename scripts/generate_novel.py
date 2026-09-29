@@ -888,8 +888,9 @@ def release_profile(text):
     return {"verdict": verdict, "hits": n, "first": first, "last": last}
 
 
-def payoff_drought_zones(thrill_per_k, threshold=0.5, min_run=3):
-    """外显爽点断供带（💥 通道枯竭区）：连续 >=min_run 章直白爽点低于阈值的区段。
+def payoff_drought_zones(thrill_per_k, threshold=0.5, min_run=3,
+                         side_per_k=None, side_threshold=0.3):
+    """外显爽点断供带（连续 >=min_run 章无外显兑现的区段）。
 
     背景（2026-09-29 真实成书回测，14 本 156 章）：
     既有爽点闸门一律用「双低」判定（💥<0.5 **且** ✨<1.0 才算过淡），
@@ -910,12 +911,26 @@ def payoff_drought_zones(thrill_per_k, threshold=0.5, min_run=3):
     novel_10w_pipeline / smoke_gate_v2 / verify_12roles），健康小样
     short_sample / short_sample2 零命中，无误报。
 
-    返回 [(起章位序, 止章位序, 章数)]，入参为逐章 💥 密度列表。
+    返回 [(起章位序, 止章位序, 章数)]。
+
+    **side_per_k 逃生通道（2026-09-29 真机 A/B 实测后补）**：
+    单看 💥 会**误伤写得不套话的好章节**。真机单发对照（同 goal、同写手链）拿到
+    一段教科书级当众兑现——满堂哄笑 → 全场屏息 →「几乎所有人都看清了」→ 公开
+    揭示——但 💥 命中 **0 个词**（💥=0.0），因为 THRILL_WORDS 是 96 词的**闭合
+    套话表**，不写套话的模型恰好系统性绕开它（该样本 ✨ 命中 3 个、侧反命中
+    「哗然」）。故凡侧面反响达标的章（在场者确有反应，读者可感知兑现）一律不判
+    断供。真实成书回测：该通道救回 10 章（verify_12roles 5→0、碎脉铸仙录
+    24→19），且被救回的章经人工核对确有外显反应（惊呼/脸色铁青/哗然），非漏放
+    真断供。side_per_k=None 时保持旧口径（只看 💥），旧调用零变化。
     """
     zones = []
     start = None
     for i, t in enumerate(thrill_per_k):
-        if t < threshold:
+        flat = t < threshold
+        if flat and side_per_k is not None and i < len(side_per_k):
+            # 侧面反响达标 = 在场者确有反应 = 外显兑现已送达读者，不算断供
+            flat = side_per_k[i] < side_threshold
+        if flat:
             if start is None:
                 start = i
         elif start is not None:
@@ -928,19 +943,24 @@ def payoff_drought_zones(thrill_per_k, threshold=0.5, min_run=3):
     return zones
 
 
-def payoff_drought_ev_fragment(thrill_per_k, threshold=0.5, min_run=3):
-    """评审证据串：外显爽点断供带（注入 qa_ev / 评审证据，与落点、三件套同款）。
+def payoff_drought_ev_fragment(thrill_per_k, threshold=0.5, min_run=3,
+                              side_per_k=None, side_threshold=0.3):
+    """评审证据串：外显爽点断供带（注入 qa_ev，与落点、三件套同款）。
 
     评审的「爽点与期待感」维度此前只能看到本章 💥/✨ 两个数，含蓄流章节
     单看本章并不异常（✨ 高），只有**跨章连低**才暴露断供——不给连低证据，
     评审就会把「18 章没有一次外显爽点」判成节奏紧凑（与 v7 终审 69 分同源）。
+
+    side_per_k 传入时启用侧面反响逃生通道（与 payoff_drought_zones 同口径），
+    避免把「不套话但确有在场者反应」的好章误判为断供。
     """
-    zones = payoff_drought_zones(thrill_per_k, threshold, min_run)
+    zones = payoff_drought_zones(thrill_per_k, threshold, min_run,
+                                 side_per_k, side_threshold)
     if not zones:
         return ""
     total = sum(z[2] for z in zones)
     spans = "、".join(f"第{a+1}-{b+1}章({n}章)" for a, b, n in zones[:4])
-    return (f"外显爽点断供：连续 {total} 章 💥<{threshold}/千字（{spans}）"
+    return (f"外显爽点断供：连续 {total} 章 💥<{threshold}/千字且无在场者反应（{spans}）"
             f"——含蓄异动不能替代外显兑现，此区间「期待感」维度不应高于 40 分")
 
 
@@ -1648,11 +1668,14 @@ def main():
         _surge = surge_per_thousand(full_text)
         _drought_n = _np.trailing_drought_len(
             [thrill_per_thousand(c["content"], args.genre)
+             for c in state.get("chapters", [])],
+            [side_reaction_per_thousand(c["content"])
              for c in state.get("chapters", [])])
         if _np.needs_payoff_repair(
                 _thrill, _surge,
                 min_words_ok=w >= target * 0.5,
-                drought_len=_drought_n):
+                drought_len=_drought_n,
+                side=side_reaction_per_thousand(full_text)):
             _why = (f"跨章断供 {_drought_n} 章" if _drought_n >= 3 else "单章双低")
             print(f"  [情绪] 本章无外显爽点（{_why}），触发一轮情绪强化定点修...")
             fix = call_llm(base_url_raw, args.model, SYSTEM_PROMPT,

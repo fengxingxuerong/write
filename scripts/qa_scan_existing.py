@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generate_novel import (has_ending_hook, has_quick_opening, count_words,
                             thrill_per_thousand, surge_per_thousand, AI_CLICHE,
                             deep_ai_metrics, release_profile, ending_triad,
+                            side_reaction_per_thousand,
                             payoff_drought_zones)
 
 
@@ -259,7 +260,9 @@ def print_signability_report(rows, chapters, genre=""):
             flags.append(f"存在 {zones} 处节奏塌陷区")
         # 外显爽点断供：与塌陷区互补——塌陷区要求 ✨ 也低，本项只要求 💥 连低，
         # 因此能抓住「✨ 恒高把 💥 断供掩盖」的含蓄流（真实成书 6/14 本命中）。
-        d_zones = payoff_drought_zones([r["thrill_per_k"] for r in rows])
+        d_zones = payoff_drought_zones(
+            [r["thrill_per_k"] for r in rows],
+            side_per_k=[r.get("side_per_k", 0.0) for r in rows])
         if d_zones:
             d_ch = sum(z[2] for z in d_zones)
             flags.append(f"外显爽点断供（连续 3 章以上无 💥 外显爽点，"
@@ -371,6 +374,7 @@ def main():
             "hook": hook, "opening": opening,
             "ai_echo_pct": echo, "thrill_per_k": thrill,
             "surge_per_k": surge_per_thousand(content, args.genre),
+            "side_per_k": side_reaction_per_thousand(content),
             # 压抑释放结构（爽点落点）：late_start/front_loaded 为异常
             "release": release_profile(content)["verdict"],
             # 章末三件套收尾（规则20）：非空串 = 命中词
@@ -379,7 +383,9 @@ def main():
 
     if args.json:
         import json
-        _dzones = payoff_drought_zones([r["thrill_per_k"] for r in rows])
+        _dzones = payoff_drought_zones(
+            [r["thrill_per_k"] for r in rows],
+            side_per_k=[r.get("side_per_k", 0.0) for r in rows])
         print(json.dumps({
             "file": args.novel_txt,
             "chapters": rows,
@@ -503,14 +509,20 @@ def _print_thrill_curve(rows):
     print()
 
 
-def _print_payoff_drought(rows, threshold=0.5, min_run=3):
-    """打印外显爽点断供带（💥 通道连低），与 _print_collapse_zones 互补。
+def _print_payoff_drought(rows, threshold=0.5, min_run=3, side_threshold=0.3):
+    """打印外显爽点断供带（💥 连低且无在场者反应），与 _print_collapse_zones 互补。
 
     塌陷区判「双通道皆枯」，本项专判「✨ 含蓄流把 💥 外显断供掩盖」——
     这是 2026-09-29 真实成书回测暴露的主要盲区（规则层看不见，LLM 终审看得见）。
+
+    侧面反响逃生通道（真机 A/B 后补）：某章 💥 低但在场者反应达标时，
+    外显兑现其实已送达读者（真机实测有满堂哄笑/全场屏息却 💥=0 的样本），
+    不判断供——否则会误伤「不写套话的好稿」。
     """
     zones = payoff_drought_zones([r["thrill_per_k"] for r in rows],
-                                 threshold, min_run)
+                                 threshold, min_run,
+                                 [r.get("side_per_k", 0.0) for r in rows],
+                                 side_threshold)
     if not zones:
         print(f"\n【外显爽点】无连续 {min_run} 章以上的 💥 断供带 ✅")
         return zones

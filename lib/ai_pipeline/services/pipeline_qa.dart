@@ -368,17 +368,30 @@ class PipelineQa {
   /// 专抓「✨ 含蓄流把 💥 断供掩盖」。故入参只有逐章 💥 密度，不看 ✨。
   ///
   /// 阈值标定（minRun=3）：1~2 章连低属正常节奏起伏（6/14 本书出现且质量正常），
-  /// >=3 章才判断供带；实测命中 6/14 本，健康小样零命中，无误报。
+  /// >=3 章才判断供带；健康小样零命中，无误报。
+  ///
+  /// [sidePerK] 逃生通道（2026-09-29 真机 A/B 实测后补，与 Python 同口径）：
+  /// 只看 💥 会误伤「不写套话的好章节」——真机单发拿到一段教科书级当众兑现
+  /// （满堂哄笑 → 全场屏息 → 众目睽睽 → 公开揭示），💥 命中 0 词（=0.0），
+  /// 因 THRILL_WORDS 是 96 词闭合套话表，而不套话的模型恰好系统性绕开它。
+  /// 故凡侧面反响达标（在场者确有反应）的章一律不判断供。传 null 保持旧口径。
   static List<({int start, int end, int chapters})> payoffDroughtZones(
     List<double> thrillPerK, {
     double threshold = 0.5,
     int minRun = 3,
+    List<double>? sidePerK,
+    double sideThreshold = 0.3,
   }) {
     final List<({int start, int end, int chapters})> zones =
         <({int start, int end, int chapters})>[];
     int? start;
     for (int i = 0; i < thrillPerK.length; i++) {
-      if (thrillPerK[i] < threshold) {
+      bool flat = thrillPerK[i] < threshold;
+      if (flat && sidePerK != null && i < sidePerK.length) {
+        // 侧面反响达标 = 在场者确有反应 = 外显兑现已送达读者，不算断供
+        flat = sidePerK[i] < sideThreshold;
+      }
+      if (flat) {
         start ??= i;
       } else if (start != null) {
         if (i - start >= minRun) {
@@ -407,9 +420,15 @@ class PipelineQa {
     List<double> thrillPerK, {
     double threshold = 0.5,
     int minRun = 3,
+    List<double>? sidePerK,
+    double sideThreshold = 0.3,
   }) {
     final List<({int start, int end, int chapters})> zones =
-        payoffDroughtZones(thrillPerK, threshold: threshold, minRun: minRun);
+        payoffDroughtZones(thrillPerK,
+            threshold: threshold,
+            minRun: minRun,
+            sidePerK: sidePerK,
+            sideThreshold: sideThreshold);
     if (zones.isEmpty) return '';
     final int total =
         zones.fold<int>(0, (int s, ({int end, int start, int chapters}) z) =>
@@ -419,7 +438,7 @@ class PipelineQa {
         .map((({int chapters, int end, int start}) z) =>
             '第${z.start + 1}-${z.end + 1}章(${z.chapters}章)')
         .join('、');
-    return '外显爽点断供：连续 $total 章 💥<$threshold/千字（$spans）'
+    return '外显爽点断供：连续 $total 章 💥<$threshold/千字且无在场者反应（$spans）'
         '——含蓄异动不能替代外显兑现，此区间「期待感」维度不应高于 40 分';
   }
 

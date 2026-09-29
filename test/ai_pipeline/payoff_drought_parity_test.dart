@@ -6,14 +6,14 @@ import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 /// Dart 与 Python 双端「外显爽点断供带」判定一致性（防标准漂移）。
 ///
 /// 基线由 `tool/_py_drift.py` 之类脚本从真实成书 jsonl 算出后写入
-/// `verify-logs/py_drought.json`；本测试用 Dart 同口径重算并逐书比对。
+/// `verify-logs/py_drought2.json`；本测试用 Dart 同口径重算并逐书比对。
 /// 基线缺失时跳过（保持 CI 不依赖本地 verify-logs 产物）。
 void main() {
   test('Dart 与 Python 断供带判定逐书一致（无双端漂移）', () {
-    final File f = File('verify-logs/py_drought.json');
+    final File f = File('verify-logs/py_drought2.json');
     if (!f.existsSync()) {
       // ignore: avoid_print
-      print('SKIP: 基线 verify-logs/py_drought.json 不存在');
+      print('SKIP: 基线 verify-logs/py_drought2.json 不存在');
       return;
     }
     final Map<String, dynamic> py =
@@ -45,9 +45,13 @@ void main() {
       final List<double> t = <double>[
         for (final (int, String) c in chs) PipelineQa.thrillPerThousand(c.$2),
       ];
+      final List<double> sd = <double>[
+        for (final (int, String) c in chs)
+          PipelineQa.sideReactionPerThousand(c.$2),
+      ];
       if (t.length < 3) continue;
       final List<({int start, int end, int chapters})> z =
-          PipelineQa.payoffDroughtZones(t);
+          PipelineQa.payoffDroughtZones(t, sidePerK: sd);
       dart[j.uri.pathSegments.last.replaceAll('.jsonl', '')] = <String, dynamic>{
         'n': t.length,
         'zones': z

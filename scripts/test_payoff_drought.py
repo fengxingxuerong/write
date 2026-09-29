@@ -233,6 +233,83 @@ class PayoffRepairAcceptTest(unittest.TestCase):
         self.assertIn("未补上外显爽点", why)
 
 
+class PayoffDroughtSideEscapeTest(unittest.TestCase):
+    """侧面反响逃生通道（2026-09-29 真机 A/B 实测后补）。
+
+    真机单发拿到一段教科书级当众兑现（满堂哄笑 → 全场屏息 → 众目睽睽 →
+    公开揭示），💥 命中 **0 词**——THRILL_WORDS 是 96 词闭合套话表，不套话的
+    模型恰好系统性绕开它。只看 💥 会把这种好稿误判为断供。
+    """
+
+    def test_zone_flagged_without_side_series(self):
+        from generate_novel import payoff_drought_zones
+        # 旧口径：只看 💥 → 判为断供
+        self.assertEqual(payoff_drought_zones([0.0, 0.0, 0.0]), [(0, 2, 3)])
+
+    def test_side_reaction_rescues_good_chapters(self):
+        from generate_novel import payoff_drought_zones
+        # 传了侧反序列且逐章达标 → 不判断供（真机样本 side=0.79）
+        self.assertEqual(
+            payoff_drought_zones([0.0, 0.0, 0.0],
+                                 side_per_k=[0.79, 0.8, 0.75]), [])
+
+    def test_side_reaction_partial_rescue_breaks_zone(self):
+        from generate_novel import payoff_drought_zones
+        # 中间一章侧反达标 → 连低被打断，不成带
+        self.assertEqual(
+            payoff_drought_zones([0.0, 0.0, 0.0, 0.0],
+                                 side_per_k=[0.0, 0.8, 0.0, 0.0]), [])
+
+    def test_genuine_drought_still_flagged(self):
+        from generate_novel import payoff_drought_zones
+        # 真实断供章侧反也是 0（碎脉铸仙录第 15-20 章实测 side=0.0）→ 仍判带
+        self.assertEqual(
+            payoff_drought_zones([0.0, 0.0, 0.0],
+                                 side_per_k=[0.0, 0.1, 0.0]), [(0, 2, 3)])
+
+    def test_side_series_shorter_than_thrill_is_safe(self):
+        from generate_novel import payoff_drought_zones
+        # 侧反序列长度不足时按缺省 0 处理，不得抛异常
+        self.assertEqual(
+            payoff_drought_zones([0.0, 0.0, 0.0], side_per_k=[0.9]), [])
+
+    def test_ev_fragment_passes_side_through(self):
+        from generate_novel import payoff_drought_ev_fragment
+        self.assertEqual(
+            payoff_drought_ev_fragment([0.0, 0.0, 0.0],
+                                       side_per_k=[0.8, 0.8, 0.8]), "")
+        ev = payoff_drought_ev_fragment([0.0, 0.0, 0.0],
+                                        side_per_k=[0.0, 0.0, 0.0])
+        self.assertIn("外显爽点断供", ev)
+        self.assertIn("无在场者反应", ev)
+
+    def test_repair_gate_skips_chapters_with_side_reaction(self):
+        """补修触发同样要跳过：否则白烧一次 LLM 调用去「修」一个好章节。"""
+        import novel_pipeline as np
+        # 断供带内、💥 低，但侧反达标 → 不修
+        self.assertFalse(
+            np.needs_payoff_repair(0.0, 2.4, drought_len=5, side=0.79))
+        # 侧反为 0（未传/真断供）→ 照旧触发
+        self.assertTrue(
+            np.needs_payoff_repair(0.0, 2.4, drought_len=5, side=0.0))
+
+    def test_trailing_drought_len_respects_side_escape(self):
+        import novel_pipeline as np
+        self.assertEqual(np.trailing_drought_len([0.1, 0.1, 0.1]), 3)
+        # 末章侧反达标 → 断供计数归零
+        self.assertEqual(
+            np.trailing_drought_len([0.1, 0.1, 0.1], [0.0, 0.0, 0.8]), 0)
+
+    def test_accept_allows_side_only_gain(self):
+        """采纳闸：只涨 ✨ 不算修好，但**涨了侧反**算（外显兑现已送达）。"""
+        import novel_pipeline as np
+        orig = "他推开门。屋里空无一人。" * 60
+        # 满堂哗然 + 惊呼：侧反应达标，💥 仍 0
+        good = "满堂哗然，众人惊呼，他推开门。" * 60
+        ok, why = np.accept_payoff_repair(orig, good)
+        self.assertTrue(ok, why)
+
+
 class PayoffDroughtEvFragmentTest(unittest.TestCase):
     """payoff_drought_ev_fragment：评审证据串。"""
 

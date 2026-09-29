@@ -422,23 +422,31 @@ def dedup_chapter(final_text, idx):
     return clean
 
 
-def trailing_drought_len(thrill_per_k, threshold=0.5):
-    """末尾连续 💥<threshold 的章数（不含当前章，用于判断「已断供多久」）。
+def trailing_drought_len(thrill_per_k, side_per_k=None, threshold=0.5,
+                         side_threshold=0.3):
+    """末尾连续「无外显兑现」的章数（不含当前章，判断「已断供多久」）。
 
     传入**已完成的**前序章序列，返回当前章之前处于断供中的连续长度：
-    0 表示上一章有外显爽点（未断供），>=3 表示已连着 3 章以上没有。
+    0 表示上一章有外显兑现（未断供），>=3 表示已连着 3 章以上没有。
+
+    side_per_k 传入时启用侧面反响逃生通道（与 payoff_drought_zones 同口径）：
+    某章 💥 低但在场者反应达标 = 外显兑现其实已送达，不计断供。
     """
-    n = 0
-    for t in reversed(thrill_per_k or []):
-        if t < threshold:
-            n += 1
-        else:
+    n = len(thrill_per_k or [])
+    k = 0
+    for i in range(n - 1, -1, -1):
+        flat = thrill_per_k[i] < threshold
+        if flat and side_per_k is not None and i < len(side_per_k):
+            flat = side_per_k[i] < side_threshold
+        if not flat:
             break
-    return n
+        k += 1
+    return k
 
 
 def needs_payoff_repair(thrill, surge, min_words_ok=True, drought_len=0,
-                        threshold=0.5, surge_ok=1.0, drought_min_run=3):
+                        threshold=0.5, surge_ok=1.0, drought_min_run=3,
+                        side=0.0, side_ok=0.3):
     """本章是否需要「外显爽点」情绪强化修（单章口径 + 跨章断供口径取或）。
 
     旧口径只有「双低」（thrill<0.5 **且** surge<1.0），实测 14 本成书 116 章里
@@ -453,8 +461,16 @@ def needs_payoff_repair(thrill, surge, min_words_ok=True, drought_len=0,
        drought_len=0（未传历史）时本通道自动关闭，行为与旧版完全一致。
 
     min_words_ok 由调用方传字数下限判定（过短章不修：没内容可强化）。
+
+    **side 逃生通道（2026-09-29 真机 A/B 后补）**：若在场者已有明确外部反应
+    （侧面反响达标），说明外显兑现其实**已经送达读者**，只是没用 💥 词表里的
+    套话词——真机实测确有此类样本（满堂哄笑/全场屏息/众目睽睽，💥=0.0）。
+    此时再送修纯属白烧一次 LLM 调用，故直接跳过。side=0.0（未传）时该通道关闭，
+    行为与旧版完全一致。
     """
     if not min_words_ok:
+        return False
+    if side >= side_ok:
         return False
     if thrill < threshold and surge < surge_ok:
         return True
@@ -489,7 +505,7 @@ def payoff_repair_prompt(full_text, registry="", facts="", drought_len=0):
 
 
 def accept_payoff_repair(original, fix, registry="", min_ratio=0.7, max_ratio=1.6,
-                        threshold=0.5):
+                        threshold=0.5, side_ok=0.3):
     """情绪强化稿采纳判定：字数在区间 + 户籍完整 + 💥 真的提升（绝不劣化原文）。
 
     沿用 `generate_novel` 情绪闸门的三项验收（字数/户籍/指标不劣化），
@@ -513,14 +529,23 @@ def accept_payoff_repair(original, fix, registry="", min_ratio=0.7, max_ratio=1.
     f_t = thrill_per_thousand(fix or "")
     o_s = surge_per_thousand(original or "")
     f_s = surge_per_thousand(fix or "")
-    if f_t <= o_t and f_s <= o_s:
-        return False, f"未提升（💥{o_t}->{f_t}｜✨{o_s}->{f_s}）"
-    # 补修的目的是补外显爽点：若 💥 仍低于阈值，则**只涨了 ✨ 不算数**——
-    # 那是把「含蓄异动」当外显兑现，正是断供的成因本身，必须拒绝采纳。
-    if f_t < threshold:
-        return False, (f"未补上外显爽点（💥{f_t}<{threshold}，"
+    o_side = side_reaction_per_thousand(original or "")
+    f_side = side_reaction_per_thousand(fix or "")
+    # 判定顺序要紧：**先把「侧反达标」记为有效提升**，再看「是否整体没动」。
+    # 否则只涨侧反（💥/✨ 都没动）的稿会在下面的「未提升」被提前拒掉——
+    # 这正是真机实测的好稿形态（不套话、只有在场者反应）。
+    side_ok_gain = f_side >= side_ok and f_side > o_side
+    if not side_ok_gain and f_t <= o_t and f_s <= o_s:
+        return False, (f"未提升（💥{o_t}->{f_t}｜✨{o_s}->{f_s}"
+                       f"｜侧反{o_side}->{f_side}）")
+    # 补修的目的是让读者看见外显兑现：💥 仍低于阈值时，**只涨 ✨ 不算数**
+    # （那是把「含蓄异动」当外显兑现，正是断供的成因本身）；但若**侧面反响
+    # 涨到达标**（在场者确有反应，如惊呼/哗然/脸色铁青），那外显兑现同样成立
+    # ——真机实测确有此类不套话的好稿，💥 词表天然抓不到。
+    if f_t < threshold and not side_ok_gain:
+        return False, (f"未补上外显爽点（💥{f_t}<{threshold}、侧反{f_side}<{side_ok}，"
                        f"仅 ✨{o_s}->{f_s} 不算修好）")
-    return True, f"💥{o_t}->{f_t}｜✨{o_s}->{f_s}｜{f_w}字"
+    return True, f"💥{o_t}->{f_t}｜✨{o_s}->{f_s}｜侧反{f_side}｜{f_w}字"
 
 
 def needs_fix(rv, review_pass):
@@ -2255,7 +2280,10 @@ def main():
                 # 处方会一直说「节奏紧凑」——补一份跨章连低事实。
                 _all_thrill = [thrill_per_thousand(c["content"], args.genre)
                                for c in state["chapters"]]
-                _drought = payoff_drought_ev_fragment(_all_thrill)
+                _all_side = [side_reaction_per_thousand(c["content"])
+                             for c in state["chapters"]]
+                _drought = payoff_drought_ev_fragment(_all_thrill,
+                                                      side_per_k=_all_side)
                 _drought_line = (f"\n【外显爽点断供事实】{_drought}\n"
                                  if _drought else
                                  "\n【外显爽点断供事实】无连续 3 章以上断供 ✅\n")
@@ -2279,7 +2307,9 @@ def main():
             # 外显爽点断供：跨章 💥 连低证据（单章看不出，必须带历史窗口）
             _drought_ev = payoff_drought_ev_fragment(
                 [thrill_per_thousand(c["content"], args.genre)
-                 for c in state["chapters"]])
+                 for c in state["chapters"]],
+                side_per_k=[side_reaction_per_thousand(c["content"])
+                            for c in state["chapters"]])
             qa_ev = (f"章末钩子检测：{'命中 ✅' if has_ending_hook(final_text) else '未命中 ❌（hook 维度不应高于 40 分）'}；"
                      f"直白爽点 {thrill_per_thousand(final_text, args.genre)}/千字；"
                      f"变强异动 {surge_per_thousand(final_text, args.genre)}/千字；"
@@ -2404,14 +2434,17 @@ def main():
         #       （字数区间 + 户籍完整 + 💥 真的补上），任一不过即保留原文。
         _prev_thrill = [thrill_per_thousand(c["content"], args.genre)
                         for c in state["chapters"]]
-        _drought_n = trailing_drought_len(_prev_thrill)
+        _prev_side = [side_reaction_per_thousand(c["content"])
+                      for c in state["chapters"]]
+        _drought_n = trailing_drought_len(_prev_thrill, _prev_side)
         _th_now = thrill_per_thousand(final_text, args.genre)
         _sg_now = surge_per_thousand(final_text, args.genre)
         if final_text.strip() and needs_payoff_repair(
                 _th_now, _sg_now,
                 min_words_ok=count_words(final_text) >= max(
                     500, int(target * 0.5)),
-                drought_len=_drought_n):
+                drought_len=_drought_n,
+                side=side_reaction_per_thousand(final_text)):
             why = (f"跨章断供 {_drought_n} 章" if _drought_n >= 3
                    else "单章双低")
             print(f"  [爽点补修] {why}（💥{_th_now}/✨{_sg_now}），触发情绪强化…")
