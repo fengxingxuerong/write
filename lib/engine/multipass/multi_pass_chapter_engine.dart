@@ -77,6 +77,7 @@ class MultiPassChapterEngine {
         ctx: ctx,
         prevSummary: prevSummary,
         sceneIndex: i,
+        sceneCount: scenes.length,
         cancelToken: cancelToken,
       );
       final String sceneText = sceneResult.text;
@@ -125,6 +126,7 @@ class MultiPassChapterEngine {
     required ContextBundle ctx,
     required String prevSummary,
     required int sceneIndex,
+    required int sceneCount,
     CancelToken? cancelToken,
   }) async {
     final String prompt = _buildScenePrompt(
@@ -133,6 +135,7 @@ class MultiPassChapterEngine {
       ctx: ctx,
       prevSummary: prevSummary,
       sceneIndex: sceneIndex,
+      sceneCount: sceneCount,
     );
     // 复用引擎实例（连接池化 + 重试时保持连接）。
     // chatRetry 关闭客户端层重试：本层 RetryPolicy 已负责退避，
@@ -194,17 +197,52 @@ class MultiPassChapterEngine {
   /// 基础退避毫秒（2s → 4s → 8s 指数增长）。
   static const int _baseBackoffMs = 2000;
 
+  /// 外显爽点场景的识别键：规划层 goal 里出现任一即视为爽点场景。
+  static const List<String> payoffSceneKeys = <String>[
+    '外显爽点', '打脸', '当众',
+  ];
+
+  /// 本场景是否承担「外显爽点」职责（关键词 **或** 位置双通道判定）。
+  ///
+  /// 与 Python `novel_pipeline.is_payoff_scene` 同口径。为什么不能只靠关键词：
+  /// 规划 prompt 把 goal 限死「20字内」，模型倾向写「局势逆转，危机爆发」这类
+  /// 不含爽点词的文案（实测 14 本成书 108 章里仅 16 章 goal 含爽点键），
+  /// 关键词通道因此几乎不可用；规划失败走 [SceneBuilder] 的兜底骨架时更是
+  /// 必然不命中。位置通道利用「爽点放章内后半段 + 起承转合」的既有结构事实
+  /// 兜底，使「每章至少一个外显爽点场景」不再依赖模型是否恰好用了那三个词。
+  static bool isPayoffScene(String goal, String stage, int index, int total) {
+    for (final String k in payoffSceneKeys) {
+      if (goal.contains(k)) return true;
+    }
+    if (total <= 0) return false;
+    // 后半段（进度 >= 55%）且 stage 为「转」——起承转合的第三拍
+    return stage == '转' && (index + 1) / total >= 0.55;
+  }
+
+  /// 写手「外显爽点」硬约束文案（与 Python `payoff_scene_constraint` 同文）。
+  static const String payoffSceneConstraint =
+      '【本场景硬约束·外显爽点】这是外显爽点场景：必须写出对手/旁观者的'
+      '当众外部反应（脸色骤变、失态、惊呼、修为显化、围观哗然），'
+      '禁止只写主角内心感受或含蓄暗示。';
+
   String _buildScenePrompt({
     required ScenePlan scene,
     required GenerationConfig chapterConfig,
     required ContextBundle ctx,
     required String prevSummary,
     required int sceneIndex,
+    required int sceneCount,
   }) {
     final StringBuffer b = StringBuffer();
     b.writeln('这是本章第 ${sceneIndex + 1} 个场景（${scene.stage}）。');
     b.writeln('本场景目标字数：${scene.targetWords} 字。');
     b.writeln('本场景任务：${scene.goal}');
+    // 外显爽点硬约束：关键词命中 **或** 位置兜底（后半段「转」）时强制注入。
+    // 与 Python `novel_pipeline` 两处写手调用点同口径——此前本文件完全没有
+    // 这道约束，桌面端写手收不到「必须写外部可见反应」的要求。
+    if (isPayoffScene(scene.goal, scene.stage, sceneIndex, sceneCount)) {
+      b.writeln(payoffSceneConstraint);
+    }
     if (scene.beats.isNotEmpty) {
       b.writeln('必须完成的节拍：${scene.beats.join(' → ')}');
     }

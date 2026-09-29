@@ -16,7 +16,9 @@ import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 /// _openingStrong / _openingWeak / thrillWords / powerSurgeWords / sideReactionWords /
 /// _aiAdverbs / _sentenceConnectors / _bodyReactionWords / worldKeywords）与
 /// deepAiMetrics 统计阈值（含句式指纹三项 styleFpLimits），
-/// releaseProfile 落点判定（n>=2 适用线 + 0.6/0.5 阈值），
+/// releaseProfile 落点判定（n>=2 适用线 + 0.6/0.5 阈值）、
+/// payoffDroughtZones/payoffDroughtEvFragment 外显爽点断供带（只看 💥 连低、
+/// 0.5 阈值 + minRun=3，定义在 `scripts/generate_novel.py`），
 /// endingTriad/endingEvFragment 三件套收尾（末 60 字窗口 + TRIAD_END_WORDS
 /// 词表 + TRIAD_HOOK_ONLY 降级，定义在 `scripts/fanqie_review.py`），与
 /// `scripts/generate_novel.py` 的对应常量（HOOK_WORDS /
@@ -351,6 +353,74 @@ class PipelineQa {
       verdict = 'ok';
     }
     return (verdict: verdict, hits: hits, first: first, last: last);
+  }
+
+  /// 外显爽点断供带（💥 通道枯竭区）：连续 >=[minRun] 章直白爽点低于 [threshold]。
+  ///
+  /// 背景（与 Python `payoff_drought_zones` 同口径，2026-09-29 真实成书回测）：
+  /// 既有爽点闸门一律用「双低」判定（💥<0.5 **且** ✨<1.0 才算过淡），
+  /// 本意是放过「含蓄变强流」，但实测 💥 通道**全书性枯竭**——14 本真实成书
+  /// 💥 中位数仅 0.18~0.79/千字（参考线 1.5 合格 / 1.0 及格），而 ✨ 稳定在
+  /// ~2.2/千字，✨ 恒高分让「双低」几乎永不成立，于是「外显爽点长期断供」
+  /// 这一追读杀手没有任何检测器看得见（规则层漏检、LLM 终审看得见）。
+  ///
+  /// 与「双低塌陷区」互补不重叠：那个判「两通道皆枯」，这个只看 💥 连低，
+  /// 专抓「✨ 含蓄流把 💥 断供掩盖」。故入参只有逐章 💥 密度，不看 ✨。
+  ///
+  /// 阈值标定（minRun=3）：1~2 章连低属正常节奏起伏（6/14 本书出现且质量正常），
+  /// >=3 章才判断供带；实测命中 6/14 本，健康小样零命中，无误报。
+  static List<({int start, int end, int chapters})> payoffDroughtZones(
+    List<double> thrillPerK, {
+    double threshold = 0.5,
+    int minRun = 3,
+  }) {
+    final List<({int start, int end, int chapters})> zones =
+        <({int start, int end, int chapters})>[];
+    int? start;
+    for (int i = 0; i < thrillPerK.length; i++) {
+      if (thrillPerK[i] < threshold) {
+        start ??= i;
+      } else if (start != null) {
+        if (i - start >= minRun) {
+          zones.add((start: start, end: i - 1, chapters: i - start));
+        }
+        start = null;
+      }
+    }
+    if (start != null && thrillPerK.length - start >= minRun) {
+      zones.add((
+        start: start,
+        end: thrillPerK.length - 1,
+        chapters: thrillPerK.length - start,
+      ));
+    }
+    return zones;
+  }
+
+  /// 评审证据串：外显爽点断供带（注入 qaEvidence，与 Python
+  /// `payoff_drought_ev_fragment` 同文）。
+  ///
+  /// 评审的「爽点与期待感」维度此前只看本章 💥/✨ 两个数，含蓄流单章并不异常
+  /// （✨ 高），只有**跨章连低**才暴露断供——不给连低证据，评审会把
+  /// 「十几章没有一次外显爽点」判成节奏紧凑。
+  static String payoffDroughtEvFragment(
+    List<double> thrillPerK, {
+    double threshold = 0.5,
+    int minRun = 3,
+  }) {
+    final List<({int start, int end, int chapters})> zones =
+        payoffDroughtZones(thrillPerK, threshold: threshold, minRun: minRun);
+    if (zones.isEmpty) return '';
+    final int total =
+        zones.fold<int>(0, (int s, ({int end, int start, int chapters}) z) =>
+            s + z.chapters);
+    final String spans = zones
+        .take(4)
+        .map((({int chapters, int end, int start}) z) =>
+            '第${z.start + 1}-${z.end + 1}章(${z.chapters}章)')
+        .join('、');
+    return '外显爽点断供：连续 $total 章 💥<$threshold/千字（$spans）'
+        '——含蓄异动不能替代外显兑现，此区间「期待感」维度不应高于 40 分';
   }
 
   /// 评审证据串：爽点落点（注入 qualityReviewPrompt 的 qaEvidence，

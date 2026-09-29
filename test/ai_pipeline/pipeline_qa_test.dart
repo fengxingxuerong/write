@@ -294,7 +294,7 @@ void main() {
 
     test('单点命中 → single（单点无结构，密度指标负责）', () {
       final ({String verdict, int hits, double first, double last}) p =
-          PipelineQa.releaseProfile(filler * 180 + '顿悟。' + filler * 10);
+          PipelineQa.releaseProfile('${filler * 180}顿悟。${filler * 10}');
       expect(p.verdict, 'single');
       expect(p.hits, 1);
     });
@@ -302,7 +302,7 @@ void main() {
     test('全部爽点在前半段 → front_loaded', () {
       final ({String verdict, int hits, double first, double last}) p =
           PipelineQa.releaseProfile(
-              '顿悟。' + filler * 60 + '识破。' + filler * 150);
+              '顿悟。${filler * 60}识破。${filler * 150}');
       expect(p.verdict, 'front_loaded');
       expect(p.hits, 2);
       expect(p.last, lessThan(0.5));
@@ -311,7 +311,7 @@ void main() {
     test('首个爽点晚于 60% → late_start', () {
       final ({String verdict, int hits, double first, double last}) p =
           PipelineQa.releaseProfile(
-              filler * 160 + '顿悟。' + filler * 40 + '识破。');
+              '${filler * 160}顿悟。${filler * 40}识破。');
       expect(p.verdict, 'late_start');
       expect(p.first, greaterThan(0.6));
     });
@@ -319,7 +319,7 @@ void main() {
     test('爽点跨越后半段 → ok', () {
       final ({String verdict, int hits, double first, double last}) p =
           PipelineQa.releaseProfile(
-              filler * 70 + '顿悟。' + filler * 60 + '识破。' + filler * 60);
+              '${filler * 70}顿悟。${filler * 60}识破。${filler * 60}');
       expect(p.verdict, 'ok');
       expect(p.first, lessThanOrEqualTo(0.6));
       expect(p.last, greaterThanOrEqualTo(0.5));
@@ -327,13 +327,12 @@ void main() {
 
     test('评审证据串：异常档带 rhythm 限分，正常档带 ✅（与 Python 同文）', () {
       final String ok =
-          filler * 70 + '顿悟。' + filler * 60 + '识破。' + filler * 60;
+          '${filler * 70}顿悟。${filler * 60}识破。${filler * 60}';
       expect(PipelineQa.releaseEvFragment(ok), contains('结构正常'));
-      final String late = filler * 160 + '顿悟。' + filler * 40 + '识破。';
+      final String late = '${filler * 160}顿悟。${filler * 40}识破。';
       expect(PipelineQa.releaseEvFragment(late),
           contains('rhythm 维度不应高于 60'));
-      final String front =
-          '顿悟。' + filler * 60 + '识破。' + filler * 150;
+      final String front = '顿悟。${filler * 60}识破。${filler * 150}';
       expect(PipelineQa.releaseEvFragment(front), contains('前置泄洪'));
       expect(PipelineQa.releaseEvFragment(filler * 200),
           contains('落点不适用'));
@@ -413,6 +412,95 @@ void main() {
           PipelineQa.repetitionAndRhythm('');
       expect(rr.repetition, 0.0);
       expect(rr.rhythm, 0.0);
+    });
+  });
+
+  group('PipelineQa.payoffDroughtZones', () {
+    // 与 Python `payoff_drought_zones` 同口径同阈值：只判 💥 连低（不看 ✨），
+    // 抓「含蓄异动把外显爽点断供掩盖」——既有「双低」闸门对此结构性漏检
+    // （真实成书 14 本里 ✨ 恒高 ~2.2/千字，双低几乎永不成立）。
+    test('全书有外显爽点则无断供带', () {
+      expect(PipelineQa.payoffDroughtZones(<double>[0.67, 0.79, 0.60]),
+          isEmpty);
+    });
+
+    test('连续 2 章不算断供（正常节奏起伏，不误报）', () {
+      expect(
+          PipelineQa.payoffDroughtZones(
+              <double>[0.2, 0.3, 0.9, 0.2, 0.25]),
+          isEmpty);
+    });
+
+    test('连续 3 章判为断供带', () {
+      final List<({int start, int end, int chapters})> z =
+          PipelineQa.payoffDroughtZones(<double>[0.9, 0.2, 0.3, 0.4, 0.9]);
+      expect(z.length, 1);
+      expect(z.first.start, 1);
+      expect(z.first.end, 3);
+      expect(z.first.chapters, 3);
+    });
+
+    test('多段断供 + 末尾连低收口', () {
+      final List<({int start, int end, int chapters})> z =
+          PipelineQa.payoffDroughtZones(
+              <double>[0.2, 0.2, 0.2, 1.2, 0.1, 0.1, 0.1, 0.1]);
+      expect(z.length, 2);
+      expect(z[0].chapters, 3);
+      expect(z[1].start, 4);
+      expect(z[1].chapters, 4);
+    });
+
+    test('阈值边界：等于 0.5 不算低', () {
+      expect(PipelineQa.payoffDroughtZones(<double>[0.5, 0.5, 0.5]), isEmpty);
+      expect(PipelineQa.payoffDroughtZones(<double>[0.49, 0.49, 0.49]).length,
+          1);
+    });
+
+    test('minRun 可调 + 空/短输入安全', () {
+      expect(PipelineQa.payoffDroughtZones(<double>[0.1, 0.1], minRun: 3),
+          isEmpty);
+      expect(PipelineQa.payoffDroughtZones(<double>[0.1, 0.1], minRun: 2).length,
+          1);
+      expect(PipelineQa.payoffDroughtZones(<double>[]), isEmpty);
+      expect(PipelineQa.payoffDroughtZones(<double>[0.1]), isEmpty);
+    });
+
+    test('长跑断供形态可检出（真实成书 33 章 18 章连低）', () {
+      final List<double> series = <double>[
+        1.2,
+        ...List<double>.filled(5, 0.2),
+        ...List<double>.filled(5, 1.2),
+        ...List<double>.filled(14, 0.2),
+        ...List<double>.filled(3, 1.2),
+        ...List<double>.filled(4, 0.2),
+        1.2,
+      ];
+      final List<({int start, int end, int chapters})> z =
+          PipelineQa.payoffDroughtZones(series);
+      expect(z, isNotEmpty);
+      final int inZone =
+          z.fold<int>(0, (int s, ({int chapters, int end, int start}) v) =>
+              s + v.chapters);
+      expect(inZone / series.length, greaterThan(0.5));
+    });
+  });
+
+  group('PipelineQa.payoffDroughtEvFragment', () {
+    test('无断供带返回空串（不污染评审证据）', () {
+      expect(PipelineQa.payoffDroughtEvFragment(<double>[1.0, 1.2, 0.9]),
+          isEmpty);
+    });
+
+    test('含断供带时给出章数、区间与判档指引', () {
+      final String ev =
+          PipelineQa.payoffDroughtEvFragment(<double>[0.2, 0.2, 0.2, 0.2]);
+      expect(ev, contains('外显爽点断供'));
+      expect(ev, contains('连续 4 章'));
+      expect(ev, contains('第1-4章(4章)'));
+      // 评审可执行的判档指引（否则评审仍会把断供判成「节奏紧凑」）
+      expect(ev, contains('不应高于 40 分'));
+      // 点明根因：含蓄异动不能替代外显兑现
+      expect(ev, contains('含蓄异动不能替代外显兑现'));
     });
   });
 }

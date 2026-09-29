@@ -35,6 +35,7 @@ from generate_novel import (count_words, parse_json_from_llm, quality_check,
                             has_ending_hook, SYSTEM_PROMPT,
                             thrill_per_thousand, surge_per_thousand, side_reaction_per_thousand,
                             release_ev_fragment,
+                            payoff_drought_ev_fragment,
                             style_fingerprint,
                             fingerprint_distance, load_style_block,
                             style_ev_fragment,
@@ -421,6 +422,107 @@ def dedup_chapter(final_text, idx):
     return clean
 
 
+def trailing_drought_len(thrill_per_k, threshold=0.5):
+    """末尾连续 💥<threshold 的章数（不含当前章，用于判断「已断供多久」）。
+
+    传入**已完成的**前序章序列，返回当前章之前处于断供中的连续长度：
+    0 表示上一章有外显爽点（未断供），>=3 表示已连着 3 章以上没有。
+    """
+    n = 0
+    for t in reversed(thrill_per_k or []):
+        if t < threshold:
+            n += 1
+        else:
+            break
+    return n
+
+
+def needs_payoff_repair(thrill, surge, min_words_ok=True, drought_len=0,
+                        threshold=0.5, surge_ok=1.0, drought_min_run=3):
+    """本章是否需要「外显爽点」情绪强化修（单章口径 + 跨章断供口径取或）。
+
+    旧口径只有「双低」（thrill<0.5 **且** surge<1.0），实测 14 本成书 116 章里
+    只触发 **7 章**——因为 ✨ 含蓄异动恒高（~2.2/千字），双低几乎永不成立，
+    真正缺外显爽点的章被静默放过。断供带内的「低💥但✨高」章共 **47 章**漏修。
+
+    两个通道：
+    ① 单章双低（保留旧行为，零回归）；
+    ② 跨章断供：已处于连续 >=drought_min_run 章 💥 断供带中（drought_len>0）时，
+       本章只要 💥 仍 <threshold 就修——不再要求 ✨ 也低。断供带内含蓄流正是
+       「读者感觉不到爽」的高发形态，此时补外显兑现正是处方。
+       drought_len=0（未传历史）时本通道自动关闭，行为与旧版完全一致。
+
+    min_words_ok 由调用方传字数下限判定（过短章不修：没内容可强化）。
+    """
+    if not min_words_ok:
+        return False
+    if thrill < threshold and surge < surge_ok:
+        return True
+    return bool(drought_len >= drought_min_run) and thrill < threshold
+
+
+def payoff_repair_prompt(full_text, registry="", facts="", drought_len=0):
+    """情绪强化定点修提示词：只补外显爽点，其余一律不许动。
+
+    与 `generate_novel.emotion_fix_prompt` 同款要求（保持主线/姓名/数字不变），
+    此处补一条**断供语境**：跨章连续缺外显爽点时点明章数，让模型知道
+    「不是本章没写爽点，是连着若干章都没有」，处方更对症。
+    """
+    ctx = ""
+    if drought_len >= 3:
+        ctx = (f"\n【背景】本书已连续 {drought_len} 章没有出现读者可感知的"
+               f"「外显爽点」（打脸/收获/揭露/当众反应），追读正在流失——"
+               f"本章必须补上一处，且要外部可见。\n")
+    reg = f"\n【配角户籍表】\n{registry}\n" if registry else ""
+    num = f"\n【数字台账】\n{facts}\n" if facts else ""
+    return f"""下面这章小说情节完整，但缺少读者可感知的「外显爽点」，移动端读者会弃书。
+{ctx}请输出强化后的全章正文，要求：
+- 主线情节、人物姓名、数字设定一律不变；
+- 选章内一个冲突场景，补一处「外部可见」的爽点：对手当众吃瘪的反应 / 关键物件入手的触感细节 / 真相反转时在众人的震惊，三选一；
+- 禁止只写主角内心感受充当爽点（如「他感到修为精进」）；
+- 保持原有字数规模（±20% 内），不要另起新情节。
+{reg}{num}
+【原章正文】
+{full_text}
+
+只输出强化后的全章正文："""
+
+
+def accept_payoff_repair(original, fix, registry="", min_ratio=0.7, max_ratio=1.6,
+                        threshold=0.5):
+    """情绪强化稿采纳判定：字数在区间 + 户籍完整 + 💥 真的提升（绝不劣化原文）。
+
+    沿用 `generate_novel` 情绪闸门的三项验收（字数/户籍/指标不劣化），
+    补一道**必须真的补上外显爽点**的硬条件：断供带内补修的目的是补 💥，
+    若强化稿只把 ✨ 写高而 💥 没动，等于没修——此时拒绝采纳。
+    非断供场景（drought_len=0）保持旧语义：💥 或 ✨ 任一提升即采纳。
+    """
+    o_w, f_w = count_words(original or ""), count_words(fix or "")
+    if not (min_ratio * o_w <= f_w <= max_ratio * o_w):
+        return False, f"字数越界（{o_w}->{f_w}，允许 {min_ratio}~{max_ratio}）"
+    reg = registry or ""
+    if reg:
+        names = [ln.strip() for ln in reg.splitlines()
+                 if ln.strip() and "：" in ln]
+        missing = [ln for ln in names
+                   if ln.split("：", 1)[0].strip() and
+                   ln.split("：", 1)[0].strip() not in fix]
+        if missing:
+            return False, f"户籍角色丢失（{missing[0].split('：')[0]}）"
+    o_t = thrill_per_thousand(original or "")
+    f_t = thrill_per_thousand(fix or "")
+    o_s = surge_per_thousand(original or "")
+    f_s = surge_per_thousand(fix or "")
+    if f_t <= o_t and f_s <= o_s:
+        return False, f"未提升（💥{o_t}->{f_t}｜✨{o_s}->{f_s}）"
+    # 补修的目的是补外显爽点：若 💥 仍低于阈值，则**只涨了 ✨ 不算数**——
+    # 那是把「含蓄异动」当外显兑现，正是断供的成因本身，必须拒绝采纳。
+    if f_t < threshold:
+        return False, (f"未补上外显爽点（💥{f_t}<{threshold}，"
+                       f"仅 ✨{o_s}->{f_s} 不算修好）")
+    return True, f"💥{o_t}->{f_t}｜✨{o_s}->{f_s}｜{f_w}字"
+
+
 def needs_fix(rv, review_pass):
     """是否需要定点修：不达线，或带阻断级硬伤（分数达线也不能放过）。
 
@@ -684,6 +786,40 @@ def fact_check_stage(registry, state_track, final_text, idx, genre):
                               "error": False, "repaired": False}
 
 
+# 外显爽点场景的识别键：规划层 goal 里出现任一即视为爽点场景。
+PAYOFF_SCENE_KEYS = ("外显爽点", "打脸", "当众")
+
+
+def is_payoff_scene(goal, stage="", si=0, total=0):
+    """本场景是否承担「外显爽点」职责（关键词 **或** 位置双通道判定）。
+
+    为什么不能只靠关键词（2026-09-29 实测）：
+    ① `scene_planning_prompt` 要求 goal「20字内」，模型很少写满「外显爽点/打脸」
+       这类词——14 本真实成书 108 章里仅 **16 章**的 goal 含爽点键，
+       于是 novel_pipeline 的写手硬约束几乎永不触发，💥 通道系统性断供；
+    ② 规划链失败走 `fallback_scenes` 时，骨架 goal 是固定文案
+       （「事件推进，冲突升级」等），关键词更不可能命中。
+
+    故补位置通道：写作准则要求「爽点放在章内后半段、先压后扬」，而场景按
+    起承转合顺序排列——**后半段的「转」场景天然是爽点位**。两个通道取或：
+    关键词命中照旧（尊重规划层显式意图），位置兜底则保证「每章至少一个
+    外显爽点场景」不再依赖模型是否恰好用了那三个词。
+    """
+    if any(k in (goal or "") for k in PAYOFF_SCENE_KEYS):
+        return True
+    if not total:
+        return False
+    # 后半段（进度 >= 55%）且 stage 为「转」——起承转合的第三拍
+    return stage == "转" and (si + 1) / total >= 0.55
+
+
+def payoff_scene_constraint(goal):
+    """写手「外显爽点」硬约束文案（两处调用点共用，避免文案漂移）。"""
+    return ("【本场景硬约束·外显爽点】这是外显爽点场景：必须写出对手/旁观者的"
+            "当众外部反应（脸色骤变、失态、惊呼、修为显化、围观哗然），"
+            "禁止只写主角内心感受或含蓄暗示。")
+
+
 def fallback_scenes(goal, target):
     """场景规划全档失败时的兜底骨架（起承转合，字数按章目标 30/25/25/20 分配）。
 
@@ -692,13 +828,19 @@ def fallback_scenes(goal, target):
     小章（target 小）时下限取 min(400, target/4)，避免四段之和反超章目标。
     """
     floor = min(400, max(1, int(target // 4)))
+    # 「转」场景定为外显爽点场景：与 scene_planning_prompt「爽点放章内后半段、
+    # 压抑不超过 60%」对齐（转 = 第 3/4 个场景，位置天然落在后半段）。
+    # 此前兜底骨架**一个爽点场景都没有**——规划链失败走兜底时，
+    # 写手的「外显爽点硬约束」（novel_pipeline 按 goal 含「外显爽点/打脸/当众」
+    # 触发）永不命中，💥 通道必然断供。实测 14 本书里仅 16/108 章的 goal
+    # 含爽点键，而兜底章占其中一部分，这是断供的结构性成因之一。
     return [
         {"index": 0, "stage": "起", "goal": f"场景铺垫：{goal[:30]}", "beats": [],
          "targetWords": max(floor, int(target * 0.3))},
         {"index": 1, "stage": "承", "goal": "事件推进，冲突升级", "beats": [],
          "targetWords": max(floor, int(target * 0.25))},
-        {"index": 2, "stage": "转", "goal": "局势逆转，危机爆发", "beats": [],
-         "targetWords": max(floor, int(target * 0.25))},
+        {"index": 2, "stage": "转", "goal": "外显爽点：局势逆转，当众打脸或收获到手",
+         "beats": [], "targetWords": max(floor, int(target * 0.25))},
         {"index": 3, "stage": "合", "goal": "收束本章并埋下钩子", "beats": [],
          "targetWords": max(floor, int(target * 0.2))},
     ]
@@ -991,11 +1133,11 @@ def generate_appended_chapter(ch, ctx):
     for si, sc in enumerate(scenes):
         stage = sc.get("stage", "承")
         goal_s = sc.get("goal", "")
-        # 外显爽点硬约束：规划层写了打脸/当众类目标时，强制写手写出外部可见反应
-        # （治执行衰减：fulltest 第5章规划"当众打脸"但💥词表命中 0.00，写手写成了内心戏）
-        if any(k in goal_s for k in ("外显爽点", "打脸", "当众")):
-            goal_s += ("【本场景硬约束】这是外显爽点场景：必须写出对手/旁观者的当众外部反应"
-                       "（脸色骤变、失态、惊呼、修为显化、围观哗然），禁止只写主角内心感受或含蓄暗示。")
+        # 外显爽点硬约束：关键词命中 **或** 位置兜底（后半段「转」）时，
+        # 强制写手写出外部可见反应（治执行衰减：fulltest 第5章规划"当众打脸"
+        # 但💥词表命中 0.00，写手写成了内心戏；且 goal 仅「20字内」时关键词常缺）。
+        if is_payoff_scene(goal_s, stage, si, len(scenes)):
+            goal_s += payoff_scene_constraint(goal_s)
         beats = sc.get("beats", [])
         tw = sc.get("targetWords", 600)
         print(f"  [场景 {si + 1}/{len(scenes)}] {stage}：{goal_s}（目标 {tw} 字）")
@@ -1965,11 +2107,11 @@ def main():
         for si, sc in enumerate(scenes):
             stage = sc.get("stage", "承")
             goal_s = sc.get("goal", "")
-            # 外显爽点硬约束：规划层写了打脸/当众类目标时，强制写手写出外部可见反应
-            # （治执行衰减：fulltest 第5章规划"当众打脸"但💥词表命中 0.00，写手写成了内心戏）
-            if any(k in goal_s for k in ("外显爽点", "打脸", "当众")):
-                goal_s += ("【本场景硬约束】这是外显爽点场景：必须写出对手/旁观者的当众外部反应"
-                           "（脸色骤变、失态、惊呼、修为显化、围观哗然），禁止只写主角内心感受或含蓄暗示。")
+            # 外显爽点硬约束：关键词命中 **或** 位置兜底（后半段「转」）时，
+            # 强制写手写出外部可见反应（治执行衰减：fulltest 第5章规划"当众打脸"
+            # 但💥词表命中 0.00，写手写成了内心戏；且 goal 仅「20字内」时关键词常缺）。
+            if is_payoff_scene(goal_s, stage, si, len(scenes)):
+                goal_s += payoff_scene_constraint(goal_s)
             beats = sc.get("beats", [])
             tw = sc.get("targetWords", 600)
             print(f"  [场景 {si+1}/{len(scenes)}] {stage}：{goal_s}（目标 {tw} 字）")
@@ -2109,25 +2251,42 @@ def main():
                     t1 = thrill_per_thousand(c["content"], args.genre)
                     t2 = surge_per_thousand(c["content"], args.genre)
                     thrills.append(f"第{c['idx']}章({c['words']}字):💥{t1}/✨{t2}")
+                # 全书 💥 序列：只喂最近 5 章时，长跑断供带（可达 18 章）对总监不可见，
+                # 处方会一直说「节奏紧凑」——补一份跨章连低事实。
+                _all_thrill = [thrill_per_thousand(c["content"], args.genre)
+                               for c in state["chapters"]]
+                _drought = payoff_drought_ev_fragment(_all_thrill)
+                _drought_line = (f"\n【外显爽点断供事实】{_drought}\n"
+                                 if _drought else
+                                 "\n【外显爽点断供事实】无连续 3 章以上断供 ✅\n")
                 tdiag = llm_call(THRILL_DIRECTOR,
                                  "你是一位网文节奏总监，专诊爽点分布与追读危机。",
                                  f"以下 5 章爽点密度（💥直白/✨变强异动，每千字）：\n{chr(10).join(thrills)}\n"
-                                 f"题材：{args.genre}。请判断：1)有无连续 2 章以上的爽点塌陷；2)下一章建议的爽点类型与位置。"
+                                 f"全书共 {len(_all_thrill)} 章。{_drought_line}"
+                                 f"题材：{args.genre}。请判断：1)💥外显爽点是否已断供（✨高不代表爽点够，"
+                                 f"读者要的是打脸/收获/揭露这类外显兑现）；2)下一章建议的爽点类型与位置。"
                                  f"30 字内回答。", max_tokens=1000)
                 if tdiag and tdiag.strip():
                     print(f"  [节奏] {tdiag.strip()[:120]}")
+                    if _drought:
+                        print(f"  [断供] {_drought}")
 
         # 6) 语义质量评分（每 3 章，审校链 pro 主/glm 备）+ 低分自动重写（editor）
         # 注意：max_tokens 必须 ≥6000——pro 思考链实测烧 2000-2900，给小了正文必空（旧值 1000 曾致评分永久静默失效）
         if idx % 3 == 0:
             # 本地质检证据注入：LLM 评审带证据打分，不与规则引擎矛盾（治「100 分无钩子」分裂）
             _style_ev = style_ev_fragment(REF_FP, final_text)
+            # 外显爽点断供：跨章 💥 连低证据（单章看不出，必须带历史窗口）
+            _drought_ev = payoff_drought_ev_fragment(
+                [thrill_per_thousand(c["content"], args.genre)
+                 for c in state["chapters"]])
             qa_ev = (f"章末钩子检测：{'命中 ✅' if has_ending_hook(final_text) else '未命中 ❌（hook 维度不应高于 40 分）'}；"
                      f"直白爽点 {thrill_per_thousand(final_text, args.genre)}/千字；"
                      f"变强异动 {surge_per_thousand(final_text, args.genre)}/千字；"
                      f"侧面反响 {side_reaction_per_thousand(final_text)}/千字；"
                      f"{release_ev_fragment(final_text)}；"
                      f"{ending_ev_fragment(final_text)}"
+                     + (f"；{_drought_ev}" if _drought_ev else "")
                      + (f"；{_style_ev}" if _style_ev else ""))
             qr = call_chain(VERIFIER_CHAIN, VERIFIER_SYS, quality_review_prompt(final_text, qa_ev), max_tokens=6000)
             parsed = parse_json_from_llm(qr, repair=False)
@@ -2236,6 +2395,48 @@ def main():
             if hook_src:
                 issues.append({"type": "hook_recheck",
                                "desc": f"后置修改吃掉钩子，终检补写（{hook_src}）"})
+
+        # 7.56) 外显爽点补修（跨章断供口径）：与钩子终检同理放在 record 前——
+        #       前面的定点修/首屏强化/评审修都可能把 💥 通道改回去，而断供是**跨章**
+        #       形态，单章质检看不出来。旧情绪闸门只有「双低」（💥<0.5 且 ✨<1.0），
+        #       实测 116 章只触发 7 章，断供带内「低💥但✨高」的 47 章被静默放过。
+        #       这里按 needs_payoff_repair 双通道判定，采纳走 accept_payoff_repair
+        #       （字数区间 + 户籍完整 + 💥 真的补上），任一不过即保留原文。
+        _prev_thrill = [thrill_per_thousand(c["content"], args.genre)
+                        for c in state["chapters"]]
+        _drought_n = trailing_drought_len(_prev_thrill)
+        _th_now = thrill_per_thousand(final_text, args.genre)
+        _sg_now = surge_per_thousand(final_text, args.genre)
+        if final_text.strip() and needs_payoff_repair(
+                _th_now, _sg_now,
+                min_words_ok=count_words(final_text) >= max(
+                    500, int(target * 0.5)),
+                drought_len=_drought_n):
+            why = (f"跨章断供 {_drought_n} 章" if _drought_n >= 3
+                   else "单章双低")
+            print(f"  [爽点补修] {why}（💥{_th_now}/✨{_sg_now}），触发情绪强化…")
+            _pf = call_chain(EDITOR_CHAIN, SYSTEM_PROMPT,
+                             payoff_repair_prompt(
+                                 final_text,
+                                 registry=registry_block(registry),
+                                 facts=facts_block(registry),
+                                 drought_len=_drought_n),
+                             max_tokens=int(count_words(final_text) * 2.2)).strip()
+            if not _pf:
+                print("    [爽点补修] 无有效产出，保留原文")
+            else:
+                _pf = apply_text_patch(final_text, _pf, args.genre,
+                                       tag="爽点补修")
+                if _pf != final_text:
+                    _ok, _why = accept_payoff_repair(
+                        final_text, _pf, registry=registry_block(registry))
+                    if _ok:
+                        print(f"    [爽点补修] 采纳：{_why}")
+                        final_text = _pf
+                        issues.append({"type": "payoff_repair",
+                                       "desc": f"{why}，补外显爽点（{_why}）"})
+                    else:
+                        print(f"    [爽点补修] 未过验收（{_why}），保原文")
 
         # 7.6) 章内去重：复制粘贴级的整块重复（实测第 3 章开头 800 字出现两遍）
         final_text = dedup_chapter(final_text, idx)

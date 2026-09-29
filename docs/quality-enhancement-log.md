@@ -970,3 +970,166 @@
 - **结构性地板**：对白维参考 6% 与准则 25%~45% 冲突，优先级条款生效后对白维**永不向 6% 收敛**——总距离存在不收敛分量，这正是「只看趋势＋看分解」的原因；采样对白 12%~38% 也恰是五维里最噪的
 - 采样注记：样本字数 618~1370 不齐（400 字提示 + token 封顶双保险下模型服从度仍随机），单样本九维比值天然偏噪——噪声带上限估计偏保守（真实多章 600~800 字口径下 σ 或略小）
 
+---
+
+## 二十六、2026-09-29 外显爽点断供检测（规则层盲区实锤）——💥 通道全书性枯竭，双低闸结构性失效
+
+### 选题证据：先证明漏检，再建能力
+
+线索来自门禁 v7 终审卡（LLM 通读）的一句判词：「**金手指参与度低、爽点滞后，不符合番茄快节奏打脸爽文的商业要求**」「高潮冲突仅靠台词推进，**未体现书名提纯能力**」。这是 LLM 层看见、规则层看不见的典型形态——按第二十四节「规则-检测覆盖矩阵」方法，先量化规则层到底漏了什么。
+
+**14 本真实成书 156 章全量回测**（`tool/` 侧脚本，数据源 `data/generated/*.jsonl`）：
+
+| 指标 | 实测 | 参考线 |
+|---|---|---|
+| 💥 直白爽点（THRILL_WORDS） | **中位数 0.18~0.79/千字** | 1.5 合格 / 1.0 及格 / 0.5 过淡 |
+| ✨ 变强异动（POWER_SURGE_WORDS） | 稳定 ~1.5~3.8/千字 | ≥1.0 含蓄变强流 |
+
+**根因（结构性，非偶发）**：所有既有爽点闸门一律用「**双低**」判定——`thrill<0.5` **且** `surge<1.0` 才算过淡（`chapterIssues` / `_collapse_zones` / 签约报告 flags / `composite_quality_gate` 扣分，四处同口径）。本意是放过「含蓄变强流」，但 ✨ 恒定高分使「双低」**几乎永不成立**：
+
+- 《碎脉铸仙录》33 章：💥<0.5 的章 **29/33**，最长连低 **18 章**，26/33 章落在 ≥3 章连低带内；而「双低」只命中 **6/33**
+- 双低在 14 本书上平均只抓出 0~2 章/本 → 断供带对质量闸门**几乎零响应**
+- 6/14 本书存在 ≥3 章连低带（chief_test_v2 / full_imnovel / novel_10w / novel_10w_pipeline / smoke_gate_v2 / verify_12roles），健康小样 short_sample / short_sample2 零命中
+
+结论：**「外显爽点长期断供」这一追读杀手此前无任何检测器可见**，与终审官判词完全吻合（规则层漏检、LLM 层看见）。
+
+### 改动一：断供带检测（只看 💥，与双低互补不重叠）
+
+- **`payoff_drought_zones(thrill_per_k, threshold=0.5, min_run=3)`**（`generate_novel`）：连续 ≥min_run 章 💥<0.5 的区段。**入参只有 💥 不看 ✨**——正因 ✨ 恒高掩盖了断供，若也看 ✨ 就退回既有闸门的老盲区
+- **`payoff_drought_ev_fragment`**：评审证据串（注入 `qa_ev`，与落点/三件套/文风同款），含判档指引「此区间『期待感』维度不应高于 40 分」——不给判档指引，评审仍会把断供判成「节奏紧凑」
+- **阈值标定**：`min_run=3` 而非 2——1~2 章连低属正常节奏起伏（6/14 本书出现且质量正常，smoke_gate_v6 / fulltest_20260913 最长连低均为 2），≥3 才判断供带；实测命中 6/14，健康小样零误报
+- **落点（三处，复用既有回路）**：① `qa_scan_existing` 全书体检新增「外显爽点断供带」段 + 签约报告**硬伤一票否决**（`thrill_exempt` 题材豁免口径内，与塌陷区同）；② `--json` 输出新增 `payoff_drought` 字段供下游消费；③ `novel_pipeline` 评审 `qa_ev` 与**爽点总监处方**双注入——总监此前只读最近 5 章，18 章连低对它不可见，处方会一直说「节奏紧凑」，现补跨章事实 + 改问法（「✨高不代表爽点够」）
+
+### 改动二：双端漂移实锤与修复（对账时挖出的既有缺陷）
+
+为防双端漂移写了逐书对账测试（Python 基线 vs Dart 同口径重算），**首次跑即报 drift**。逐层定位到根因是**既有**缺陷，与本轮能力无关：
+
+- **断供带入参需按章号排序**：断点续传产物 jsonl 章序可能非连续（`novel_10w_pipeline` 文件序为 1..9,12,13…），必须 `sorted` 后算连低（与 Python 载入进度时 `sorted(_dedup)` 同口径）——否则两端算出不同断供带
+- **`THRILL_WORDS` 词表重复登记**（真缺陷）：Python 表 98 项 / 唯一 96 项，`'鸦雀无声'`、`'水落石出'` 各登记两次；`text.count()` 把同一处命中记两次 → Python 侧 💥 密度**系统性高于** Dart 侧（《碎脉铸仙录》第 12 章实测 py=0.71 vs dart=0.35，越过 0.5 阈值导致断供带分叉）。已去重，两端现各 96 项、逐书逐章一致
+
+> 注：`鸦雀无声` 同时在写作准则规则 19「禁用：鸦雀无声」名单里——它作为爽点词登记本身可疑，但**本轮只修双端漂移**（去重使两端同口径），不改动词表语义，避免与准则冲突的范围外扩散。
+
+### 验证
+
+- `python -m unittest discover -s scripts -p "test_*.py"` → **Ran 114 tests OK**（103→114：新增 `test_payoff_drought.py` 11 项——健康样零命中/2 章不误报/3 章判带/多段+尾段收口/阈值边界/minRun 可调/空输入/长跑形态/证据串判档指引）
+- `flutter test test/ai_pipeline` → **175 passed**；`test/engine` → **293 passed**；`pipeline_qa_test` 38→48（+10 双端同口径用例）
+- **双端对账 PASS**：`payoff_drought_parity_test.dart` 逐书比对 14 本真实成书的 n/zones/in_zone → **drift=0**（修复前 drift=1/14）
+- `ruff check --select=F,E9 scripts tool` 全绿；`compileall` 0；`dart analyze lib test` 11 issues **全为改动前既有**（stash 对拍确认计数一致，无新增）
+- 门禁兼容：`run_smoke_gate.py --check-only` 仍 **FAIL 14/16**，与改动前逐项一致（两处 FAIL 为既有世界观未落地/编造，非本轮引入）
+- 真书效果：《碎脉铸仙录》33 章 jsonl 复算得断供带 **第 4-13 章（10）/ 第 15-25 章（11）/ 第 27-29 章（3），合计 24/33 章（73%）**；`qa_scan_existing.py` 走导出 txt 复跑为 23/33（导出文本与 jsonl 略有出入，如导出含章节标题行），两者同量级——此前该书对所有爽点闸门只报 6 章「双低」
+
+### 遗留
+
+- 断供带目前是**检测 + 告警 + 评审证据 + 签约硬伤**，未接自动定点修：移动/补写外显爽点属于新增情节的改写，风险高于收益（与第二十二节「爽点落点只告警不自动修」同一哲学），待真书观察告警质量后再定
+- 未接 `composite_quality_gate.dart` 扣分项：该处按单章 `novel.content` 聚合，断供是**跨章**形态，单章入口拿不到，需另设全书级入口
+- 上一轮遗留仍未闭环：多章 `--style-ref` 收敛长跑（会话进程回收限制）、Dart 侧指纹分析器/导入 UI
+
+### 补做：把「检测」升级为「预防」——断供的结构性成因在写作侧
+
+上一段只做了检测。但既然断供能被稳定检出，就该问：**为什么写手会写不出外显爽点**。回查写作链找到根因（比检测更上游）：
+
+**实测证据（14 本成书 108 章）**：只有 **16 章**的章纲 goal 含「外显爽点/打脸/当众」关键词。而 `novel_pipeline` 给写手的「外显爽点硬约束」**正是按 goal 关键词触发**的（两处调用点）——即：**约 85% 的章，写手从未收到过「必须写外部可见反应」的要求**。三处叠加放大：
+
+1. **`scene_planning_prompt` 把 goal 限死「20字内」**：模型倾向写「局势逆转，危机爆发」这类不含爽点词的文案，规划层「至少安排 1 个外显爽点场景」的要求**落不到 goal 文本上**
+2. **兜底骨架一个爽点场景都没有**：`fallback_scenes` 的四个 goal 全是固定文案（场景铺垫/事件推进/局势逆转/收束钩子），关键词通道对兜底章**必然不命中**——而规划链失败正是限流期的常态
+3. **位置通道缺失**：准则要求「爽点放在章内后半段、先抑后扬」，场景按起承转合排列，**后半段的「转」场景天然就是爽点位**，但代码从未利用这个结构事实
+
+**改动三：爽点场景改为「结构保证」而非「关键词巧合」**
+
+- **`is_payoff_scene(goal, stage, si, total)`**（`novel_pipeline`）：关键词 **或** 位置双通道判定，位置通道取「stage=转 且 进度≥55%」。两处写手调用点改为共用此函数 + 共用 `payoff_scene_constraint()` 文案（原先两处各写一遍，改文案必漏一边）
+- **兜底骨架「转」场景改为外显爽点场景**：`goal` 改为「外显爽点：局势逆转，当众打脸或收获到手」，位置（第 3/4 拍）天然落在后半段，与准则一致；Dart `SceneBuilder._fallback` 同步
+- **规划 prompt 升级为显式契约**：`scene_planning_prompt` 增加「该场景的 goal **必须以「外显爽点：」开头**」，让关键词通道真正可用；Dart `_buildPlanningPrompt` 同步
+
+这样「每章至少一个外显爽点场景」不再依赖模型是否恰好用了那三个词——**从提示词运气变成结构必然**。
+
+### 验证（补做部分）
+
+- `python -m unittest discover -s scripts -p "test_*.py"` → **Ran 122 tests OK**（114→122：新增 8 项——关键词通道行为不变/位置通道命中后半段「转」/起承不误判/进度<55% 不误判/total=0 关闭位置通道/**兜底骨架必含且仅含 1 个爽点场景**/规划 prompt 含标记/约束文案共用）
+- `flutter test test/engine` → **293 passed**；`test/ai_pipeline` → **175 passed**；`dart analyze lib test` 仍 11 issues（全为既有）
+- 门禁兼容：`run_smoke_gate.py --check-only` 仍 **FAIL 14/16**，与改动前逐项一致
+- **未验证项**：本段是**预防**改动，效果需真机跑书后看 💥 密度与断供带是否收窄（离线只能验证路由逻辑本身，不能验证模型是否真的照做）——按仓库既有哲学，真机验证前不进签报判据
+
+### 再补：把「预防」接回「修复」闭环——情绪闸门与断供检测用同一盲区
+
+前两段做完「检测 + 预防」，闭环仍缺最后一环：**章写完之后没人修**。回查发现既有情绪闸门（`generate_novel` 情绪强化定点修）用的判据**正是造成断供的那个「双低」**：
+
+```python
+if w >= target * 0.5 and _thrill < 0.5 and _surge < 1.0:   # 旧：双低
+```
+
+且 `novel_pipeline`（主链，v7 实际跑的就是它）**根本没有这道情绪闸门**——只在独立入口 `generate_novel` 里有。实测离线重放 116 章：旧闸门只触发 **7 章**，断供带内「低💥但✨高」的章被静默放过。
+
+**改动四：补修闭环（跨章断供口径）**
+
+- **`trailing_drought_len(thrill_per_k)`**：当前章之前末尾连续 💥 低的章数（「已断供多久」）
+- **`needs_payoff_repair(thrill, surge, min_words_ok, drought_len)`**：单章双低（**保留旧行为，零回归**）**或** 断供带内本章 💥 仍低 → 触发。`drought_len=0`（无历史）时自动关闭新通道，行为与旧版完全一致
+- **`payoff_repair_prompt(...)`**：与既有情绪强化同款底线（主线/姓名/数字不变、禁另起情节、禁内心感受充当爽点），补一条**断供语境**（点明已连着 N 章没爽点），处方更对症
+- **`accept_payoff_repair(...)`**：字数区间 + 户籍角色完整 + **必须真的补上 💥**，任一不过即保留原文
+- **落点**：① `novel_pipeline` 新增 **7.56 爽点补修**——与「7.55 钩子终检」同理放在 record 前（定点修/首屏强化/评审修都可能把 💥 改回去，且断供是跨章形态，单章质检看不出来），走既有 `call_chain(EDITOR_CHAIN)` + `apply_text_patch`（含 `patch_gate` 卫生闸）双保险，采纳结果记 `issues[type=payoff_repair]` 落盘可追溯；② `generate_novel` 情绪闸门改为调用同一套 `needs_payoff_repair` / `payoff_repair_prompt` / `accept_payoff_repair`（原先三段验收内联在 if 里，改为共用函数，消除双份实现漂移）
+
+**自测抓到的真缺陷（重要）**：`accept_payoff_repair` 初版把「必须补上外显爽点」写成 `f_t < threshold and f_s <= o_s`，但 surge-only 稿的 ✨ 恰恰是**涨的**，条件不成立 → 被误采纳。即「多写几处掌心发烫」就能冒充外显兑现通过验收，而那正是断供的成因本身。已改为 `f_t < threshold` 即无条件拒绝，并把该场景固化为回归用例。
+
+**离线重放收益**：116 章上情绪闸门触发 **7 → 31 章**（+24，4.4×），且仍只命中真实低💥章（健康章 💥≥0.5 一律不触发）。
+
+### 验证（改动四）
+
+- `python -m unittest discover -s scripts -p "test_*.py"` → **Ran 134 tests OK**（122→134：新增 12 项——断供长度计算/单章双低行为不变/**断供通道抓高✨**/无历史时关闭新通道/过短章不修/健康章不修/提示词带断供语境且保留底线/采纳真提升/字数越界拒/无提升拒/户籍丢失拒/**surge-only 冒充拒**）
+- `flutter test test/engine` → **293 passed**；`dart analyze lib test` 仍 11 issues（既有）
+- 门禁兼容：`run_smoke_gate.py --check-only` 仍 **FAIL 14/16**，逐项与改动前一致
+- **未验证项**：补修**采纳**质量需真机跑书验证（离线只能证明触发口径与验收闸正确，证不了模型是否真能补出外显爽点、采纳后 💥 是否真上升）。按既有哲学，真机验证前不把「断供带清零」写进签报判据
+
+### 三段小结（检测 → 预防 → 修复）
+
+| 环节 | 位置 | 解决的问题 |
+|---|---|---|
+| 检测 | `payoff_drought_zones` + 签约硬伤 | 断供此前**无任何检测器可见** |
+| 预防 | `is_payoff_scene` 双通道 + 兜底骨架 + 规划契约 | **85% 的章从未告知写手要写爽点** |
+| 修复 | `needs_payoff_repair` / `accept_payoff_repair` + 7.56 | 旧闸门同一盲区，**116 章只修 7 章** |
+
+三处共用同一套 `💥<0.5` 阈值与「✨ 不能替代 💥」语义，避免三段各自为政。
+
+### 补齐双端：桌面端（Dart）此前完全没有「预防」这一环
+
+前四段改动全在 Python 流水线（`novel_pipeline` / `generate_novel`）。但**用户实际每天用的是 Flutter 桌面端**，而 Dart 侧的写作链与 Python 是两套实现——回查发现桌面端的缺口比 Python 更彻底：
+
+| 环节 | Python 流水线 | Dart 桌面端（本轮前） |
+|---|---|---|
+| 检测 | `payoff_drought_zones` | 上一轮已补 `PipelineQa.payoffDroughtZones` ✅ |
+| 预防·规划契约 | prompt 要求 goal 写「外显爽点：」 | 上一轮已补 `SceneBuilder` ✅ |
+| 预防·兜底骨架 | 「转」场景 = 爽点场景 | 上一轮已补 ✅ |
+| **预防·写手硬约束** | `is_payoff_scene` 两处调用点 | ❌ **完全没有** |
+| 修复 | 7.56 爽点补修 | ❌ 无（桌面端无跨章补修链） |
+
+`MultiPassChapterEngine._buildScenePrompt` 逐场景拼 prompt 时，**只注入任务/节拍/上下文/文风，从未注入任何爽点约束**；`writing_guidelines.webNovelStructure` 虽有「每章至少 1 个外显爽点」的要求，但那是**全章级**的通用块，且只在第 1 个场景注入一次（`if (sceneIndex == 0)`）。结果：桌面端写手在「转」场景收到的指令与「起」场景毫无区别——**每一章的外显爽点都纯靠模型自觉**。
+
+**改动五：Dart 端预防闭环**
+
+- **`MultiPassChapterEngine.isPayoffScene(goal, stage, index, total)`**：与 Python `is_payoff_scene` **同口径同阈值**（关键词三键 + 位置兜底 stage=转 且进度≥55%）
+- **`payoffSceneConstraint`**：与 Python `payoff_scene_constraint` **同文**硬约束
+- **注入点**：`_buildScenePrompt` 在「本场景任务」之后按判定注入；`sceneCount` 由 `generate()` 经 `_generateScene()` 逐层透传（原来只传 `sceneIndex`，位置通道拿不到总场景数）
+
+> 只做**预防**不做**修复**：`MultiPassChapterEngine` 是单章无状态引擎（`generate()` 只拿到当前章与 `ContextBundle`），没有前序章 💥 序列，跨章断供判定无处可算。要在桌面端补修复闭环需把历史章节密度传入引擎或落到 `ai_pipeline_service`，属另一件事，本轮不硬塞。
+
+### 验证（改动五）
+
+- **双端逐例对账 PASS**：`payoff_scene_parity_test.dart` 跑 10 goal × 4 stage × 6 (index,total) 组合 = **240 例矩阵，drift=0**（与 Python `is_payoff_scene` 完全一致）
+- `flutter test test/engine` → **301 passed**（293→301：新增 `payoff_scene_test.dart` 6 项判定/文案/兜底骨架 + parity 1 项）
+- `test/engine/multipass` 单独跑 24 passed（端点不可用 → 兜底骨架含且仅含 1 个爽点场景，用 `scene_builder_test` 既有的「先绑端口再关闭」套路，不新造测试入口）
+- Python **134 tests OK**（未受影响）；ruff 全绿；`dart analyze lib test` 仍 11 issues（既有）
+- 门禁兼容：`run_smoke_gate.py --check-only` 仍 **FAIL 14/16**（与改动前一致）
+
+### 遗留（合并）
+
+- 桌面端**修复**闭环缺跨章上下文（见上），需设计前序章 💥 序列的传入路径
+- `composite_quality_gate.dart` 未接断供扣分（单章入口拿不到跨章形态），需另设全书级入口
+- 预防/修复两段的效果均需真机跑书验证（桌面端与 Python 各一次），真机前不进签报判据
+- 更早遗留：多章 `--style-ref` 收敛长跑、Dart 侧指纹分析器/导入 UI
+
+### 顺带修复：CI `dart analyze --fatal-infos` 闸门此前是红的
+
+提交前按 CI（`.github/workflows/ci.yml`）逐条对拍，发现 `dart analyze --fatal-infos` **在改动前的 HEAD 上就已失败**——`test/ai_pipeline/pipeline_qa_test.dart` 有 11 条 `prefer_interpolation_to_compose_strings` info（`'顿悟。' + filler * 60` 这类字符串拼接），`--fatal-infos` 下 info 即失败。README 承诺的「零告警」当时并未兑现。
+
+该文件本轮正在修改（新增 `payoffDroughtZones` 用例），顺手把 4 处字符串拼接改为插值写法（`${filler * 60}识破。`），**语义完全等价**，实测 `dart analyze --fatal-infos` → **No issues found**。
+
+> 注：CI 其余闸门本轮逐条本地对拍均通过——`compileall` / `ruff --select=F` / `unittest`（134）/ 五个模块 `--help` 入口 / `dart run tool/write_demo_novel.dart`（离线三章 + 双质检，文笔 97.4、番茄闸门 97.3）/ `flutter test`。
+

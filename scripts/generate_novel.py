@@ -194,6 +194,8 @@ def scene_planning_prompt(outline, prev_summary, state="", protagonist="", genre
 
 【规划要求】
 - 本章至少安排 1 个「外显爽点」场景（优先级：打脸 > 收获 > 秘密揭露 > 升级）：
+  · **该场景的 goal 必须以「外显爽点：」开头**（下游写手按此关键词触发硬约束，
+    goal 被限死 20 字内，若不写这四个字则写手收不到「必须写外部反应」的要求）：
   · 打脸：冲突对方当众吃瘪（哑口无言/脸色铁青/颜面扫地）；
   · 收获：具体宝物/机缘/情报到手，有可感知的细节（触感/光泽/重量）；
   · 秘密揭露：关键身份或真相反转，在场人物震惊；
@@ -713,10 +715,15 @@ THRILL_WORDS = ['突破', '觉醒', '晋升', '顿悟', '蜕变', '脱胎换骨'
                 '系统激活', '绑定成功', '完成任务', '任务完成', '解锁', '权限提升',
                 '经验值', '奖励到账', '到账', '首杀', '通关', '满级',
                 # 打脸通用（都市/职场/商战）
-                '碾压', '碾压全场', '全场震惊', '鸦雀无声', '刮目相看', '俯首',
+                # 注：「鸦雀无声」已在上面的通用分组出现，此处不再重复登记——
+                # 词表重复会让 text.count() 把同一处命中数记两次，导致 Python 侧
+                # 💥 密度高于 Dart 侧（2026-09-29 双端对账在《碎脉铸仙录》第 12 章
+                # 实测到该漂移），故全表保持唯一。
+                '碾压', '碾压全场', '全场震惊', '刮目相看', '俯首',
                 '乖乖交出', '低头认错', '自取其辱', '搬起石头', '打脸',
                 # 悬疑/推理反转
-                '真凶', '反转', '神反转', '水落石出', '真相浮出', '证据确凿',
+                # 注：「水落石出」同理由，已在上面出现，不重复登记。
+                '真凶', '反转', '神反转', '真相浮出', '证据确凿',
                 '铁证如山', '一锤定音', '当场拆穿', '原形毕露', '身份暴露',
                 # 末世/科幻 变强
                 '进化', '异能觉醒', '获得异能', '能力提升', '升级成功', '吞噬成功',
@@ -879,6 +886,62 @@ def release_profile(text):
     else:
         verdict = "ok"
     return {"verdict": verdict, "hits": n, "first": first, "last": last}
+
+
+def payoff_drought_zones(thrill_per_k, threshold=0.5, min_run=3):
+    """外显爽点断供带（💥 通道枯竭区）：连续 >=min_run 章直白爽点低于阈值的区段。
+
+    背景（2026-09-29 真实成书回测，14 本 156 章）：
+    既有爽点闸门一律用「双低」判定（💥<0.5 **且** ✨<1.0 才算过淡），
+    双通道设计本意是放过「含蓄变强流」，但实测 💥 通道**全书性枯竭**：
+    14 本书 💥 中位数仅 0.18~0.79/千字（参考线 1.5 合格 / 1.0 及格），
+    而 ✨ 含蓄异动稳定在 ~2.2/千字 —— ✨ 恒高分使「双低」几乎永不成立，
+    于是「外显爽点长期断供」这一真正的追读杀手**没有任何检测器看得见**。
+    对照证据：《碎脉铸仙录》33 章里 18 章连低、26/33 章落在 >=3 章连低带内；
+    门禁 v7 终审官（LLM 通读）独立判出同一问题「金手指参与度低、爽点滞后、
+    未体现书名提纯能力」——规则层漏检、LLM 层看见 = 典型「有指令无检测」缺口。
+
+    与既有 _collapse_zones（双低塌陷区）**互补不重叠**：那个判「两通道皆枯」，
+    这个专判「含蓄流把外显断供掩盖」。故只看 💥，不看 ✨。
+
+    阈值标定（min_run=3）：1~2 章连低属正常节奏起伏（6/14 本书出现且质量正常，
+    如 smoke_gate_v6 / fulltest_20260913 最长连低均为 2）；>=3 章才判断供带，
+    实测命中 6/14 本（chief_test_v2 / full_imnovel / novel_10w /
+    novel_10w_pipeline / smoke_gate_v2 / verify_12roles），健康小样
+    short_sample / short_sample2 零命中，无误报。
+
+    返回 [(起章位序, 止章位序, 章数)]，入参为逐章 💥 密度列表。
+    """
+    zones = []
+    start = None
+    for i, t in enumerate(thrill_per_k):
+        if t < threshold:
+            if start is None:
+                start = i
+        elif start is not None:
+            if i - start >= min_run:
+                zones.append((start, i - 1, i - start))
+            start = None
+    if start is not None and len(thrill_per_k) - start >= min_run:
+        zones.append((start, len(thrill_per_k) - 1,
+                      len(thrill_per_k) - start))
+    return zones
+
+
+def payoff_drought_ev_fragment(thrill_per_k, threshold=0.5, min_run=3):
+    """评审证据串：外显爽点断供带（注入 qa_ev / 评审证据，与落点、三件套同款）。
+
+    评审的「爽点与期待感」维度此前只能看到本章 💥/✨ 两个数，含蓄流章节
+    单看本章并不异常（✨ 高），只有**跨章连低**才暴露断供——不给连低证据，
+    评审就会把「18 章没有一次外显爽点」判成节奏紧凑（与 v7 终审 69 分同源）。
+    """
+    zones = payoff_drought_zones(thrill_per_k, threshold, min_run)
+    if not zones:
+        return ""
+    total = sum(z[2] for z in zones)
+    spans = "、".join(f"第{a+1}-{b+1}章({n}章)" for a, b, n in zones[:4])
+    return (f"外显爽点断供：连续 {total} 章 💥<{threshold}/千字（{spans}）"
+            f"——含蓄异动不能替代外显兑现，此区间「期待感」维度不应高于 40 分")
 
 
 def release_ev_fragment(text):
@@ -1577,26 +1640,36 @@ def main():
                 w = count_words(full_text)
                 print(f"    续写后 {w} 字")
         # 情绪闸门：零爽点章触发一轮情绪强化定点修（验收通过才采纳，绝不劣化原文）
+        # 断供口径：旧条件是「双低」（💥<0.5 且 ✨<1.0），而 ✨ 含蓄异动恒高
+        # （~2.2/千字）使双低几乎永不成立——实测 116 章只触发 7 章。补跨章通道：
+        # 已连着 >=3 章无外显爽点时，本章只要 💥 仍低就补（不再要求 ✨ 也低）。
+        import novel_pipeline as _np  # 延迟导入避免循环依赖
         _thrill = thrill_per_thousand(full_text)
         _surge = surge_per_thousand(full_text)
-        if w >= target * 0.5 and _thrill < 0.5 and _surge < 1.0:
-            print("  [情绪] 本章无外显爽点，触发一轮情绪强化定点修...")
+        _drought_n = _np.trailing_drought_len(
+            [thrill_per_thousand(c["content"], args.genre)
+             for c in state.get("chapters", [])])
+        if _np.needs_payoff_repair(
+                _thrill, _surge,
+                min_words_ok=w >= target * 0.5,
+                drought_len=_drought_n):
+            _why = (f"跨章断供 {_drought_n} 章" if _drought_n >= 3 else "单章双低")
+            print(f"  [情绪] 本章无外显爽点（{_why}），触发一轮情绪强化定点修...")
             fix = call_llm(base_url_raw, args.model, SYSTEM_PROMPT,
-                           emotion_fix_prompt(full_text, registry),
+                           _np.payoff_repair_prompt(
+                               full_text,
+                               registry=registry_block(registry),
+                               facts=facts_block(registry),
+                               drought_len=_drought_n),
                            api_key, int(w * 2.2), args.temperature).strip()
             if fix:
-                _fw = count_words(fix)
-                _names_ok = all(c["name"] in fix for c in registry.get("characters", [])
-                                if c.get("name") and c["name"] in full_text)
-                _ft = thrill_per_thousand(fix)
-                _fs = surge_per_thousand(fix)
-                if 0.7 * w <= _fw <= 1.6 * w and _names_ok and (_ft > _thrill or _fs > _surge):
-                    print(f"    [情绪] 采纳强化稿：爽点 {_thrill}→{_ft}/千字｜"
-                          f"异动 {_surge}→{_fs}/千字｜{_fw} 字")
-                    full_text, w = fix, _fw
+                _ok, _why2 = _np.accept_payoff_repair(
+                    full_text, fix, registry=registry_block(registry))
+                if _ok:
+                    print(f"    [情绪] 采纳强化稿：{_why2}")
+                    full_text, w = fix, count_words(fix)
                 else:
-                    print(f"    [情绪] 强化稿未过验收（{_fw} 字｜户籍完整={_names_ok}｜"
-                          f"爽点 {_ft}｜异动 {_fs}），保原文")
+                    print(f"    [情绪] 强化稿未过验收（{_why2}），保原文")
         # 质量修复轮：先评审，再把问题交给编辑模型；修复稿不劣化才采纳。
         if not args.skip_quality_repair and w >= max(500, int(target * 0.5)):
             # world_terms 一并传入：此前这条路径不查世界观落地，与 novel_pipeline 口径不一致

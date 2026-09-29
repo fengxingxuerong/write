@@ -24,7 +24,8 @@ except Exception:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generate_novel import (has_ending_hook, has_quick_opening, count_words,
                             thrill_per_thousand, surge_per_thousand, AI_CLICHE,
-                            deep_ai_metrics, release_profile, ending_triad)
+                            deep_ai_metrics, release_profile, ending_triad,
+                            payoff_drought_zones)
 
 
 CHAPTER_RE = re.compile(r"^第\s*(\d+)\s*章")
@@ -256,6 +257,13 @@ def print_signability_report(rows, chapters, genre=""):
             flags.append(f"爽点密度不足（💥+✨ {avg_thrill + avg_surge:.2f}/千字 <1.0）")
         if zones:
             flags.append(f"存在 {zones} 处节奏塌陷区")
+        # 外显爽点断供：与塌陷区互补——塌陷区要求 ✨ 也低，本项只要求 💥 连低，
+        # 因此能抓住「✨ 恒高把 💥 断供掩盖」的含蓄流（真实成书 6/14 本命中）。
+        d_zones = payoff_drought_zones([r["thrill_per_k"] for r in rows])
+        if d_zones:
+            d_ch = sum(z[2] for z in d_zones)
+            flags.append(f"外显爽点断供（连续 3 章以上无 💥 外显爽点，"
+                         f"{d_ch}/{n} 章落在断供带内）")
 
     verdict, notes = _sign_verdict(total, flags, unjudged)
 
@@ -371,9 +379,15 @@ def main():
 
     if args.json:
         import json
+        _dzones = payoff_drought_zones([r["thrill_per_k"] for r in rows])
         print(json.dumps({
             "file": args.novel_txt,
             "chapters": rows,
+            "payoff_drought": {
+                "zones": [{"start_idx": rows[a]["idx"], "end_idx": rows[b]["idx"],
+                           "chapters": n} for a, b, n in _dzones],
+                "chapters_in_zones": sum(z[2] for z in _dzones),
+            },
             "stats": {
                 "total": len(rows),
                 "hook_pass": total_hook,
@@ -421,6 +435,9 @@ def main():
 
     # ===== 节奏塌陷检测 =====
     _print_collapse_zones(rows)
+
+    # ===== 外显爽点断供带（💥 连低，含蓄流掩盖场景）=====
+    _print_payoff_drought(rows)
 
     # ===== 黄金三章专项体检 =====
     print_golden_three(chapters, rows)
@@ -484,6 +501,30 @@ def _print_thrill_curve(rows):
     print("      " + "".join(ticks))
     print("      " + "章序 →".ljust(n))
     print()
+
+
+def _print_payoff_drought(rows, threshold=0.5, min_run=3):
+    """打印外显爽点断供带（💥 通道连低），与 _print_collapse_zones 互补。
+
+    塌陷区判「双通道皆枯」，本项专判「✨ 含蓄流把 💥 外显断供掩盖」——
+    这是 2026-09-29 真实成书回测暴露的主要盲区（规则层看不见，LLM 终审看得见）。
+    """
+    zones = payoff_drought_zones([r["thrill_per_k"] for r in rows],
+                                 threshold, min_run)
+    if not zones:
+        print(f"\n【外显爽点】无连续 {min_run} 章以上的 💥 断供带 ✅")
+        return zones
+    total = sum(z[2] for z in zones)
+    print(f"\n【⚠ 外显爽点断供带】连续 {min_run} 章以上无外显爽点（💥<{threshold}/千字）：")
+    for a, b, n in zones:
+        idx_a = rows[a]["idx"]
+        idx_b = rows[b]["idx"]
+        print(f"  ⚠ 第 {idx_a}-{idx_b} 章（连续 {n} 章）——含蓄异动撑不起追读，"
+              f"需安排打脸/收获/揭露等外显兑现")
+    print(f"  合计 {total}/{len(rows)} 章落在断供带内"
+          f"（{total / len(rows) * 100:.0f}%）——外显爽点是番茄追读引擎，"
+          f"✨ 变强异动不能替代")
+    return zones
 
 
 def _print_collapse_zones(rows):

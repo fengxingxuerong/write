@@ -84,6 +84,11 @@ class SceneBuilder {
     b.writeln();
     b.writeln('【规划要求】');
     b.writeln('- 本章至少安排 1 个爽点场景（打脸/升级/收获/秘密揭露四选一），放在后半段；');
+    // 与 Python `scene_planning_prompt` 同口径：goal 被限死 20 字内时模型倾向写
+    // 「局势逆转，危机爆发」这类不含爽点关键词的文案，写手侧按关键词触发的
+    // 外显爽点硬约束因此收不到（实测 108 章仅 16 章 goal 含爽点键）。
+    b.writeln('- 该爽点场景的 goal 必须以「外显爽点：」开头（写手按此关键词触发'
+        '「必须写出外部可见反应」的硬约束）；');
     b.writeln('- 最后一个场景必须是「合」：收束本章并埋下章末钩子（未落地悬念）。');
     b.writeln();
     b.writeln('题材：$genre | 基调：$tone');
@@ -145,7 +150,10 @@ class SceneBuilder {
       ScenePlan(
         index: 2,
         stage: '转',
-        goal: '危机爆发或局势反转',
+        // 与 Python `fallback_scenes` 同口径：「转」场景定为外显爽点场景
+        // （位置天然落在后半段，与「爽点放章内后半段」准则一致）。此前兜底
+        // 骨架一个爽点场景都没有，规划链失败时 💥 通道必然断供。
+        goal: '外显爽点：局势逆转，当众打脸或收获到手',
         beats: const <String>['反转危机', '情绪顶点'],
         targetWords: per,
       ),
