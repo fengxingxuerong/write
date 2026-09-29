@@ -1349,3 +1349,43 @@ if w >= target * 0.5 and _thrill < 0.5 and _surge < 1.0:   # 旧：双低
 - **`countWords` 三套定义收敛为一个**（需产品决定：数字是否与字母合并计词、是否计入 CJK 扩展 A），并同步更新 `docs/交付文档.md` 的字数口径说明
 - 文风指纹的**导入 UI**（选参考文 txt → 展示九项 → 存入项目 → 生成时注入）尚未做；本轮只补内核，UI 需另开一轮
 
+---
+
+## 三十二、2026-09-29 文风参考导入 UI（P1-1 收口）——选参考文 → 抽指纹 → 存项目 → 生成时注入
+
+第三十一节补了内核但没入口，用户用不上。本节把 UI 到生成的全链打通。
+
+### 改动十：从设置面板到写手提示词
+
+1. **`StyleRef`（新 `lib/models/style_ref.dart`）**：只存九项**分布数值 + 来源名**，**不存原文**。两个设计点：
+   - `tryFromJson` 对任何坏数据返回 `null` 而不抛——项目 JSON 是**单文件聚合根**，任一子结构解析抛异常都会导致**整本打不开**，一份脏数据不该炸掉整本书；
+   - `isUsable` 门槛 500 字：样本太少时句长 CV / 段落均长噪声过大，宁可不注入（与 Python 侧 `load_style_block` 对过短文返回空串的降级语义一致）。
+   > 依赖方向：指纹由调用方用 `PipelineQa.styleFingerprint(正文)` 现算后传入，`models/` **不 import 质检层**——否则与 `pipeline_qa` 对 `models/character.dart` 的依赖构成环。
+2. **`Novel.styleRef`** + `copyWith(clearStyleRef:)` + 序列化。`copyWith` 无法用 `null` 表示「要写 null」，故显式给清除开关（与本类其余可空字段写法不一致处已在注释说明）。老项目无该字段 → `null`，行为与旧版逐字一致。
+3. **`SettingRepository.setStyleRef / clearStyleRef`**：都走 `db.withNovelLock`，与本仓库其它读-改-写一致。
+4. **`StyleRefDialog`（新）**：选文件（.txt/.md）或粘贴文本 → 实时抽指纹 → 展示九项 + **本书现有正文与参考文的距离** + **将注入模型的提示块预览**（含禁抄与「与准则冲突以准则为准」两条，让用户看见黑盒里到底喂了什么）。不足 500 字时拒绝保存并说明原因。
+5. **注入链**：`ContextBundle.styleBlock`（预渲染好的文本，**引擎不必再依赖质检层度量细节**，且写手/编辑可共用同一份）→ `MultiPassChapterEngine` 场景 prompt 注入 → `GenerateViewModel` 在**任务开始时**渲染一次并缓存（多章连写时每章重算纯属浪费；指纹是纯数据不会中途变，缓存安全）。
+6. **设置面板入口**：新增「文风参考」卡片，显示当前参考的来源/字数/句长/对白，提供导入、更换、清除。
+
+### 验证
+
+- 新增 `test/models/style_ref_test.dart` **7 项**：序列化往返一致 / **脏数据一律 null 不抛**（null、非 map、缺键、类型错）/ fingerprint 非数值项被忽略且非法日期降级 / `isUsable` 门槛 / Novel 往返一致 / **老项目无字段 → null** / copyWith 能改能显式清空
+- `flutter test test/models` **131 passed**；`test/storage` **88 passed**；`test/ai_pipeline` **194 passed**；`test/engine` **318 passed**；Python **143 tests OK**
+- `dart analyze --fatal-infos` → **No issues found**；ruff/compileall 全绿
+
+### P1-1 全链收口
+
+| 环节 | Python | Dart 桌面端 |
+|---|---|---|
+| 抽取指纹 | `style_fingerprint` | `PipelineQa.styleFingerprint`（第 31 节） |
+| 渲染注入块 | `style_fingerprint_block` | `styleFingerprintBlock`（第 31 节） |
+| 距离度量 | `fingerprint_distance` | `fingerprintDistance`（第 31 节） |
+| 装载入口 | `load_style_block(path)` | `StyleRefDialog` 选文件/粘贴（**本节**） |
+| 持久化 | 进程内（`REF_FP`） | `Novel.styleRef` 随项目落盘（**本节**） |
+| 注入写手 | `scene_prompt(style_block=)` | `ContextBundle.styleBlock`（**本节**） |
+| 注入编辑（保文风） | `editor_prompt(style_block=)` | 未接（见下） |
+
+**未接的一项**：编辑/润色链路还没吃 `styleBlock`——写手学了文风、编辑改回「编辑腔」会抵消注入效果（Python 侧第二十五节已因此加了保文风条款）。桌面端 `MultiPassChapterEngine` 目前只有场景生成没有独立编辑环节，暂无处可挂；待将来接润色/校对时一并补上。
+
+**效果仍未验证**：与前几节同——注入链路的**真机效果**（生成出的章是否真向参考文收敛）需要 LLM 配额正常窗口跑书确认。离线只能证明指纹、持久化、注入文本三者正确串起来。
+

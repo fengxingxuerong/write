@@ -318,6 +318,10 @@ class MultiPassChapterEngine {
     if (isPayoffScene(scene.goal, scene.stage, sceneIndex, sceneCount)) {
       b.writeln(payoffSceneConstraint);
     }
+    // 文风指纹（P1-1）：只学分布与节奏，禁止照抄句子。空串 = 未设置，不注入。
+    if (ctx.styleBlock.isNotEmpty) {
+      b.write(ctx.styleBlock);
+    }
     if (scene.beats.isNotEmpty) {
       b.writeln('必须完成的节拍：${scene.beats.join(' → ')}');
     }

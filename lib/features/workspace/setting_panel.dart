@@ -5,8 +5,11 @@ import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/features/workspace/llm_settings_dialog.dart';
 import 'package:novel_writer/features/workspace/statistics_panel.dart';
+import 'package:novel_writer/features/workspace/style_ref_dialog.dart';
+import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/character.dart';
 import 'package:novel_writer/models/novel.dart';
+import 'package:novel_writer/models/style_ref.dart';
 import 'package:novel_writer/models/world_setting.dart';
 import 'package:novel_writer/storage/setting_repository.dart';
 import 'package:novel_writer/widgets/common.dart';
@@ -37,6 +40,7 @@ class SettingPanel extends ConsumerWidget {
         children: <Widget>[
           StatisticsPanel(novel: novel),
           _llmCard(context, ref),
+          _styleRefCard(context, ref, repo),
           SectionCard(
             title: '角色（${novel.characters.length}）',
             actions: <Widget>[
@@ -69,6 +73,92 @@ class SettingPanel extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+
+  /// 文风参考卡片（P1-1）：显示当前参考并提供导入/清除入口。
+  ///
+  /// 只存**指纹分布**不存原文，故卡片里不显示任何参考文内容——用户想看原文
+  /// 请回自己的文件。这一点在 UI 上必须说清，否则会让人以为可以在这里回看原文。
+  Widget _styleRefCard(
+    BuildContext context,
+    WidgetRef ref,
+    SettingRepository repo,
+  ) {
+    final StyleRef? ref0 = novel.styleRef;
+    return SectionCard(
+      title: '文风参考',
+      children: <Widget>[
+        if (ref0 == null)
+          const Text('未设置：生成时不会注入文风指纹')
+        else
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text('《${ref0.source}》· ${ref0.words.round()} 字'),
+              Text(
+                ref0.isUsable
+                    ? '句长 ${(ref0.fingerprint['sent_len_mean'] ?? 0).toStringAsFixed(1)}｜'
+                        '对白 ${((ref0.fingerprint['dialogue_ratio'] ?? 0) * 100).round()}%'
+                    : '样本过少，已停用（需 ≥${StyleRef.minWords} 字）',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+        const SizedBox(height: 6),
+        Row(
+          children: <Widget>[
+            OutlinedButton.icon(
+              onPressed: () => _openStyleRef(context, ref, repo),
+              icon: const Icon(Icons.texture_outlined, size: 16),
+              label: Text(ref0 == null ? '导入参考文' : '更换'),
+            ),
+            if (ref0 != null) ...<Widget>[
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: () async {
+                  await repo.clearStyleRef(novel.id);
+                  onChanged();
+                },
+                child: const Text('清除'),
+              ),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// 打开文风参考弹窗。
+  Future<void> _openStyleRef(
+    BuildContext context,
+    WidgetRef ref,
+    SettingRepository repo,
+  ) async {
+    // 正文用于算「本书现有文风 vs 参考文」的距离：优先用章节库，拿不到时
+    // 退化为空（弹窗会如实说明"本书还没有正文"）。
+    String text = '';
+    try {
+      final List<Chapter> chapters = await ref.read(chapterRepositoryProvider)
+          .listChapters(novel.id);
+      text = chapters.map((Chapter c) => c.content).join('\n\n');
+    } catch (_) {
+      text = '';
+    }
+    if (!context.mounted) return;
+    await StyleRefDialog.show(
+      context,
+      novelId: novel.id,
+      currentRef: novel.styleRef,
+      currentText: text,
+      onSave: (StyleRef r) async {
+        await repo.setStyleRef(novel.id, r);
+        onChanged();
+      },
+      onClear: () async {
+        await repo.clearStyleRef(novel.id);
+        onChanged();
+      },
     );
   }
 

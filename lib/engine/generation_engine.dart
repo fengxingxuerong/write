@@ -123,6 +123,14 @@ class ContextBundle {
   /// 此时引擎不做任何跨章断供判定，行为与旧版完全一致。
   final List<ChapterPayoff> payoffHistory;
 
+  /// 文风指纹注入块（P1-1，可空）。
+  ///
+  /// 由 `PipelineQa.styleFingerprintBlock(fp, source: …)` 预先渲染好——**渲染放在
+  /// 外面**是为了让引擎不必再依赖质检层的度量细节，且这块文本要被写手与编辑
+  /// 两处共用（编辑侧要「保持文风」，不能让它把注入的节奏改回「编辑腔」）。
+  /// 空串 = 未设置，行为与旧版逐字一致。
+  final String styleBlock;
+
   /// 构造上下文包。
   const ContextBundle({
     required this.characters,
@@ -133,6 +141,7 @@ class ContextBundle {
     this.plotSummary = '',
     this.foreshadowing = '',
     this.payoffHistory = const <ChapterPayoff>[],
+    this.styleBlock = '',
   });
 
   /// 不可变更新副本（多章连写时替换大纲/角色/设定用）。
@@ -143,6 +152,7 @@ class ContextBundle {
     List<Character>? characters,
     List<WorldSetting>? worldSettings,
     List<ChapterPayoff>? payoffHistory,
+    String? styleBlock,
   }) {
     return ContextBundle(
       characters: characters ?? this.characters,
@@ -153,6 +163,7 @@ class ContextBundle {
       plotSummary: plotSummary ?? this.plotSummary,
       foreshadowing: foreshadowing ?? this.foreshadowing,
       payoffHistory: payoffHistory ?? this.payoffHistory,
+      styleBlock: styleBlock ?? this.styleBlock,
     );
   }
 }

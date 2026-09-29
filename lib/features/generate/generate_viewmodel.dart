@@ -18,6 +18,7 @@ import 'package:novel_writer/engine/quality/novel_consistency_checker.dart';
 import 'package:novel_writer/engine/story_memory.dart';
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/generation_config.dart';
+import 'package:novel_writer/models/style_ref.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/services/sensitive_words.dart';
 import 'package:novel_writer/storage/chapter_repository.dart';
@@ -205,6 +206,19 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
   /// 断供判定最多需要回看多少章（>= _payoffDroughtMinRun 即可）。
   static const int _payoffHistoryCap = 8;
 
+  /// 文风指纹注入块（P1-1）：从项目 [StyleRef] 渲染，写手/编辑共用同一份。
+  ///
+  /// 只在**开始生成时**渲染一次并缓存：渲染是纯计算，但要把九项指标格式化成
+  /// 提示词文本，多章连写时每章重算纯属浪费。指纹是纯数据、不会中途变，故缓存安全。
+  String _styleBlock = '';
+
+  /// 每次任务开始时按项目的文风参考重算注入块（不可用的指纹一律当空串）。
+  void _refreshStyleBlock(StyleRef? ref) {
+    _styleBlock = (ref != null && ref.isUsable)
+        ? PipelineQa.styleFingerprintBlock(ref.fingerprint, source: ref.source)
+        : '';
+  }
+
   /// 提交生成：按 [order] 覆盖或新增章节。
   /// [config.chapterCount] > 1 时多章连写：逐章承接上一章结尾，自动落库。
   Future<void> generate(
@@ -232,6 +246,10 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
     // 否则续写已有小说（包括单章生成）会在第一章丢失前情提要。
     _plotSummaryLines.clear();
     _payoffHistory.clear();
+    // 文风参考存在 Novel 上（不在 ContextBundle 里——后者只承载生成上下文，
+    // 而指纹是**项目设置**，由用户在设置面板写入）。与下方一致性检查同款读法。
+    final Novel proj = await _chapterRepo.db.readNovel(_novelId);
+    _refreshStyleBlock(proj.styleRef);
     _plotSummaryLines.addAll(
       ctx.plotSummary
           .split(RegExp(r'[\r\n]+'))
@@ -276,6 +294,7 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
           outline: chapterOutline,
           plotSummary: _plotSummary,
           payoffHistory: _payoffHistory,
+          styleBlock: _styleBlock,
         );
 
         final int thisOrder = order + i;

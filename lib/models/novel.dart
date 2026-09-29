@@ -3,6 +3,7 @@ import 'package:novel_writer/models/character.dart';
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/chapter_draft.dart';
 import 'package:novel_writer/models/export_prefs.dart';
+import 'package:novel_writer/models/style_ref.dart';
 import 'package:novel_writer/models/world_setting.dart';
 
 /// 小说项目实体（聚合根）。
@@ -55,6 +56,12 @@ class Novel {
   /// 一键导出配置（记住上次的设定集开关与格式）。
   final ExportPrefs exportPrefs;
 
+  /// 文风参考（P1-1，可空）。非空时生成会把该指纹注入写手提示词。
+  ///
+  /// 存的是**分布数值**而非原文——见 [StyleRef] 的说明。null = 未设置，生成行为
+  /// 与旧版逐字一致。
+  final StyleRef? styleRef;
+
   /// 构造项目实体。
   const Novel({
     required this.id,
@@ -72,6 +79,7 @@ class Novel {
     required this.worldSettings,
     this.drafts = const <ChapterDraft>[],
     this.exportPrefs = const ExportPrefs(),
+    this.styleRef,
   });
 
   /// 统计整本项目总字数（所有章节之和）。
@@ -107,6 +115,8 @@ class Novel {
           .toList(),
       exportPrefs: ExportPrefs.fromJson(
           json['exportPrefs'] as Map<String, dynamic>?),
+      // 老项目没有该字段 → tryFromJson(null) = null，行为与旧版一致。
+      styleRef: StyleRef.tryFromJson(json['styleRef']),
     );
   }
 
@@ -127,6 +137,7 @@ class Novel {
         'worldSettings': worldSettings.map((w) => w.toJson()).toList(),
         'drafts': drafts.map((d) => d.toJson()).toList(),
         'exportPrefs': exportPrefs.toJson(),
+        'styleRef': styleRef?.toJson(),
       };
 
   /// 不可变更新副本。
@@ -146,6 +157,8 @@ class Novel {
     List<WorldSetting>? worldSettings,
     List<ChapterDraft>? drafts,
     ExportPrefs? exportPrefs,
+    StyleRef? styleRef,
+    bool clearStyleRef = false,
   }) {
     return Novel(
       id: id ?? this.id,
@@ -165,6 +178,9 @@ class Novel {
       worldSettings: worldSettings ?? this.worldSettings,
       drafts: drafts ?? this.drafts,
       exportPrefs: exportPrefs ?? this.exportPrefs,
+      // copyWith 无法把 null 当作「要写 null」，故显式给 clearStyleRef 开关——
+      // 否则「清除文风参考」只能整个字段丢掉重造，与本类其余可空字段的写法不一致。
+      styleRef: clearStyleRef ? null : (styleRef ?? this.styleRef),
     );
   }
 }

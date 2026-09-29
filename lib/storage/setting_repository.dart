@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 import 'package:novel_writer/models/character.dart';
 import 'package:novel_writer/models/world_setting.dart';
 import 'package:novel_writer/models/novel.dart';
+import 'package:novel_writer/models/style_ref.dart';
 import 'package:novel_writer/storage/app_database.dart';
 
 /// 设定仓库：角色 / 世界观的 CRUD（同样落盘到单 json）。
@@ -66,6 +67,24 @@ class SettingRepository {
       await db.writeNovel(novel.copyWith(
         characters: novel.characters.where((c) => c.id != id).toList(),
       ));
+    });
+  }
+
+  // ---- 文风参考（P1-1）----
+
+  /// 设置本项目的文风参考（存指纹分布，不存原文）。
+  Future<void> setStyleRef(String novelId, StyleRef ref) {
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      await db.writeNovel(novel.copyWith(styleRef: ref));
+    });
+  }
+
+  /// 清除文风参考（回到「不注入指纹」的旧行为）。
+  Future<void> clearStyleRef(String novelId) {
+    return db.withNovelLock(novelId, () async {
+      final Novel novel = await db.readNovel(novelId);
+      await db.writeNovel(novel.copyWith(clearStyleRef: true));
     });
   }
 
