@@ -689,6 +689,161 @@ class PipelineQa {
     'bodyReactionDensity': 1.5,
   };
 
+  /// 引号内字数占比（文风指纹用；与 Python `fanqie_review.dialogue_ratio` 同口径）。
+  ///
+  /// 双风格引号都算：「“”」「『』」与直角引号在网文里混用。
+  static final RegExp _quotedText = RegExp(r'[“"『「]([^”"』」]{1,200})[”"』」]');
+
+  /// 对白占比（0~1）。
+  static double dialogueRatioOf(String text) {
+    if (text.isEmpty) return 0.0;
+    final StringBuffer quoted = StringBuffer();
+    for (final RegExpMatch m in _quotedText.allMatches(text)) {
+      quoted.write(m.group(1));
+    }
+    final int total = math.max(AppConstants.countWords(text), 1);
+    final double r = AppConstants.countWords(quoted.toString()) / total;
+    return double.parse(r.toStringAsFixed(3));
+  }
+
+  /// 指纹项（不含 source），用于距离计算与展示。顺序与 Python 侧一致。
+  static const List<String> styleFingerprintKeys = <String>[
+    'sent_len_mean', 'sent_len_cv', 'dialogue_ratio', 'para_len_mean',
+    'single_para_rate', 'de_density', 'adverb_density', 'connector_rate',
+    'metaphor_density',
+  ];
+
+  /// 文风指纹（P1-1）：把参考文的可统计风格压成九项分布指标。
+  ///
+  /// 与 Python `generate_novel.style_fingerprint` **同口径同键名**（双端同源，
+  /// 改一处必须同改另一处）。九项全部复用本文件既有度量（`deepAiMetrics` /
+  /// `styleFingerprintMetrics` / `dialogueRatioOf`），**不另起标准**。
+  ///
+  /// 返回值只含分布数值，**不含任何可照抄内容**（防文风仿写滑向抄袭）。
+  /// 空文本/无有效句子段落时返回全 0 指纹。
+  ///
+  /// 键名沿用 Python 侧的下划线风格以便双端逐值对账；`source` 只用于展示
+  /// （提示词里显示「《xxx》」），不参与距离计算，故此处占位 0。
+  static Map<String, double> styleFingerprint(String text) {
+    final Map<String, double> zero = <String, double>{
+      'source': 0,
+      'words': 0,
+      'sent_len_mean': 0.0,
+      'sent_len_cv': 0.0,
+      'dialogue_ratio': 0.0,
+      'para_len_mean': 0.0,
+      'single_para_rate': 0.0,
+      'de_density': 0.0,
+      'adverb_density': 0.0,
+      'connector_rate': 0.0,
+      'metaphor_density': 0.0,
+    };
+    if (text.isEmpty) return zero;
+    final Map<String, dynamic> deep = deepAiMetrics(text);
+    final List<int> lens = _splitSentences(text)
+        .map((String s) => AppConstants.countWords(s))
+        .where((int n) => n > 0)
+        .toList();
+    // 段落均长按**空行**切；单句成段占比按 \n 切（见 styleFingerprintMetrics）——
+    // 两个口径不同，勿混。
+    final List<int> paraLens = text
+        .split(RegExp(r'\n\s*\n'))
+        .map((String p) => AppConstants.countWords(p))
+        .where((int n) => n > 0)
+        .toList();
+    if (lens.isEmpty || paraLens.isEmpty) return zero;
+    final Map<String, double> fp = styleFingerprintMetrics(text);
+    double mean(List<int> xs) =>
+        xs.fold<int>(0, (int a, int b) => a + b) / xs.length;
+    return <String, double>{
+      'source': 0,
+      'words': AppConstants.countWords(text).toDouble(),
+      'sent_len_mean': double.parse(mean(lens).toStringAsFixed(1)),
+      'sent_len_cv': (deep['sentenceCv'] as num?)?.toDouble() ?? 0.0,
+      'dialogue_ratio': dialogueRatioOf(text),
+      'para_len_mean': double.parse(mean(paraLens).toStringAsFixed(1)),
+      'single_para_rate': fp['singleParaRate'] ?? 0.0,
+      'de_density': (deep['deDensity'] as num?)?.toDouble() ?? 0.0,
+      'adverb_density': (deep['adverbDensity'] as num?)?.toDouble() ?? 0.0,
+      'connector_rate': (deep['connectorRate'] as num?)?.toDouble() ?? 0.0,
+      'metaphor_density': fp['metaphorDensity'] ?? 0.0,
+    };
+  }
+
+  /// 把文风指纹渲染成可注入写手的提示块（学分布，不抄内容）。
+  ///
+  /// 与 Python `style_fingerprint_block` 同结构：数字目标之外必须带「向分布靠拢」
+  /// 的可执行翻译（长短句错落、段落呼吸），否则模型面对裸数字无从下手；
+  /// **禁抄条款**防文风仿写变成抄袭。
+  ///
+  /// [words] <= 0（空/过短）返回空串——不注入无意义的零值块。
+  static String styleFingerprintBlock(
+    Map<String, double> fp, {
+    required String source,
+  }) {
+    final double words = fp['words'] ?? 0;
+    if (words <= 0) return '';
+    double g(String k) => fp[k] ?? 0.0;
+    return '\n【目标文风指纹（参考《$source》，共 ${words.round()} 字）'
+        '——只学分布与节奏，禁止照抄其句子、情节与人名】\n'
+        '句长：均值 ${g('sent_len_mean').toStringAsFixed(1)} 字、'
+        '变异系数 ${g('sent_len_cv').toStringAsFixed(2)}'
+        '（长短句错落，忌句长均匀——紧张处压短句，舒缓处放长句）\n'
+        '结构：对白占比 ${(g('dialogue_ratio') * 100).round()}%｜'
+        '段落均长 ${g('para_len_mean').toStringAsFixed(1)} 字｜'
+        '单句成段 ${g('single_para_rate').toStringAsFixed(1)}%'
+        '（段落呼吸与参考文一致）\n'
+        '用词：的字密度 ${g('de_density').toStringAsFixed(1)}%｜'
+        '叠词 ${g('adverb_density').toStringAsFixed(1)}/千字｜'
+        '句首连接词 ${(g('connector_rate') * 100).round()}%｜'
+        '比喻 ${g('metaphor_density').toStringAsFixed(2)}/千字\n'
+        '写本章时让以上各项向参考文靠拢，其余仍按写作准则执行；'
+        '与准则冲突时以准则为准（如对白占比 25%~45%、章末钩子硬门槛），\n'
+        '文风分布只在准则允许的范围内调节。\n';
+  }
+
+  /// 两份文风指纹的归一化距离（0=同分布，越大差异越大）。
+  ///
+  /// 与 Python `fingerprint_distance` 同口径：每项 `|a-b|/max(|a|,|b|)` 后取均值
+  /// ——比值式让量纲自归一，无需逐项定权；双零项记 0 差异（分母取 1e-9 防除零）。
+  ///
+  /// ⚠️ 单点噪声远大于「0.5→0.45」这类变化：真机 n=5 独立采样 σ≈0.075、极差 0.181，
+  /// 故**单点永不判收敛**（定标数据见 docs/quality-enhancement-log.md 第 25 节）。
+  static double fingerprintDistance(
+    Map<String, double> a,
+    Map<String, double> b,
+  ) {
+    double sum = 0;
+    for (final String k in styleFingerprintKeys) {
+      final double x = a[k] ?? 0.0;
+      final double y = b[k] ?? 0.0;
+      sum += (x - y).abs() / math.max(x.abs(), math.max(y.abs(), 1e-9));
+    }
+    return double.parse(
+        (sum / styleFingerprintKeys.length).toStringAsFixed(3));
+  }
+
+  /// 评审证据串：与参考文的文风距离分解（与 Python `style_ev_fragment` 同款注入）。
+  ///
+  /// 无参考（[referenceFingerprint] 为空）返回空串——不污染评审证据。
+  static String styleEvFragment(
+    Map<String, double>? referenceFingerprint,
+    String generated,
+  ) {
+    if (referenceFingerprint == null) return '';
+    final Map<String, double> gen = styleFingerprint(generated);
+    final double d = fingerprintDistance(referenceFingerprint, gen);
+    double r(String k) => referenceFingerprint[k] ?? 0.0;
+    double g(String k) => gen[k] ?? 0.0;
+    return '文风：与参考文距离 ${d.toStringAsFixed(2)}'
+        '（句长均值 ${g('sent_len_mean').toStringAsFixed(1)} vs 参考 '
+        '${r('sent_len_mean').toStringAsFixed(1)}；'
+        '对白 ${(g('dialogue_ratio') * 100).round()}% vs 参考 '
+        '${(r('dialogue_ratio') * 100).round()}%；'
+        '段落均长 ${g('para_len_mean').toStringAsFixed(1)} vs 参考 '
+        '${r('para_len_mean').toStringAsFixed(1)}）';
+  }
+
   /// 句式指纹三项：比喻密度 / 单句成段占比 / 身体反应密度。
   static Map<String, double> styleFingerprintMetrics(String text) {
     if (text.isEmpty) {
