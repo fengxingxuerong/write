@@ -1270,3 +1270,36 @@ if w >= target * 0.5 and _thrill < 0.5 and _surge < 1.0:   # 旧：双低
 - `dart analyze --fatal-infos` → **No issues found**；ruff/compileall 全绿
 - **未验证项**：补修的**真机效果**（断供带是否收窄、采纳率）同第二十八节，仍需配额正常窗口跑书验证；本节只证明逻辑与接线正确
 
+---
+
+## 三十、2026-09-29 组合质检网关补全书级入口——断供跨章形态不再无处汇总
+
+第二十五节遗留清单最后一项：`composite_quality_gate.dart` 未接断供扣分，**原因是它只有单章入口**（`check(text)` 聚合单章 `novel.content`），而断供是**跨章**形态，单章入口在设计上就拿不到。
+
+### 改动八：单章入口加可选历史 + 新增全书级汇总
+
+1. **`check(..., payoffHistory)`**：与该方法已有的 `prevContent`（同为跨章信号）同一设计思路——**调用方有上下文就传，没有（默认空列表）就完全不判，行为与旧版逐字一致**。判定 `droughtLen >= 3 && thrill < 0.5 && sideReaction < 0.3` 时加一条 `爽点断供` 告警（`warn` 级），并在 `metrics` 里带出 `payoffDroughtLen` 供 UI/门禁读取。
+   > 定为 `warn` 且**不扣分**，与 Python 侧一致：Python 的断供重罚落在**签约可行性报告**（`qa_scan_existing` 的硬伤一票否决）这个整书级面板上，而不是逐章综合分。单章门禁擅自扣分会连带影响既有分档与测试。
+2. **`CompositeQualityGate.bookPayoffDrought(history)`（新增静态）**：整书级汇总入口，返回 `(chaptersInZones, total, spans)`。这正是第二十五节点明「需另设全书级入口」的那个口子——`spans` 直接给报告展示区间（`第4-9章(6章)`），比例由调用方算。
+
+口径与 `PipelineQa.payoffDroughtZones` 完全一致，含第二十七节真机 A/B 补的**侧面反响逃生通道**（💥 低但在场者反应达标 = 兑现已送达，不算断供）。
+
+### 验证
+
+- `composite_quality_gate_test.dart` 新增 **7 项**（175→182）：无历史零回归/断供≥3 章且本章仍无兑现则告警/本章已补上则不报/全书汇总区间与章数/**侧反达标不算断供**/1~2 章连低不成带/空书安全
+- `flutter test test/ai_pipeline` → **182 passed**（175→182）；`test/engine` → **318 passed**；Python **143 tests OK**（未受影响）
+- `dart analyze --fatal-infos` → **No issues found**；ruff/compileall 全绿
+- 顺带修一处 lint：新代码里 `'第${start + 1}-${i}章'` 的 `${i}` 多余花括号
+
+### 状态小结（检测 → 预防 → 修复，全链双端就位）
+
+| 环节 | Python | Dart 桌面端 |
+|---|---|---|
+| 检测 | `payoff_drought_zones` + 签约硬伤 | `PipelineQa.payoffDroughtZones` + **本节全书级汇总** |
+| 预防 | `is_payoff_scene` 双通道 + 兜底骨架 + 规划契约 | `MultiPassChapterEngine.isPayoffScene` + `SceneBuilder` 兜底 + 规划契约 |
+| 修复 | 7.56 爽点补修 + 情绪闸门同口径 | **二十九节**：`payoffHistory` 进 `ContextBundle` + 引擎补修 |
+
+**仍存的两类未验证项**（都需要配额正常窗口，非代码问题）：
+1. 长跑效果：断供带是否真收窄、7.56/引擎补修的采纳率
+2. `side_threshold=0.3` 的松紧校准：第二十七节把它从「只看💥」放宽到「💥+侧反」，救回 10 章误报，但松紧是否合适要按实际采纳率复校
+

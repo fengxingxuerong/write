@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:novel_writer/ai_pipeline/services/composite_quality_gate.dart';
+import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/engine/quality/quality_gate.dart';
 
 /// CompositeQualityGate 组合质检网关测试。
@@ -240,4 +241,89 @@ void main() {
     });
   });
 
+  /// 约 2200 字的「无外显兑现」正文：只有叙述与身体异动，无爽点词、无在场者反应。
+  String dryText() {
+    final StringBuffer b = StringBuffer();
+    for (int i = 0; i < 40; i++) {
+      b.writeln('他数着地上的砖缝，一共三百二十一道，慢慢走到巷口。');
+      b.writeln('掌心微微发热，丹田里那点温热缓缓流转，他闭上眼。');
+    }
+    b.write('夜风从街角吹过，卷起一片落叶，落在他的鞋面上。');
+    return b.toString();
+  }
+
+  group('CompositeQualityGate 外显爽点断供（跨章）', () {
+    ChapterPayoff p(double t, double s) =>
+        ChapterPayoff(thrillPerK: t, sidePerK: s);
+
+    test('无历史时不判定（默认行为与旧版完全一致）', () {
+      final QualityGateReport r = gate.check(dryText());
+      expect(r.issues.any((QualityGateIssue e) => e.type == '爽点断供'),
+          isFalse);
+      expect(r.metrics['payoffDroughtLen'], 0.0);
+    });
+
+    test('断供 >=3 章且本章仍无兑现 → 告警（note 级不扣分）', () {
+      final QualityGateReport r = gate.check(
+        dryText(),
+        payoffHistory: <ChapterPayoff>[p(0.0, 0.0), p(0.0, 0.0), p(0.0, 0.0)],
+      );
+      expect(r.issues.any((QualityGateIssue e) => e.type == '爽点断供'),
+          isTrue);
+      expect(r.metrics['payoffDroughtLen'], 3.0);
+    });
+
+    test('本章已补上外显兑现则不报断供', () {
+      final QualityGateReport r = gate.check(
+        goodText(),
+        payoffHistory: <ChapterPayoff>[p(0.0, 0.0), p(0.0, 0.0), p(0.0, 0.0)],
+      );
+      expect(r.issues.any((QualityGateIssue e) => e.type == '爽点断供'),
+          isFalse);
+    });
+
+    test('bookPayoffDrought：汇总全书断供带', () {
+      final ({int chaptersInZones, int total, List<String> spans}) r =
+          CompositeQualityGate.bookPayoffDrought(<ChapterPayoff>[
+        p(0.0, 0.0),
+        p(0.0, 0.0),
+        p(0.0, 0.0),
+        p(0.0, 0.0),
+        p(1.2, 0.9), // 打破
+        p(0.0, 0.0),
+        p(0.0, 0.0),
+        p(0.0, 0.0),
+      ]);
+      expect(r.total, 8);
+      // 4 章干 + 1 章破 + 3 章干 = 7 章落在带内
+      expect(r.chaptersInZones, 7);
+      expect(r.spans.length, 2);
+      expect(r.spans.first, contains('章'));
+    });
+
+    test('bookPayoffDrought：侧面反响达标不算断供（真机好稿形态）', () {
+      final ({int chaptersInZones, int total, List<String> spans}) r =
+          CompositeQualityGate.bookPayoffDrought(<ChapterPayoff>[
+        p(0.0, 0.79),
+        p(0.0, 0.8),
+        p(0.0, 0.75),
+        p(0.0, 0.9),
+      ]);
+      expect(r.chaptersInZones, 0);
+      expect(r.spans, isEmpty);
+    });
+
+    test('bookPayoffDrought：1~2 章连低不成带', () {
+      final r = CompositeQualityGate.bookPayoffDrought(
+          <ChapterPayoff>[p(0.0, 0.0), p(0.0, 0.0), p(1.2, 0.9)]);
+      expect(r.chaptersInZones, 0);
+    });
+
+    test('bookPayoffDrought：空书安全', () {
+      final r =
+          CompositeQualityGate.bookPayoffDrought(<ChapterPayoff>[]);
+      expect(r.total, 0);
+      expect(r.chaptersInZones, 0);
+    });
+  });
 }

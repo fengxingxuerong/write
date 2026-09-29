@@ -35,11 +35,55 @@ class CompositeQualityGate implements QualityGate {
   /// 大纲世界观专名（一致性检测）。
   final List<String> worldTerms;
 
+  /// 全书级「外显爽点断供」汇总（组合门禁此前只有单章入口，跨章形态无处汇总）。
+  ///
+  /// 传入**全书各章**的度量（按章序、最新在末尾），返回断供带统计。口径与 Python
+  /// `payoff_drought_zones` + `qa_scan_existing` 的签约硬伤一致：
+  /// 连续 >=[minRun] 章 💥<[threshold] 且**无在场者反应**才算断供——侧面反响逃生
+  /// 通道是第二十七节真机 A/B 补的（`THRILL_WORDS` 是 96 词闭合套话表，不写套话的
+  /// 好稿天然 💥=0，误伤它等于逼模型去写套话）。
+  ///
+  /// [chaptersInZones] / [total] 供 UI 算比例；[spans] 供报告直接展示区间。
+  static ({int chaptersInZones, int total, List<String> spans}) bookPayoffDrought(
+    List<ChapterPayoff> history, {
+    double threshold = 0.5,
+    double sideThreshold = 0.3,
+    int minRun = 3,
+  }) {
+    final List<String> spans = <String>[];
+    int inZones = 0;
+    int? start;
+    for (int i = 0; i < history.length; i++) {
+      final ChapterPayoff p = history[i];
+      final bool flat =
+          p.thrillPerK < threshold && p.sidePerK < sideThreshold;
+      if (flat) {
+        start ??= i;
+      } else if (start != null) {
+        if (i - start >= minRun) {
+          inZones += i - start;
+          spans.add('第${start + 1}-$i章(${i - start}章)');
+        }
+        start = null;
+      }
+    }
+    if (start != null && history.length - start >= minRun) {
+      inZones += history.length - start;
+      spans.add('第${start + 1}-${history.length}章(${history.length - start}章)');
+    }
+    return (
+      chaptersInZones: inZones,
+      total: history.length,
+      spans: spans,
+    );
+  }
+
   @override
   QualityGateReport check(
     String text, {
     String prevContent = '',
     int chapterIndex = 1,
+    List<ChapterPayoff> payoffHistory = const <ChapterPayoff>[],
   }) {
     final QualityReport novel = NovelQualityChecker.check(text);
     final FanqieGateReport gate = FanqieGateChecker(
@@ -174,6 +218,22 @@ class CompositeQualityGate implements QualityGate {
       ));
     }
 
+    // ---- 外显爽点断供（跨章形态，note 级不扣分）----
+    // 断供是**连续 N 章**没有外显兑现，单章入口天然看不到；此处与 [prevContent]
+    // 同理——调用方有跨章上下文就传 payoffHistory，没有（默认空）则完全不判，
+    // 行为与旧版一致。整书视角的汇总见 [bookPayoffDrought]。
+    final int droughtLen = PipelineQa.trailingDroughtLen(payoffHistory);
+    if (droughtLen >= 3 && thrill < 0.5 && sideReaction < 0.3) {
+      issues.add(QualityGateIssue(
+        source: QualitySource.pipelineRules,
+        type: '爽点断供',
+        message: '已连续 $droughtLen 章无外显爽点（直白爽点 <0.5 且无在场者反应，'
+            '每千字），本章仍未补上——外显兑现是番茄追读引擎，'
+            '含蓄异动不能替代，建议在章内补一处打脸/收获/揭露',
+        severity: QualitySeverity.warn,
+      ));
+    }
+
     // ---- 综合分 ----
     double score;
     if (novel.totalWords == 0) {
@@ -201,6 +261,7 @@ class CompositeQualityGate implements QualityGate {
         'surgePerK': surge,
         'deepAiLevel': deepLevel.toDouble(),
         'sideReactionPerK': sideReaction,
+        'payoffDroughtLen': droughtLen.toDouble(),
         'dialogueRatio': gate.dialogueRatio,
         'fillerRatio': gate.fillerRatio,
       },
