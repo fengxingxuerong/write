@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/generation_engine.dart';
@@ -9,6 +10,7 @@ import 'package:novel_writer/engine/llm_retry.dart';
 import 'package:novel_writer/engine/multipass/scene_builder.dart';
 import 'package:novel_writer/engine/multipass/scene_plan.dart';
 import 'package:novel_writer/engine/writing_guidelines.dart';
+import 'package:novel_writer/models/character.dart';
 import 'package:novel_writer/models/generation_config.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
@@ -112,11 +114,84 @@ class MultiPassChapterEngine {
       ));
     }
 
+    // 外显爽点补修（跨章断供口径，与 Python `novel_pipeline` 7.56 同构）：
+    // 场景拼装后整章一次性判定——断供是**跨章**形态，单场景看不出来。
+    // 旧情绪闸门只有「双低」（💥<0.5 且 ✨<1.0），而 ✨ 含蓄异动恒高使双低几乎
+    // 永不成立；此处用 needsPayoffRepair 双通道（单章双低 + 断供带），
+    // 采纳走 acceptPayoffRepair（字数区间 + 角色名完整 + 必须真补上外显兑现），
+    // 任一不过即保留原文，绝不劣化。
+    final int droughtLen =
+        PipelineQa.trailingDroughtLen(ctx.payoffHistory);
+    final String why = droughtLen >= 3 ? '跨章断供 $droughtLen 章' : '单章双低';
+    if (content.isNotEmpty &&
+        PipelineQa.needsPayoffRepair(
+          thrill: PipelineQa.thrillPerThousand(content),
+          surge: PipelineQa.surgePerThousand(content),
+          side: PipelineQa.sideReactionPerThousand(content),
+          minWordsOk: AppConstants.countWords(content) >=
+              (chapterConfig.targetWords * 0.5).round(),
+          droughtLen: droughtLen,
+        )) {
+      onProgress?.call(GenerationProgress(
+        charsWritten: totalWords,
+        targetWords: chapterConfig.targetWords,
+        stage: '外显爽点补修（$why）…',
+        previewText: content,
+      ));
+      final String? fixed = await _repairPayoff(
+        content,
+        chapterConfig,
+        droughtLen: droughtLen,
+        cancelToken: cancelToken,
+      );
+      if (fixed != null) {
+        return GenerationResult(
+          content: fixed,
+          actualWords: AppConstants.countWords(fixed),
+          usedConfig: chapterConfig,
+        );
+      }
+    }
+
     return GenerationResult(
       content: content,
       actualWords: AppConstants.countWords(content),
       usedConfig: chapterConfig,
     );
+  }
+
+  /// 外显爽点情绪强化：整章改写一次，验收通过才返回新正文，否则返回 null。
+  ///
+  /// 与 Python `payoff_repair_prompt` / `accept_payoff_repair` 同口径。
+  /// 失败、空产出、未过验收一律返回 null——调用方保留原文，不阻塞生成。
+  Future<String?> _repairPayoff(
+    String content,
+    GenerationConfig chapterConfig, {
+    required int droughtLen,
+    CancelToken? cancelToken,
+  }) async {
+    final LlmEngine engine =
+        LlmEngine(config: config, chatRetry: const RetryPolicy(maxAttempts: 1));
+    String out;
+    try {
+      out = await engine.generateSingle(
+        systemPrompt: WritingGuidelines.systemPrompt,
+        userMessage: PipelineQa.payoffRepairPrompt(
+          content,
+          droughtLen: droughtLen,
+          characters: const <Character>[],
+        ),
+        targetWords: AppConstants.countWords(content),
+      );
+    } catch (_) {
+      return null; // 补修失败不阻塞：保原文。
+    } finally {
+      engine.dispose();
+    }
+    final String fix = out.trim();
+    if (fix.isEmpty) return null;
+    final (bool ok, String why) = PipelineQa.acceptPayoffRepair(content, fix);
+    return ok ? fix : null;
   }
 
   /// 生成单个场景。失败不抛异常（由调用方统计），但会把错误带回去。

@@ -1243,3 +1243,30 @@ if w >= target * 0.5 and _thrill < 0.5 and _surge < 1.0:   # 旧：双低
 - 本节为真机验证，无需新增单测；改动仅文档
 - 真机产物：`data/generated/live_v1.jsonl`（大纲 + 部分场景，可断点续跑）、日志 `verify-logs/live_v1.log`
 
+---
+
+## 二十九、2026-09-29 桌面端补齐「修复」闭环——把断供历史送进无状态引擎
+
+第二十五节留的遗留：「桌面端**修复**闭环缺跨章上下文（`MultiPassChapterEngine` 是无状态单章引擎，拿不到前序章 💥 序列）」。本节补齐，**不依赖任何 LLM 配额**（纯工程）。
+
+### 问题
+
+桌面端多章连写的循环在 `GenerateViewModel`（`for (int i = 0; i < count; i++)`），但引擎 `MultiPassChapterEngine.generate()` 只拿到 `ContextBundle` 里的**当前章**信息。断供是**跨章**形态（连续 N 章无外显兑现），引擎无从判定 —— 于是桌面端虽有 Python 同款的检测器（`PipelineQa.payoffDroughtZones`，第二十六节补的），却既不能预防升级也不能修复。
+
+### 改动七：历史进 `ContextBundle`，补齐四件套
+
+1. **`ChapterPayoff`（`pipeline_qa.dart`）**：一章的 `thrillPerK` + `sidePerK`，纯数据可跨 Isolate；`of(content)` 现算、`toJson/fromJson` 容错（坏数据不崩整轮生成）。
+   > 放在 `pipeline_qa.dart` 而非 `generation_engine.dart` 是为**保持依赖单向**：`generation_engine.dart` → `pipeline_qa.dart`，不反向依赖（否则形成 import 环）。
+2. **`ContextBundle.payoffHistory`**：`copyWith` 支持透传；默认空列表 = 无历史 = **不判定跨章断供，行为与旧版完全一致**。
+3. **ViewModel 累积**：每章生成后 `_appendPayoff(finalContent)`，滚动保留最近 **8** 章（断供只看末尾连续长度，更早历史不影响结论，留着只是白白跨 Isolate 传数据）；每次任务开始 `_payoffHistory.clear()`。
+4. **`MultiPassChapterEngine` 补修**：场景拼装后整章一次性判定 → `needsPayoffRepair`（单章双低 **或** 断供带）→ 触发整章情绪强化 → `acceptPayoffRepair` 验收（字数区间 + 角色名完整 + **必须真补上外显兑现**）。**失败/空产出/未过验收一律返回 null 保留原文**，不阻塞生成。进度回报新增「外显爽点补修（跨章断供 N 章）…」阶段，用户可见。
+
+口径与 Python 完全同源（`trailingDroughtLen` / `needsPayoffRepair` / `payoffRepairPrompt` / `acceptPayoffRepair`），包括第二十七节那条真机教训：**侧面反响逃生通道**（💥 低但在场者反应达标 = 兑现已送达，不修不算失败）与**「只涨✨不算修好」的判定顺序**。
+
+### 验证
+
+- 新增 `test/engine/payoff_repair_test.dart` **17 项**：`ChapterPayoff` 现算/序列化往返/坏数据不崩；`trailingDroughtLen` 末尾连续计数 + 侧反逃生；`needsPayoffRepair` 单章双低保留/断供抓高✨/无历史零回归/侧反跳过/健康章与过短章不修；`payoffRepairPrompt` 断供语境按需 + 两条底线恒在 + 角色名册注入；`acceptPayoffRepair` 真补上则采纳/**只涨✨拒**/只涨侧反采纳/字数越界拒/角色丢失拒/无变化拒
+- `flutter test test/engine` → **318 passed**（301→318）；`test/ai_pipeline` → **175 passed**；Python **143 tests OK**（未受影响）
+- `dart analyze --fatal-infos` → **No issues found**；ruff/compileall 全绿
+- **未验证项**：补修的**真机效果**（断供带是否收窄、采纳率）同第二十八节，仍需配额正常窗口跑书验证；本节只证明逻辑与接线正确
+

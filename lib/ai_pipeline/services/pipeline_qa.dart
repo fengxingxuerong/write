@@ -1,8 +1,51 @@
-import 'dart:math' as math;
+﻿import 'dart:math' as math;
 
 import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/utils/text_index.dart';
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
+import 'package:novel_writer/models/character.dart';
+
+/// 一章的「外显兑现」度量（供跨章断供判定）。
+///
+/// 桌面端此前是**无状态单章引擎**：`MultiPassChapterEngine.generate()` 只拿到当前
+/// 章，拿不到前序章的爽点密度，于是「外显爽点长期断供」这一跨章形态无从判定
+/// （Python 侧靠 `trailing_drought_len` 解决）。本记录由 ViewModel 逐章累积，
+/// 随 `ContextBundle.payoffHistory` 传入引擎——纯数据、可跨 Isolate 传递。
+///
+/// 定义放在本文件（而非 `generation_engine.dart`）是为保持依赖单向：
+/// `generation_engine.dart` → `pipeline_qa.dart`，不反向依赖。
+class ChapterPayoff {
+  /// 直白爽点密度（每千字命中数）。
+  final double thrillPerK;
+
+  /// 侧面反响密度（每千字命中数）。
+  final double sidePerK;
+
+  /// 构造。
+  const ChapterPayoff({required this.thrillPerK, required this.sidePerK});
+
+  /// 由正文现算。
+  factory ChapterPayoff.of(String content) => ChapterPayoff(
+        thrillPerK: PipelineQa.thrillPerThousand(content),
+        sidePerK: PipelineQa.sideReactionPerThousand(content),
+      );
+
+  /// 序列化。
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'thrillPerK': thrillPerK,
+        'sidePerK': sidePerK,
+      };
+
+  /// 反序列化（缺字段按 0 处理，坏数据不得让整轮生成崩掉）。
+  factory ChapterPayoff.fromJson(Map<String, dynamic> json) => ChapterPayoff(
+        thrillPerK: (json['thrillPerK'] as num?)?.toDouble() ?? 0.0,
+        sidePerK: (json['sidePerK'] as num?)?.toDouble() ?? 0.0,
+      );
+
+  @override
+  String toString() =>
+      '💥${thrillPerK.toStringAsFixed(2)}/侧反${sidePerK.toStringAsFixed(2)}';
+}
 
 /// 本地规则质检（零成本，不消耗 API）。
 ///
@@ -440,6 +483,142 @@ class PipelineQa {
         .join('、');
     return '外显爽点断供：连续 $total 章 💥<$threshold/千字且无在场者反应（$spans）'
         '——含蓄异动不能替代外显兑现，此区间「期待感」维度不应高于 40 分';
+  }
+
+  /// 末尾连续「无外显兑现」的章数（判断「已断供多久」）。
+  ///
+  /// 与 Python `novel_pipeline.trailing_drought_len` 同口径。传入**已完成的**前序
+  /// 章序列（[ChapterPayoff] 按章序、最新在末尾），返回当前章之前处于断供中的
+  /// 连续长度：0 表示上一章有外显兑现，>=3 表示已连着 3 章以上没有。
+  ///
+  /// 侧面反响逃生通道：某章 💥 低但在场者反应达标 = 外显兑现其实已送达读者，
+  /// 不计断供（`THRILL_WORDS` 是 96 词闭合套话表，不套话的好稿天然被误伤）。
+  static int trailingDroughtLen(
+    List<ChapterPayoff> history, {
+    double threshold = 0.5,
+    double sideThreshold = 0.3,
+  }) {
+    int k = 0;
+    for (int i = history.length - 1; i >= 0; i--) {
+      final ChapterPayoff p = history[i];
+      final bool flat = p.thrillPerK < threshold && p.sidePerK < sideThreshold;
+      if (!flat) break;
+      k++;
+    }
+    return k;
+  }
+
+  /// 本章是否需要「外显爽点」情绪强化修（与 Python `needs_payoff_repair` 同口径）。
+  ///
+  /// 两个通道取或：
+  /// ① 单章双低（💥<[threshold] 且 ✨<1.0）——保留旧行为，零回归；
+  /// ② 跨章断供：[droughtLen] >= [droughtMinRun] 时，本章只要 💥 仍低就修。
+  ///
+  /// 侧面反响逃生：若在场者已有明确反应（[side] >= [sideOk]），说明外显兑现其实
+  /// 已送达读者，再送修纯属白烧一次 LLM 调用，直接跳过。[sideOk] 传 0 即关闭。
+  static bool needsPayoffRepair({
+    required double thrill,
+    required double surge,
+    bool minWordsOk = true,
+    int droughtLen = 0,
+    double threshold = 0.5,
+    double surgeOk = 1.0,
+    int droughtMinRun = 3,
+    double side = 0.0,
+    double sideOk = 0.3,
+  }) {
+    if (!minWordsOk) return false;
+    if (sideOk > 0 && side >= sideOk) return false;
+    if (thrill < threshold && surge < surgeOk) return true;
+    return droughtLen >= droughtMinRun && thrill < threshold;
+  }
+
+  /// 情绪强化定点修提示词（与 Python `payoff_repair_prompt` 同文）。
+  ///
+  /// [droughtLen] >= 3 时补一条**断供语境**（点明已连着 N 章没爽点），处方更对症。
+  static String payoffRepairPrompt(
+    String fullText, {
+    int droughtLen = 0,
+    List<Character> characters = const <Character>[],
+  }) {
+    final StringBuffer b = StringBuffer();
+    b.writeln('下面这章小说情节完整，但缺少读者可感知的「外显爽点」，'
+        '移动端读者会弃书。');
+    if (droughtLen >= 3) {
+      b.writeln('【背景】本书已连续 $droughtLen 章没有出现读者可感知的'
+          '「外显爽点」（打脸/收获/揭露/当众反应），追读正在流失——'
+          '本章必须补上一处，且要外部可见。');
+    }
+    b.writeln('请输出强化后的全章正文，要求：');
+    b.writeln('- 主线情节、人物姓名、数字设定一律不变；');
+    b.writeln('- 选章内一个冲突场景，补一处「外部可见」的爽点：'
+        '对手当众吃瘪的反应 / 关键物件入手的触感细节 / 真相反转时在众人的震惊，三选一；');
+    b.writeln('- 禁止只写主角内心感受充当爽点（如「他感到修为精进」）；');
+    b.writeln('- 保持原有字数规模（±20% 内），不要另起新情节。');
+    if (characters.isNotEmpty) {
+      b.writeln();
+      b.writeln('【角色名册】以下姓名必须原样保留：'
+          '${characters.map((Character c) => c.name).join('、')}');
+    }
+    b.writeln();
+    b.writeln('【原章正文】');
+    b.write(fullText);
+    b.writeln();
+    b.writeln();
+    b.writeln('只输出强化后的全章正文：');
+    return b.toString();
+  }
+
+  /// 情绪强化稿采纳判定：字数在区间 + 角色名完整 + **必须真的补上外显兑现**。
+  ///
+  /// 与 Python `accept_payoff_repair` 同口径。关键两点：
+  /// ① 只涨 ✨（含蓄异动）**不算修好**——那正是断供的成因本身；
+  /// ② 但若**侧面反响涨到达标**（在场者确有反应，如惊呼/哗然/脸色铁青），
+  ///    外显兑现同样成立——真机实测确有此类不套话的好稿，💥 词表抓不到。
+  ///
+  /// 返回 (是否采纳, 原因/指标串)。任一不过即保留原文，绝不劣化。
+  static (bool, String) acceptPayoffRepair(
+    String original,
+    String fix, {
+    List<Character> characters = const <Character>[],
+    double minRatio = 0.7,
+    double maxRatio = 1.6,
+    double threshold = 0.5,
+    double sideOk = 0.3,
+  }) {
+    final int oW = AppConstants.countWords(original);
+    final int fW = AppConstants.countWords(fix);
+    if (fW < minRatio * oW || fW > maxRatio * oW) {
+      return (false, '字数越界（$oW->$fW 字，允许 ${(minRatio * 100).round()}'
+          '%~${(maxRatio * 100).round()}%）');
+    }
+    for (final Character c in characters) {
+      final String n = c.name.trim();
+      if (n.isNotEmpty && !fix.contains(n)) {
+        return (false, '角色丢失（$n）');
+      }
+    }
+    final double oT = thrillPerThousand(original);
+    final double fT = thrillPerThousand(fix);
+    final double oS = surgePerThousand(original);
+    final double fS = surgePerThousand(fix);
+    final double oSide = sideReactionPerThousand(original);
+    final double fSide = sideReactionPerThousand(fix);
+    // 判定顺序要紧：先把「侧反达标」记为有效提升，再看「是否整体没动」——
+    // 否则只涨侧反（💥/✨ 都没动）的好稿会被「未提升」提前拒掉。
+    final bool sideGain = sideOk > 0 && fSide >= sideOk && fSide > oSide;
+    if (!sideGain && fT <= oT && fS <= oS) {
+      return (false, '未提升（💥${oT.toStringAsFixed(2)}->${fT.toStringAsFixed(2)}'
+          '｜✨${oS.toStringAsFixed(2)}->${fS.toStringAsFixed(2)}'
+          '｜侧反${oSide.toStringAsFixed(2)}->${fSide.toStringAsFixed(2)}）');
+    }
+    if (fT < threshold && !sideGain) {
+      return (false, '未补上外显爽点（💥${fT.toStringAsFixed(2)}<$threshold、'
+          '侧反${fSide.toStringAsFixed(2)}<$sideOk）');
+    }
+    return (true, '💥${oT.toStringAsFixed(2)}->${fT.toStringAsFixed(2)}'
+        '｜✨${oS.toStringAsFixed(2)}->${fS.toStringAsFixed(2)}'
+        '｜侧反${fSide.toStringAsFixed(2)}｜$fW 字');
   }
 
   /// 评审证据串：爽点落点（注入 qualityReviewPrompt 的 qaEvidence，

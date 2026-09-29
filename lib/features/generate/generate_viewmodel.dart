@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/engine/editor_ai.dart';
+import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/engine/generation_engine.dart';
 import 'package:novel_writer/engine/llm_chat_client.dart';
 import 'package:novel_writer/engine/llm_engine.dart';
@@ -194,6 +195,16 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
   /// 拼接后的前情提要文本（多章连写时注入 ContextBundle.plotSummary）。
   String _plotSummary = '';
 
+  /// 前序各章的「外显兑现」度量（多章连写时累积，注入 ContextBundle.payoffHistory）。
+  ///
+  /// 供引擎判定**跨章**外显爽点断供：桌面端此前是无状态单章引擎，拿不到历史，
+  /// 断供（追读杀手）无人看得见。仅保留最近 [_payoffHistoryCap] 章——断供判定只看
+  /// 末尾连续长度，更早的历史不影响结论，留着只会白白跨 Isolate 传数据。
+  final List<ChapterPayoff> _payoffHistory = <ChapterPayoff>[];
+
+  /// 断供判定最多需要回看多少章（>= _payoffDroughtMinRun 即可）。
+  static const int _payoffHistoryCap = 8;
+
   /// 提交生成：按 [order] 覆盖或新增章节。
   /// [config.chapterCount] > 1 时多章连写：逐章承接上一章结尾，自动落库。
   Future<void> generate(
@@ -220,6 +231,7 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
     // 每次任务清理内部累积，但保留调用方提供的既有剧情。
     // 否则续写已有小说（包括单章生成）会在第一章丢失前情提要。
     _plotSummaryLines.clear();
+    _payoffHistory.clear();
     _plotSummaryLines.addAll(
       ctx.plotSummary
           .split(RegExp(r'[\r\n]+'))
@@ -263,6 +275,7 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
         final ContextBundle chapterCtx = ctx.copyWith(
           outline: chapterOutline,
           plotSummary: _plotSummary,
+          payoffHistory: _payoffHistory,
         );
 
         final int thisOrder = order + i;
@@ -436,6 +449,10 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
           _appendPlotSummary(order + i, summary ?? _localSummary(finalContent));
         }
 
+        // 累积本章「外显兑现」度量，供**下一章**判定跨章断供。
+        // 只回看末尾连续长度，故滚动保留最近若干章即可（早期章节不影响结论）。
+        _appendPayoff(finalContent);
+
         // 跨章一致性检查（生成完 N 章后，检测 N 章之间的矛盾）。
         // 仅 LLM 引擎 + 写了不止一章时运行；结果写入 state 展示给用户。
         ConsistencyReport? consistencyReport;
@@ -557,6 +574,18 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
       _plotSummaryLines.removeRange(0, _plotSummaryLines.length - 3);
     }
     _plotSummary = _plotSummaryLines.join('\n');
+  }
+
+  /// 累积一章的「外显兑现」度量（滚动保留最近 [_payoffHistoryCap] 章）。
+  ///
+  /// 供下一章判定跨章断供：断供只取决于**末尾连续**几章没有外显兑现，更早的
+  /// 历史不影响结论，故滚动裁剪而非无限增长（还要跨 Isolate 传给引擎）。
+  void _appendPayoff(String content) {
+    if (content.trim().isEmpty) return;
+    _payoffHistory.add(ChapterPayoff.of(content));
+    if (_payoffHistory.length > _payoffHistoryCap) {
+      _payoffHistory.removeRange(0, _payoffHistory.length - _payoffHistoryCap);
+    }
   }
 
   /// 用 LLM 把一章正文提炼成 2~3 句剧情摘要（注入下一章的前情提要）。

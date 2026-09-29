@@ -1,5 +1,6 @@
-import 'package:novel_writer/core/errors/app_exceptions.dart';
+﻿import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/core/constants/genre_presets.dart';
+import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/engine/corpus/plot_skeleton.dart';
 import 'package:novel_writer/models/character.dart';
 import 'package:novel_writer/models/generation_config.dart';
@@ -116,6 +117,12 @@ class ContextBundle {
   /// 提醒模型推进/回收伏笔并避免矛盾。空串表示无账本。
   final String foreshadowing;
 
+  /// 前序各章的「外显兑现」度量（按章序，最新在末尾）。
+  ///
+  /// 多章连写时由 ViewModel 逐章追加；为空表示无历史（单章生成 / 首次生成），
+  /// 此时引擎不做任何跨章断供判定，行为与旧版完全一致。
+  final List<ChapterPayoff> payoffHistory;
+
   /// 构造上下文包。
   const ContextBundle({
     required this.characters,
@@ -125,6 +132,7 @@ class ContextBundle {
     this.outline = '',
     this.plotSummary = '',
     this.foreshadowing = '',
+    this.payoffHistory = const <ChapterPayoff>[],
   });
 
   /// 不可变更新副本（多章连写时替换大纲/角色/设定用）。
@@ -134,6 +142,7 @@ class ContextBundle {
     String? foreshadowing,
     List<Character>? characters,
     List<WorldSetting>? worldSettings,
+    List<ChapterPayoff>? payoffHistory,
   }) {
     return ContextBundle(
       characters: characters ?? this.characters,
@@ -143,6 +152,7 @@ class ContextBundle {
       outline: outline ?? this.outline,
       plotSummary: plotSummary ?? this.plotSummary,
       foreshadowing: foreshadowing ?? this.foreshadowing,
+      payoffHistory: payoffHistory ?? this.payoffHistory,
     );
   }
 }
