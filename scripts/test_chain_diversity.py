@@ -7,9 +7,12 @@ key 级失败（429 配额）时 key 多样性有效，但**模型级**失败（
 max_tokens 致正文为空）时三把 key 必然一起失败——实测白白多等约 8 分钟才落到
 AMD。故规划链必须补**模型多样性**。
 """
+import json
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import novel_pipeline as np  # noqa: E402
@@ -23,6 +26,28 @@ class PlannerChainDiversityTest(unittest.TestCase):
             "规划链不得全是同一模型：模型级失败时 key 多样性无效")
         # dsf-flash 必须在前 2 位——它专门用来接 glm 的思考链死循环
         self.assertIn("deepseek-v4-flash", models[:2], models)
+
+    def test_llm_call_sends_caller_max_tokens_not_slot_config(self):
+        """诊断/请求必须用**实发**的 max_tokens（调用方传参优先于槽位配置）。
+
+        2026-09-30 真机：规划调用点曾硬编码 max_tokens=4000，把每个槽位配的
+        8000 整个覆盖，思考链模型必然「吃满→正文空」，跑书卡在规划、一章没写成；
+        而诊断打印的是槽位配置，日志显示「吃满 8000」——与实发的 4000 对不上，
+        误导定位半天。本测试钉死「实发值 = 调用方传参」，防止再被静默覆盖。
+        """
+        sent = {}
+
+        def fake_urlopen(req, timeout=None):
+            sent["max_tokens"] = json.loads(req.data.decode("utf-8"))["max_tokens"]
+            raise urllib.error.URLError("stop-after-capture")  # 捕获 payload 即退出
+
+        provider = {"url": "http://x", "model": "m", "key": "k", "max_tokens": 8000}
+        with patch.object(np.urllib.request, "urlopen", fake_urlopen):
+            with patch("builtins.print"):
+                with patch.object(np, "_in_cooldown", return_value=False):
+                    np.llm_call(provider, "sys", "user", max_tokens=4000, retries=0)
+        self.assertEqual(sent.get("max_tokens"), 4000,
+                         "调用方传的 max_tokens 未生效（应优先于槽位配置 8000）")
 
     def test_planner_chain_covers_all_endpoints(self):
         urls = {s["url"] for s in np.PLANNER_CHAIN}

@@ -114,6 +114,18 @@ PLANNER = dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000)
 # 免疫思考死循环」，第 8 节「根治 glm 场景死循环」那条教训当初只落在写手位、
 # 漏了规划位）。glm 仍保留首位（其大纲质量经真书验证），dsf 紧随其后专门接
 # 模型级失败，后续 glm/dsf 交替再分摊 key 级配额压力。
+#
+# 2026-09-30 记录**真正的根因**（此前「补模型多样性」只治了 key/模型级失败）：
+# 规划死循环跟链里配的 max_tokens **无关**——`call_chain(chain, sys, user, max_tokens)`
+# 的 max_tokens 是必填参数、直接透传给 llm_call，而 llm_call 里是
+# `max_tokens or provider.get('max_tokens', 2000)`，**调用方传的值优先**。
+# 规划调用点硬编码 `max_tokens=4000`，把每个槽位配的 8000 **整个覆盖掉**。
+# 于是：思考链模型实际只拿到 4000 token，正文必然为空；而诊断打印的是
+# `provider.get('max_tokens')`（槽位配置 8000），于是日志 misleading 地显示
+# 「吃满 max_tokens=8000」——**日志与实际发出的请求对不上**，这也是此前
+# 一直没定位到真因的原因。跑书卡在规划、jsonl 只落 1 条 style_ref、一章没写成。
+# 修法见规划调用点（4000 → 12000，与大纲终审官对齐）。槽位 max_tokens 对
+# 走 call_chain 且显式传参的调用点一律无效，属既有设计债，本轮只修规划位。
 PLANNER_CHAIN = [
     dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),            # K1 主
     dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=8000),  # dsf：接模型级失败
@@ -257,13 +269,17 @@ def llm_call(provider, system, user, max_tokens=None, temperature=None, retries=
     # 无论调用方传什么，kimi 一律强制 1，防止角色复用时踩雷。
     if "kimi" in provider.get("model", "").lower():
         temperature = 1.0
+    # 实发 max_tokens：调用方传参优先，其次槽位配置，最后 2000 兜底。
+    # 抽成变量供诊断打印——诊断必须反映**真实发出的**值，而非槽位配置，
+    # 否则调用方覆盖时会打印出与实际请求不符的数字，误导排查。
+    _sent_max_tokens = max_tokens or provider.get("max_tokens", 2000)
     payload = {
         "model": provider["model"],
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        "max_tokens": max_tokens or provider.get("max_tokens", 2000),
+        "max_tokens": _sent_max_tokens,
         "temperature": temperature if temperature is not None else provider.get("temp", 0.8),
         "stream": False,
         "chat_template_kwargs": {"enable_thinking": False},
@@ -285,8 +301,13 @@ def llm_call(provider, system, user, max_tokens=None, temperature=None, retries=
                 # 诊断：deepseek-v4-pro 等推理模型 thinking 关不掉时，
                 # token 全烧在 reasoning_content，正文为空（finish=length）。
                 if not content.strip() and (msg.get("reasoning_content") or "").strip():
+                    # 打印**实发**的 max_tokens（`_sent_max_tokens`），不是槽位配置
+                    # `provider['max_tokens']`：2026-09-30 规划死循环排查时，这条诊断
+                    # 显示「吃满 8000」而实际请求只发了 4000（call_chain 的调用方
+                    # 传参覆盖了槽位配置），日志与真实请求对不上，误导定位半天。
                     print(f"    [diag] {provider['model']} 思考链有输出但正文为空"
-                          f"（thinking 吃满 max_tokens={provider.get('max_tokens')}），建议加大 max_tokens")
+                          f"（thinking 吃满实发 max_tokens={_sent_max_tokens}"
+                          f"，槽位配={provider.get('max_tokens')}），建议加大 max_tokens")
                     # 思考死循环计入健康池：连续 3 次后冷却 5 分钟，
                     # 让 call_chain 自动跳过该端点直奔可用备选（2026-09-12 冒烟实测补丁）
                     _mark_fail(provider)
@@ -2048,12 +2069,16 @@ def main():
         print("[Planner] 规划全书大纲...")
         print("=" * 60)
         # 用 PLANNER_CHAIN 故障转移链（K1→K2→K3→AMD），避免单 key 限流直接失败
+        # max_tokens=12000：与大纲终审官 OUTLINE_REVIEWER_CHAIN 对齐。此前此处
+        # 硬编码 4000，把各槽位配的 8000 整个覆盖，思考链模型必然「吃满→正文空」，
+        # 规划死循环。真机日志曾 misleading 显示「吃满 8000」（诊断打印的是槽位
+        # 配置而非实发值），故此前一直没定位到真因。详见 PLANNER_CHAIN 处注释。
         plan_text = ""
         for attempt in range(2):
             plan_text = call_chain(PLANNER_CHAIN, PLANNER_SYS,
                                    planning_prompt_idea(args.total_words, prev_summary, genre=args.genre,
                                                         used_names=scan_used_protagonist_names()),
-                                   max_tokens=4000)
+                                   max_tokens=12000)
             outline = parse_json_from_llm(plan_text)
             if outline and outline.get("chapter_outlines"):
                 break
