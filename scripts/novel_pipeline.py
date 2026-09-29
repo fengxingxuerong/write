@@ -2448,6 +2448,9 @@ def main():
             why = (f"跨章断供 {_drought_n} 章" if _drought_n >= 3
                    else "单章双低")
             print(f"  [爽点补修] {why}（💥{_th_now}/✨{_sg_now}），触发情绪强化…")
+            # 触发即记账（无论成败）：采纳率是本节唯一的量化验证口径，
+            # 只记成功会让「触发了 20 次、采纳 0 次」与「一次没触发」无法区分。
+            _base_t, _base_s = _th_now, _sg_now
             _pf = call_chain(EDITOR_CHAIN, SYSTEM_PROMPT,
                              payoff_repair_prompt(
                                  final_text,
@@ -2457,19 +2460,34 @@ def main():
                              max_tokens=int(count_words(final_text) * 2.2)).strip()
             if not _pf:
                 print("    [爽点补修] 无有效产出，保留原文")
+                issues.append({"type": "payoff_repair",
+                               "desc": f"{why}｜未采纳：模型无有效产出",
+                               "ok": False})
             else:
                 _pf = apply_text_patch(final_text, _pf, args.genre,
                                        tag="爽点补修")
-                if _pf != final_text:
+                if _pf == final_text:
+                    # 补丁被 patch_gate 拦下（超长/指令残留/题材漂移/尾部重复）
+                    issues.append({"type": "payoff_repair",
+                                   "desc": f"{why}｜未采纳：补丁未过卫生闸",
+                                   "ok": False})
+                else:
                     _ok, _why = accept_payoff_repair(
                         final_text, _pf, registry=registry_block(registry))
                     if _ok:
                         print(f"    [爽点补修] 采纳：{_why}")
                         final_text = _pf
                         issues.append({"type": "payoff_repair",
-                                       "desc": f"{why}，补外显爽点（{_why}）"})
+                                       "desc": f"{why}｜采纳：{_why}",
+                                       "ok": True,
+                                       "before": f"💥{_base_t}/✨{_base_s}",
+                                       "after": _why})
                     else:
                         print(f"    [爽点补修] 未过验收（{_why}），保原文")
+                        issues.append({"type": "payoff_repair",
+                                       "desc": f"{why}｜未采纳：{_why}",
+                                       "ok": False,
+                                       "before": f"💥{_base_t}/✨{_base_s}"})
 
         # 7.6) 章内去重：复制粘贴级的整块重复（实测第 3 章开头 800 字出现两遍）
         final_text = dedup_chapter(final_text, idx)
