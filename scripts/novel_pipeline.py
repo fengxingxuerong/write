@@ -98,12 +98,28 @@ def _key(name):
 #         终审官《断脉逆命诀》二审实测证明：结构级问题（第 1 章 6 条伏笔全悬、末章停"大典前夕"）
 #         单章重写治不了，必须在写之前拦住。大纲是全书唯一低频高价值产物，守门用最强 pro。
 PLANNER = dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000)
+# 规划官链：glm K1 → dsf K1 → glm K2 → dsf K2 → AMD → NV
+#
+# 2026-09-29 真机改链：原链是 glm K1→K2→K3→AMD→NV，**三个 glm 同模型同端点、
+# 只差 key**。这在两类失败下的价值完全不同：
+#   · key 级失败（429 配额）：K1 耗尽 ≠ K2 耗尽，key 多样性**有效**；
+#   · 模型级失败（glm 思考链吃满 max_tokens=8000 致正文为空）：三把 key **必然
+#     一起失败**，key 多样性**完全无用**——纯白等三轮。
+# 真机实测（verify_after 跑书）：三把 glm key 轮番报同一条
+# `[diag] glm-5.2 思考链有输出但正文为空`，最后靠 AMD（159s）才拿到大纲，
+# 规划阶段白白多花约 8 分钟。
+#
+# 修法 = 给规划链补**模型多样性**：插入 dsf-flash（写手链早已验证「思维链轻、
+# 免疫思考死循环」，第 8 节「根治 glm 场景死循环」那条教训当初只落在写手位、
+# 漏了规划位）。glm 仍保留首位（其大纲质量经真书验证），dsf 紧随其后专门接
+# 模型级失败，后续 glm/dsf 交替再分摊 key 级配额压力。
 PLANNER_CHAIN = [
-    dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),           # K1 主
-    dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),           # K2 备
-    dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),           # K3 备
-    dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8, max_tokens=4000),   # AMD 备（稳定 30s，链序原则排 NV 前）
-    dict(url=NVIDIA, model="deepseek-ai/deepseek-v4.1-flash", key="", temp=0.8, max_tokens=4000),  # NV 末备（-0731 已 410 下架，2026-09-23 换代；端点排队严重仅象征性兜底）
+    dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),            # K1 主
+    dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=8000),  # dsf：接模型级失败
+    dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),            # K2 备
+    dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=8000),  # dsf 备
+    dict(url=AMD, model="DeepSeek-V4-Flash", key="", temp=0.8, max_tokens=4000),     # AMD（真机实测 159s/2000字）
+    dict(url=NVIDIA, model="deepseek-ai/deepseek-v4.1-flash", key="", temp=0.8, max_tokens=4000),  # NV 末备
 ]
 WRITER_CHAIN = [
     dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=6000),  # K1 dsf 主（快，思维链轻）
@@ -147,12 +163,14 @@ OUTLINE_REVIEWER_CHAIN = [
 
 def setup_keys():
     PLANNER["key"] = _key("NOVEL_KEY_SENSE_K1")
-    # 规划官：glm K1→K2→K3 → AMD（稳定 30s）→ NVIDIA（300s 超时风险，末位——链序原则）
+    # 规划官：glm K1 → dsf K1 → glm K2 → dsf K2 → AMD → NVIDIA
+    # （dsf 槽为 2026-09-29 补的模型多样性，见 PLANNER_CHAIN 处说明）
     PLANNER_CHAIN[0]["key"] = _key("NOVEL_KEY_SENSE_K1")
-    PLANNER_CHAIN[1]["key"] = _key("NOVEL_KEY_SENSE_K2")
-    PLANNER_CHAIN[2]["key"] = _key("NOVEL_KEY_SENSE_K3")
-    PLANNER_CHAIN[3]["key"] = _key("NOVEL_KEY_AMD")
-    PLANNER_CHAIN[4]["key"] = _key("NOVEL_KEY_NVIDIA")
+    PLANNER_CHAIN[1]["key"] = _key("NOVEL_KEY_SENSE_K1")
+    PLANNER_CHAIN[2]["key"] = _key("NOVEL_KEY_SENSE_K2")
+    PLANNER_CHAIN[3]["key"] = _key("NOVEL_KEY_SENSE_K2")
+    PLANNER_CHAIN[4]["key"] = _key("NOVEL_KEY_AMD")
+    PLANNER_CHAIN[5]["key"] = _key("NOVEL_KEY_NVIDIA")
     # 写手：商汤 dsf-flash K1 → glm K1 → AMD → NVIDIA
     WRITER_CHAIN[0]["key"] = _key("NOVEL_KEY_SENSE_K1")
     WRITER_CHAIN[1]["key"] = _key("NOVEL_KEY_SENSE_K1")
@@ -1986,11 +2004,17 @@ def main():
 
     setup_keys()
     if args.skip_amd:
-        # 跳过 AMD：把 AMD 链路预标记为冷却（call_chain 自动跳过，纯商汤/NVIDIA 路由）
-        amd_providers = [PLANNER_CHAIN[3], WRITER_CHAIN[2], EDITOR_CHAIN[2]]
+        # 跳过 AMD：把 AMD 链路预标记为冷却（call_chain 自动跳过，纯商汤/NVIDIA 路由）。
+        # 按 **url 判 AMD** 而非硬编码下标——2026-09-29 给规划链插入 dsf 槽后
+        # 下标整体后移，原来的 PLANNER_CHAIN[3] 会指向商汤槽，把商汤误标成冷却
+        # （等于自己把自己踢下线）。下标硬编码在链变动时必错，按特征选才不会。
+        amd_providers = [p for chain in (PLANNER_CHAIN, WRITER_CHAIN,
+                                         EDITOR_CHAIN, VERIFIER_CHAIN,
+                                         CHIEF_EDITOR_CHAIN)
+                         for p in chain if p.get("url") == AMD]
         for p in amd_providers:
             _HEALTH[_health_key(p)] = {"fails": 3, "cooldown_until": time.time() + 24 * 3600, "hits": 0}
-        print("[INFO] --skip-amd：跳过 AMD 链路，纯商汤路由")
+        print(f"[INFO] --skip-amd：跳过 {len(amd_providers)} 个 AMD 链路，纯商汤/NVIDIA 路由")
     print(f"[INFO] 协作流水线启动 | 目标 {args.total_words} 字 | 输出 {args.output}")
 
     state = load_state(args.output, min_words=0)
