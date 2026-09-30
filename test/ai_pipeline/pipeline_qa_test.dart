@@ -503,4 +503,260 @@ void main() {
       expect(ev, contains('含蓄异动不能替代外显兑现'));
     });
   });
+
+  // ================================================================
+  // 跨章意象复读（2026-09-30 新增）
+  //
+  // 真机 12.6 万字长篇里「青苔」出现 138 次、横跨近 30 章，而**整句重复率
+  // 仅 0.26%** —— 章内重复检测（intraRepeat / adjacentRepetition）完全
+  // 看不见这类「同一意象换着句式反复用」。只有跨章视角才抓得到。
+  // ================================================================
+  group('PipelineQa.crossChapterImagery', () {
+    /// 10 章全用「青苔」的构造样本。
+    ///
+    /// 阈值按**真机 12.6 万字 / 31 章**定标（minTotal=40、minPerThousand=1.0、
+    /// spreadChapters=8），所以夹具必须给足量级才可能命中——这与真机口径一致。
+    final List<String> mossyBook = <String>[
+      for (int c = 0; c < 10; c++)
+        '台阶边缘的青苔泛着湿意，青苔被雨泡开。\n\n'
+            '墙根的青苔往砖缝里钻，青苔的气味发苦。\n\n'
+            '他蹲下，指尖蹭过一层青苔，青苔碎成粉末。\n\n'
+            '风把青苔吹干了，青苔边缘卷起。\n\n'
+            '井栏边也有青苔，青苔下藏着一枚铁钉。'
+            '${'石阶的青苔被踩出一个湿脚印。' * (c + 2)}',
+    ];
+
+    test('抓出跨多章反复出现的意象，并给出总频次与章分布', () {
+      final hits = PipelineQa.crossChapterImagery(mossyBook);
+      expect(hits, isNotEmpty, reason: '10 章全用青苔，应被判为复读');
+      expect(hits.first.term, contains('青苔'));
+      expect(hits.first.chapters, greaterThanOrEqualTo(10));
+      expect(hits.first.total, greaterThan(100));
+    });
+
+    test('结果按总频次降序（复读最重的排最前）', () {
+      final hits = PipelineQa.crossChapterImagery(mossyBook);
+      expect(hits.length, greaterThan(1));
+      for (int i = 1; i < hits.length; i++) {
+        expect(hits[i - 1].total, greaterThanOrEqualTo(hits[i].total));
+      }
+    });
+
+    test('虚词不会被当成意象（噪声防护）', () {
+      final noisy = <String>[
+        for (int c = 0; c < 8; c++) '这样一个地方，他就是这样走过。\n\n' * 20,
+      ];
+      for (final h in PipelineQa.crossChapterImagery(noisy)) {
+        expect(h.term, isNot(contains('一个')));
+        expect(h.term, isNot(contains('这样')));
+        expect(h.term, isNot(contains('了他')));
+      }
+    });
+
+    test('集中在单章的刷屏不算跨章复读（章分布按章去重）', () {
+      // 一章内刷很多次但只出现在 1 章 → 章分布 = 1，不该判复读
+      final singleChapter = <String>[
+        for (int c = 0; c < 8; c++) '青苔。\n\n${'石砖与风灌进巷子。' * 200}',
+      ];
+      final terms = PipelineQa.crossChapterImagery(singleChapter)
+          .map((h) => h.term)
+          .toList();
+      expect(terms, isNot(contains('青苔')));
+    });
+
+    test('章数不足 spreadChapters 时不判（样本太小无统计意义）', () {
+      final few = List<String>.generate(
+          2, (int _) => '青苔。\n\n${'石砖。' * 200}');
+      expect(PipelineQa.crossChapterImagery(few), isEmpty);
+    });
+
+    test('意象多样的正常书不该被误报', () {
+      // 「意象多样」= 每章用**不同**的物象，且章内不重复同一句式。
+      const List<List<String>> banks = <List<String>>[
+        <String>['炉火', '铁匠', '淬火的水'],
+        <String>['芭蕉', '雨点', '檐沟'],
+        <String>['卤水', '巷口', '陶罐'],
+        <String>['铜钱', '算盘', '油灯'],
+        <String>['更鼓', '梆子', '长街'],
+        <String>['木屑', '铁砧', '风箱'],
+        <String>['井绳', '水桶', '苔痕'],
+        <String>['纸伞', '油纸', '青石'],
+      ];
+      final varied = <String>[
+        for (int c = 0; c < banks.length; c++)
+            '${banks[c][0]}映着光。\n\n'
+            '${banks[c][1]}压出影子。\n\n'
+            '${banks[c][2]}渗进水痕。',
+      ];
+      for (final h in PipelineQa.crossChapterImagery(varied)) {
+        expect(h.chapters, lessThan(6),
+            reason: '「${h.term}」x${h.total} 不该被判为跨章复读');
+      }
+    });
+
+    test('场景共词（台阶/门口）跨章高频不算意象复读', () {
+      // 「台阶」在真机 12.6 万字里高频出现，但它是场景共词不是意象——
+      // 与「青苔」性质完全不同，故必须被 imageryCommonStop 拦掉。
+      final commonWord = <String>[
+        for (int c = 0; c < 10; c++)
+            '他走上台阶。\n\n'
+            '台阶下站着人。\n\n'
+            '台阶很窄。\n\n'
+            '扶着台阶站住。\n\n'
+            '台阶尽头有光。'
+            '${'台阶一级一级往上。' * 4}',
+      ];
+      final terms = PipelineQa.crossChapterImagery(commonWord)
+          .map((h) => h.term)
+          .toList();
+      expect(terms, isNot(contains('台阶')));
+    });
+
+    test('人名可经 exclude 排除（真机「陆沉」298 次不是意象）', () {
+      // 夹具按真机量级构造：青苔 30 次 → 提到 ~60 次（跨 10 章、~3.4/千字），
+      // 人名陆沉保持高频。第一版夹具青苔只有 30 次，低于 minTotal=40 被正确挡掉，
+      // 那是夹具密度不够，不是检测器漏报。
+      final withHero = <String>[
+        for (int c = 0; c < 10; c++)
+            '青苔爬上墙根，青苔很滑，青苔发苦。\n\n'
+            '青苔沿着裂缝长，青苔边缘发白，青苔下藏着一枚钉。\n\n'
+            '陆沉走进巷子，陆沉抬头，陆沉停下。\n\n'
+            '风从巷口灌进来，陆沉咳了一声，陆沉退了半步。\n\n'
+            '灯灭了，陆沉站在原地，陆沉没动。'
+            '${'陆沉的影子被拉长，陆沉抬手，陆沉咬牙。' * (c + 2)}',
+      ];
+      // 不排除：人名也在候选里（频次远高于青苔，会排在前面）
+      final withName = PipelineQa.crossChapterImagery(withHero)
+          .map((h) => h.term)
+          .toList();
+      expect(withName, contains('陆沉'),
+          reason: '未排除时人名应出现在候选里（频次够高）');
+
+      // 排除人名后：人名消失，真正的意象复读浮出水面
+      final withoutName = PipelineQa.crossChapterImagery(withHero,
+              exclude: <String>['陆沉'])
+          .map((h) => h.term)
+          .toList();
+      expect(withoutName, isNot(contains('陆沉')),
+          reason: 'exclude 应把人名剔出候选');
+      expect(withoutName, contains('青苔'),
+          reason: '排除人名后应抓出真正的意象复读');
+    });
+
+    test('空书不抛异常', () {
+      expect(PipelineQa.crossChapterImagery(<String>[]), isEmpty);
+      expect(PipelineQa.crossChapterImagery(<String>['', '', '', '']), isEmpty);
+    });
+  });
+
+  // ================================================================
+  // 跨章对白塌陷（2026-09-30 新增）
+  //
+  // 实测：真机 12.6 万字长篇 30 章里有 29 章对白占比 <15%（番茄要求
+  // 25%~45%），其中第 5、9 章一个引号都没有。这不是个别章问题，是
+  // 全书性对白不足——写手在用连续叙述推进，读者在移动端缺少代入抓手。
+  // ================================================================
+  group('PipelineQa.dialogueCollapseChapters', () {
+    // 夹具须过 minWords=800 的门槛（与真机章 2500~4000 字同量级），
+    // 否则会被「短章不判」的护栏挡掉——那不是缺陷，是刻意的降噪。
+    // 30 段 ×22 汉字 = 660，不够；40 段才过线，故这里用 40。
+    String narration() => List<String>.filled(
+        40, '他沿着长廊慢慢走下来，青砖在脚下发出沉闷的声响。').join();
+
+    String talky() => List<String>.filled(
+        20, '“你到底想做什么？”他问。“我没想做什么。”她答。').join();
+
+    test('抓出零对白章（真机第 5/9 章形态）', () {
+      // 先确认夹具规模达标，避免误判成「没抓到」实为「被护栏挡掉」。
+      // 门槛 minWords 判的是**汉字数**（AppConstants.countWords），
+      // 故此处用汉字数自查，不能用 String.length（含标点会偏大）。
+      final int nan = AppConstants.countWords(narration());
+      expect(nan, greaterThan(800),
+          reason: '夹具需过 minWords=800（汉字数），否则零对白章会被护栏挡掉');
+      final List<({int idx, String content})> chapters =
+          <({int idx, String content})>[
+        for (int i = 1; i <= 4; i++)
+          (idx: i, content: i.isEven ? narration() : talky()),
+      ];
+      final hits = PipelineQa.dialogueCollapseChapters(chapters);
+      expect(hits.map((h) => h.idx), <int>[2, 4]);
+    });
+
+    test('对白充足的章不判塌陷', () {
+      final List<({int idx, String content})> chapters = <({int idx, String content})>[
+        for (int i = 1; i <= 3; i++) (idx: i, content: talky()),
+      ];
+      expect(PipelineQa.dialogueCollapseChapters(chapters), isEmpty);
+    });
+
+    test('短章不判（样本太小，对白占比天然低）', () {
+      final List<({int idx, String content})> chapters = <({int idx, String content})>[
+        (idx: 1, content: '他走。'),
+        (idx: 2, content: '又走了。'),
+        (idx: 3, content: '还在走。'),
+      ];
+      expect(PipelineQa.dialogueCollapseChapters(chapters), isEmpty,
+          reason: '不足 minWords 的章不该判塌陷');
+    });
+
+    test('空书不抛异常', () {
+      expect(PipelineQa.dialogueCollapseChapters(<({int idx, String content})>[]),
+          isEmpty);
+    });
+  });
+
+  group('PipelineQa.dialogueCollapseEvFragment', () {
+    test('无塌陷时返回空串，不污染 qaEvidence', () {
+      final String talky =
+          List<String>.filled(20, '“你到底想做什么？”他问。“我没想做什么。”她答。').join();
+      expect(
+        PipelineQa.dialogueCollapseEvFragment(<({int idx, String content})>[
+          (idx: 1, content: talky),
+          (idx: 2, content: talky),
+        ]),
+        '',
+      );
+    });
+
+    test('有塌陷时给出章号与占比，并带可执行的判档指引', () {
+      // 同样要过 800 汉字门槛（30 段只有 660，不够）
+      final String narration = List<String>.filled(
+          40, '他沿着长廊慢慢走下来，青砖在脚下发出沉闷的声响。').join();
+      final String ev = PipelineQa.dialogueCollapseEvFragment(
+        <({int idx, String content})>[
+          (idx: 1, content: narration),
+          (idx: 2, content: narration),
+          (idx: 3, content: narration),
+        ],
+      );
+      expect(ev, contains('对白塌陷'));
+      expect(ev, contains('第1章'));
+      expect(ev, contains('3/3'));
+      // 必须给评审明确的上限，否则证据只是摆设
+      expect(ev, contains('不应高于 50 分'));
+    });
+  });
+
+  group('PipelineQa.imageryEvFragment', () {
+    test('无命中时返回空串，不污染 qaEvidence', () {
+      expect(PipelineQa.imageryEvFragment(<String>['风。', '雨。']), '');
+    });
+
+    test('有命中时给出可执行的评审指引', () {
+      final String ev = PipelineQa.imageryEvFragment(<String>[
+        for (int c = 0; c < 10; c++)
+          '台阶的青苔泛着湿意。\n\n'
+              '墙根青苔往砖缝里钻。\n\n'
+              '他指尖蹭过一层青苔。\n\n'
+              '风把青苔吹干了。\n\n'
+              '井栏边也有青苔。'
+              '${'石阶的青苔被踩出湿脚印。' * (c + 2)}',
+      ]);
+      expect(ev, contains('跨章意象复读'));
+      expect(ev, contains('氛围描写'));
+      expect(ev, contains('青苔'));
+      // 必须给评审一个明确的下调指令，否则证据只是摆设
+      expect(ev, contains('应下调'));
+    });
+  });
 }

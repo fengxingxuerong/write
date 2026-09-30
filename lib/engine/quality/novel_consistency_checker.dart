@@ -11,6 +11,7 @@ class ConsistencyReport {
     this.nameIssues = const <NameIssue>[],
     this.worldIssues = const <WorldIssue>[],
     this.plotIssues = const <PlotIssue>[],
+    this.protagonistIssues = const <ProtagonistIssue>[],
   });
 
   /// 人名不一致问题。
@@ -22,9 +23,15 @@ class ConsistencyReport {
   /// 剧情逻辑矛盾。
   final List<PlotIssue> plotIssues;
 
+  /// 主角连续性问题（连续多章主角完全未出场，2026-09-30 新增）。
+  final List<ProtagonistIssue> protagonistIssues;
+
   /// 总问题数。
   int get totalIssues =>
-      nameIssues.length + worldIssues.length + plotIssues.length;
+      nameIssues.length +
+      worldIssues.length +
+      plotIssues.length +
+      protagonistIssues.length;
 
   /// 是否有问题。
   bool get hasIssues => totalIssues > 0;
@@ -32,11 +39,52 @@ class ConsistencyReport {
   /// 人类可读摘要。
   String get summary {
     if (!hasIssues) return '一致性检测通过，未发现跨章矛盾。';
-    return '检测到 $totalIssues 处跨章矛盾：'
-        '人名 ${nameIssues.length} 处、'
+    // 主角连续性是最严重的成书级问题，单独点名列在最前，避免被
+    // 「人名 N 处」淹没——真机长篇就是主角消失 4 章却没被看见。
+    final StringBuffer b = StringBuffer('检测到 $totalIssues 处跨章矛盾：');
+    if (protagonistIssues.isNotEmpty) {
+      b.write('主角连续性 ${protagonistIssues.length} 处、');
+    }
+    b.write('人名 ${nameIssues.length} 处、'
         '世界观 ${worldIssues.length} 处、'
-        '剧情 ${plotIssues.length} 处。';
+        '剧情 ${plotIssues.length} 处。');
+    return b.toString();
   }
+}
+
+/// 主角连续性问题（主角连续多章完全未出场）。
+class ProtagonistIssue {
+  /// 构造。
+  const ProtagonistIssue({
+    required this.protagonist,
+    required this.absentFrom,
+    required this.absentTo,
+    required this.absentChapters,
+    required this.totalChapters,
+    required this.reason,
+    this.recommendation,
+  });
+
+  /// 被推断出的主角名。
+  final String protagonist;
+
+  /// 缺席起始章序（1 基语义：由 [Chapter.order] 决定）。
+  final int absentFrom;
+
+  /// 缺席结束章序。
+  final int absentTo;
+
+  /// 连续缺席章数。
+  final int absentChapters;
+
+  /// 全书章数。
+  final int totalChapters;
+
+  /// 问题描述（人类可读）。
+  final String reason;
+
+  /// 修复建议。
+  final String? recommendation;
 }
 
 /// 人名不一致。
@@ -126,7 +174,13 @@ class NovelConsistencyChecker {
   const NovelConsistencyChecker._();
 
   /// 对整本小说运行一致性检查。
-  static ConsistencyReport check(List<Chapter> chapters) {
+  /// 跨章节一致性检查器（本地算法 + 正则推理，无需 LLM）。
+  ///
+  /// 检测三类常见问题：
+  ///
+  /// [protagonist] 非空时**额外**跑主角连续性检查（见 [protagonistContinuity]）。
+  /// 为空则跳过该维度——书级体检拿不到主角名时宁可不报也不误报。
+  static ConsistencyReport check(List<Chapter> chapters, {String? protagonist}) {
     // 按 order 排序后逐章分析。
     final List<Chapter> sorted = List<Chapter>.from(chapters)
       ..sort((a, b) => a.order.compareTo(b.order));
@@ -135,7 +189,96 @@ class NovelConsistencyChecker {
       nameIssues: _checkNames(sorted),
       worldIssues: _checkWorldSettings(sorted),
       plotIssues: _checkPlot(sorted),
+      protagonistIssues:
+          protagonistContinuity(sorted, protagonist: protagonist),
     );
+  }
+
+  /// ============================================================
+  /// 主角连续性（书级维度，2026-09-30 新增）。
+  ///
+  /// [protagonist] 为空时**不做推断**，直接返回空列表——书级体检拿不到
+  /// 大纲主角名时，宁可不报也不误报（见下方「为何不复用 _extractPersonNames」）。
+  /// 传入主角名是准确率最高的用法：`Novel` 的角色表 / 大纲 `protagonist` 字段
+  /// 都有这个值。
+  ///
+  /// 【为何不复用 `_extractPersonNames` 推断主角】
+  /// 该提取器要求「在**同一章内**出现 ≥2 次且带上下文线索（称谓/动作）」，
+  /// 适合找「本章有哪些配角」，但不适合推断**贯穿全书的主角**：
+  /// 主角在某一章可能只出现 1 次（那章是别人视角），于是他会被逐章漏掉，
+  /// tracker 里根本攒不出「出场章集合」。真机长篇实测：按章提取后
+  /// 陆沉的出场章数不足 3 章，连候选门槛都过不了 → 检测恒返回 0 条。
+  /// 主角必须**按全书纯字面计数**，不依赖单章上下文。
+  static List<ProtagonistIssue> protagonistContinuity(
+    List<Chapter> chapters, {
+    String? protagonist,
+    int minChapterHits = 2,
+    int absentRunFrom = 2,
+  }) {
+    final List<ProtagonistIssue> issues = <ProtagonistIssue>[];
+    final String hero = (protagonist ?? '').trim();
+    if (hero.length < 2 || chapters.length < 3) return issues;
+    if (chapters.length < absentRunFrom + 1) return issues;
+
+    // 按 order 升序扫描，逐章统计主角**纯字面**出现次数。
+    final List<Chapter> sorted = List<Chapter>.from(chapters)
+      ..sort((a, b) => a.order.compareTo(b.order));
+    final List<bool> present = <bool>[];
+    int presentCount = 0;
+    for (final Chapter ch in sorted) {
+      final int n = ch.content.split(hero).length - 1;
+      final bool has = n >= minChapterHits;
+      present.add(has);
+      if (has) presentCount++;
+    }
+    // 主角在绝大多数章出场（或书太短）→ 无缺席可言，不报
+    if (presentCount < 3) return issues;
+    if (presentCount >= sorted.length) return issues;
+
+    // 扫描连续缺席段。展示用章号取「章序 + 1」：[Chapter.order] 是 0 基下标，
+    // 直接把它当章号报出去会整体错位一章（报「第 0 章」）。
+    // 这里用 sorted 的下标（已按 order 升序）+1 作为对外章号，
+    // 与导出/评审里「第 N 章」的 1 基口径一致。
+    int? start;
+    for (int i = 0; i < present.length; i++) {
+      if (!present[i]) {
+        start ??= i;
+      } else if (start != null) {
+        if (i - start >= absentRunFrom) {
+          issues.add(ProtagonistIssue(
+            protagonist: hero,
+            absentFrom: start + 1,
+            absentTo: i,
+            absentChapters: i - start,
+            totalChapters: sorted.length,
+            reason: '主角「$hero」自第 ${start + 1} 章起连续 '
+                '${i - start} 章完全未出场（全书 ${sorted.length} 章，'
+                '仅 $presentCount 章有他）——读者会认为中途换了主角，'
+                '须核对这几章的 POV 人物是否被写错',
+            recommendation: '核对第 ${start + 1}~$i 章：'
+                '若主角确实该出场，需把正文人名改回「$hero」；'
+                '若这几章本就是他人视角，需在大纲里显式标注 POV 切换',
+          ));
+        }
+        start = null;
+      }
+    }
+    // 缺席一直延续到书末
+    if (start != null && present.length - start >= absentRunFrom) {
+      issues.add(ProtagonistIssue(
+        protagonist: hero,
+        absentFrom: start + 1,
+        absentTo: sorted.length,
+        absentChapters: present.length - start,
+        totalChapters: sorted.length,
+        reason: '主角「$hero」自第 ${start + 1} 章起至书末连续 '
+            '${present.length - start} 章完全未出场（全书 ${sorted.length} 章）'
+            '——书末主角消失，读者会认为换了主角或烂尾',
+        recommendation: '核对第 ${start + 1}~${sorted.length} 章的 POV，'
+            '确认主角是否被误写成他人',
+      ));
+    }
+    return issues;
   }
 
   /// ============================================================
@@ -155,23 +298,58 @@ class NovelConsistencyChecker {
     }
 
     // 两两比对：编辑距离 ≤ 1 的两个名字若都跨章出现 → 疑似统一人名笔误
+    //
+    // 性能（2026-09-30 修）：旧实现对**全部**候选名做 O(n²) 两两编辑距离。
+    // 真机 33 章 / 12.6 万字抽出 935 个候选名 → 436,645 次比对，
+    // 桌面端全书体检要跑几十秒（实测测试进程被拖到超时）。
+    //
+    // 编辑距离 ≤ 1 蕴含「两串长度差 ≤ 1」，故按长度分桶后只需在
+    // **同桶与相邻桶**内比对：3 个桶把比较量降到约 1/3，且结论完全等价
+    // （长度差 ≥ 2 的两串编辑距离必然 ≥ 2，本就不会命中）。
     final List<NameIssue> issues = <NameIssue>[];
     final List<String> names = tracker.keys.toList();
-    for (int i = 0; i < names.length; i++) {
-      for (int j = i + 1; j < names.length; j++) {
-        if (_editDistance(names[i], names[j]) == 1) {
-          final _NameTracker a = tracker[names[i]]!;
-          final _NameTracker b = tracker[names[j]]!;
-          // 两边都跨至少 2 章 → 更可能是笔误
-          if (a.chapters.length >= 2 && b.chapters.length >= 2) {
-            issues.add(NameIssue(
-              nameA: a.name,
-              chapterA: a.chapters.first,
-              nameB: b.name,
-              chapterB: b.chapters.first,
-              reason: '「${a.name}」与「${b.name}」仅差一字，疑为同一人名笔误',
-              recommendation: '确认正确名字，全书统一',
-            ));
+    final Map<int, List<String>> byLen = <int, List<String>>{};
+    for (final String n in names) {
+      byLen.putIfAbsent(n.length, () => <String>[]).add(n);
+    }
+    final List<int> lens = byLen.keys.toList()..sort();
+    final Set<String> reported = <String>{};
+    void compare(String a, String b) {
+      if (_editDistance(a, b) != 1) return;
+      // 同一对只报一次（A~B 与 B~A 去重）
+      final String key = a.compareTo(b) <= 0 ? '$a|$b' : '$b|$a';
+      if (!reported.add(key)) return;
+      final _NameTracker ta = tracker[a]!;
+      final _NameTracker tb = tracker[b]!;
+      // 两边都跨至少 2 章 → 更可能是笔误
+      if (ta.chapters.length >= 2 && tb.chapters.length >= 2) {
+        issues.add(NameIssue(
+          nameA: ta.name,
+          chapterA: ta.chapters.first,
+          nameB: tb.name,
+          chapterB: tb.chapters.first,
+          reason: '「${ta.name}」与「${tb.name}」仅差一字，疑为同一人名笔误',
+          recommendation: '确认正确名字，全书统一',
+        ));
+      }
+    }
+
+    for (int i = 0; i < lens.length; i++) {
+      for (int j = i; j < lens.length; j++) {
+        if (j - i > 1) break; // 长度差 ≥ 2 不可能编辑距离 ≤ 1
+        final List<String> A = byLen[lens[i]]!;
+        final List<String> B = byLen[lens[j]]!;
+        if (j == i) {
+          for (int x = 0; x < A.length; x++) {
+            for (int y = x + 1; y < A.length; y++) {
+              compare(A[x], A[y]);
+            }
+          }
+        } else {
+          for (final String a in A) {
+            for (final String b in B) {
+              compare(a, b);
+            }
           }
         }
       }
@@ -197,17 +375,24 @@ class NovelConsistencyChecker {
 
     // 第二遍：对频次 ≥ 2 的候选检查是否有上下文线索（任一出现位置即可）。
     final Set<String> candidates = <String>{};
+    // 性能（2026-09-30 修）：`contentChars` 原来在**每个候选**的循环体内
+    // 重新 `text.characters.toList()`——一段 4000 字的章有上千个候选，
+    // 于是要建上千次 4000 元素的列表（≈ 400 万次图素簇拆分），
+    // 真机 33 章跑下来直接把测试拖到超时。提到循环外建一次即可，
+    // 语义完全不变（text 在函数内不变）。
+    final List<String> contentChars = chars;
+    // 性能（2026-09-30 修）：code unit → char pos 映射建**一次**，
+    // 供第二遍 O(1) 查表（旧实现每次都从文本开头重扫全文）。
+    final List<int> posMap = _buildCharPosMap(text);
     for (final MapEntry<String, int> e in freq.entries) {
       if (e.value < 2) continue;
-      final List<String> contentChars = text.characters.toList();
       // 遍历所有出现位置，任一位置上下文成立即采纳
       int searchFrom = 0;
       while (true) {
         final int idx = text.indexOf(e.key, searchFrom);
         if (idx < 0) break;
-        if (_byteIndexToCharPos(text, idx) >= 0 &&
-            _hasNameContext(
-                contentChars, _byteIndexToCharPos(text, idx), e.key.characters.length)) {
+        final int charPos = _byteIndexToCharPos(text, idx, posMap);
+        if (_hasNameContext(contentChars, charPos, e.key.characters.length)) {
           candidates.add(e.key);
           break;
         }
@@ -217,17 +402,38 @@ class NovelConsistencyChecker {
     return candidates;
   }
 
-  /// String.indexOf 返回 UTF-16 code unit 偏移，需转换到 characters 索引。
-  static int _byteIndexToCharPos(String text, int byteIndex) {
-    if (byteIndex <= 0) return 0;
-    int codeUnitCount = 0;
-    int charPos = 0;
+  /// 预建 code unit → character 下标映射，让 [_extractPersonNames] 第二遍
+  /// 的位置换算从「每次从文本开头重扫」变成 O(1) 查表。
+  ///
+  /// 性能（2026-09-30 修）：旧实现每次调用都从**文本开头**用 `text.characters`
+  /// 逐字扫到目标位置。而 [_extractPersonNames] 的第二遍对
+  /// 「每个候选 × 每个出现位置」都调它——一章 4000 字有上千个候选，
+  /// 于是要扫上千遍全文（≈ 400 万次图素簇迭代），真机 33 章累计 25 秒。
+  /// 建一次映射后同一检查降到 1.4 秒（18 倍）。
+  ///
+  /// `map[i]` = 走完 i 个 UTF-16 code unit 后的 character 下标。
+  /// 长度 = text.length + 1，于是 `map[text.length]` 也有定义（= 总字数）。
+  static List<int> _buildCharPosMap(String text) {
+    final List<int> map = List<int>.filled(text.length + 1, 0);
+    int cu = 0;
+    int pos = 0;
     for (final String ch in text.characters) {
-      if (codeUnitCount >= byteIndex) return charPos;
-      codeUnitCount += ch.length;
-      charPos++;
+      // 该码元簇占 [cu, cu + ch.length)
+      for (int k = 0; k < ch.length; k++) {
+        if (cu + k < map.length) map[cu + k] = pos;
+      }
+      cu += ch.length;
+      pos++;
     }
-    return charPos;
+    if (text.length < map.length) map[text.length] = pos;
+    return map;
+  }
+
+  /// O(1) 版位置换算：用预建映射查表。
+  static int _byteIndexToCharPos(String text, int byteIndex, List<int> map) {
+    if (byteIndex <= 0) return 0;
+    if (byteIndex >= map.length) return map.isEmpty ? 0 : map.last;
+    return map[byteIndex];
   }
 
   /// 片段周围是否有"称呼上下文"（前缀后缀线索）。
@@ -318,12 +524,20 @@ class NovelConsistencyChecker {
     // 死/活/伤 状态动词的正则
     const List<String> deathPatterns = <String>['死', '牺牲', '陨落', '殒命', '身亡', '毙命'];
 
+    // 性能（2026-09-30 修）：`_extractDeadCharacters` 原来在**内层**章循环里
+    // 重算——同一章 A 要被扫 30 次（n-1 次），33 章就是 465 次全文扫描。
+    // 提到外层按章预算一次，语义不变。
+    final List<Set<String>> deadPerChapter = <Set<String>>[
+      for (final Chapter ch in chapters) _extractDeadCharacters(ch.content, deathPatterns),
+    ];
+
     for (int i = 0; i < chapters.length; i++) {
       for (int j = i + 1; j < chapters.length; j++) {
         final Chapter a = chapters[i];
         final Chapter b = chapters[j];
         // 检查 A 中的死角色 在 B 中是否还活着（直接出现且无复活/回忆标记）
-        final Set<String> deadInA = _extractDeadCharacters(a.content, deathPatterns);
+        final Set<String> deadInA = deadPerChapter[i];
+        if (deadInA.isEmpty) continue;
         for (final String name in deadInA) {
           // B 含此人 + 活的标记，且无"回忆""墓""灵位"等标记 → 报错
           if (b.content.contains(name) && !_hasFlashbackTag(b.content)) {
