@@ -310,6 +310,23 @@ def llm_call(provider, system, user, max_tokens=None, temperature=None, retries=
         "stream": False,
         "chat_template_kwargs": {"enable_thinking": False},
     }
+    # 【已否决 2026-09-30 · 真机探针实测】曾按 Dart 侧 TokenBudget
+    # needsExtraThinkingFlag 补发第二层开关（options.Thinking=false），理由是
+    # 「Python 只发一层、双端口径分叉」。**真机实测证明该假设不成立**：
+    # tool/_probe_thinking_flag.py 对 deepseek-v4-flash 用真实
+    # system(1735字)+场景 prompt 跑了 8 次，结果是——
+    #   短prompt/1500：不发→正文空(思考链2044) ；发→正文332
+    #   长prompt/1500：不发→正文784 ；    发→正文空(思考链2193)
+    #   长prompt/6000：不发→正文712 ；    发→正文空(思考链8925)
+    # 同一条件下「发/不发」的正文有无是**随机**的，思考链长度在 89~8925 之间
+    # 大幅波动。第二层开关不改变 thinking 是否被关闭，只会让思考链偶发暴涨
+    # 把正文挤空——**有害无益，故不加**。
+    #
+    # 真根因：该端点的 enable_thinking=false 对 deepseek 系并不完全生效，
+    # 思考链长度不可预测，偶发超过 max_tokens 就正文空。有效对策只有两条：
+    #   ① max_tokens 给足（让思考链也装得下）——实测 4000 时两次都出正文；
+    #   ② 靠 call_chain 的健康池冷却 + 降级换模型（既有机制，本已在跑）。
+    # 见 tool/_probe_thinking_flag.py（可复跑复核）。
     body = json.dumps(payload).encode("utf-8")
     url = provider["url"].rstrip("/")
     # 配额感知路由：冷却中的 key 直接跳过（返回空让 call_chain 切下一个）
@@ -451,8 +468,14 @@ def apply_hook_patch(final_text, hook_hint, protagonist, genre, tag=""):
     if fb:
         if not any(s in fb for s in HOOK_FALLBACK_SIGNALS):
             fb = fb.rstrip("。") + "——他还没看清那是什么。"
-        print(f"  [钩子{tag}] 本地兜底：{fb[:40]}")
-        return final_text.rstrip() + "\n\n" + fb, "local"
+        # 兜底产出同样要过补丁卫生闸：旧实现只审 LLM 补写，本地兜底是盲区，
+        # 大纲标注就是这么漏进成书的（实测「威胁逼近（……）」落进第 1 章末尾）。
+        ok2, why2 = patch_gate(fb, base_text=final_text, genre=genre, max_words=160)
+        if ok2:
+            print(f"  [钩子{tag}] 本地兜底：{fb[:40]}")
+            return final_text.rstrip() + "\n\n" + fb, "local"
+        print(f"  [钩子{tag}] 本地兜底被拒（{why2}）→ 保留原文，章末无钩需人工补")
+        return final_text, ""
     print(f"  [钩子{tag}] 无可用兜底素材，保留原文")
     return final_text, ""
 
@@ -1220,6 +1243,8 @@ def generate_appended_chapter(ch, ctx):
           f"（{plan_source}）")
 
     scene_texts = []
+    # 未产出正文的场景序号（1 基），用于成书残缺告警与落库记账。
+    lost_scenes = []
     prev_text = trackers["last_summary"]
     for si, sc in enumerate(scenes):
         stage = sc.get("stage", "承")
@@ -1262,6 +1287,14 @@ def generate_appended_chapter(ch, ctx):
         if text:
             scene_texts.append(text)
             prev_text = text[-200:] if len(text) > 200 else text
+        else:
+            # 【可观测性 2026-09-30】3 次重试后仍为空 = 该端点/模型整条链都没出
+            # 正文（思考链吃满 max_tokens、全部冷却等）。旧实现直接跳过，成书
+            # 残缺却无任何痕迹——真机第 4 章 4 个场景丢了 2 个，章纲「禁地借刀」
+            # 却成文「暗巷杀机」，整章伪装成正常章节落库，只能靠翻日志才发现。
+            lost_scenes.append(si + 1)
+            print(f"  [WARN] 场景 {stage} 三次重试仍无正文（端点全链失败），"
+                  f"本章将残缺 {len(scene_texts)}/{len(scenes)} 场景")
 
     final_text = "\n\n".join(scene_texts).strip()
     if not final_text or count_words(final_text) < 200:
@@ -1362,7 +1395,20 @@ def generate_appended_chapter(ch, ctx):
     record = {"idx": idx, "title": title_ok, "content": final_text,
               "words": count_words(final_text), "raw_words": w,
               "scenes": len(scenes), "scene_plan": plan_source,
+              # 场景残缺记账（2026-09-30，可观测性）：与 Dart 端
+              # PipelineChapter.scenesPlanned/scenesWritten 同名同义。
+              "scenes_planned": len(scenes),
+              "scenes_written": len(scenes) - len(lost_scenes),
+              "lost_scenes": lost_scenes,
               "issues": fab_issues, "chief_structural": True}
+    # 成书残缺告警写进 issues 随章节落盘，而不是只留在运行日志里
+    if lost_scenes:
+        record["issues"].append({
+            "type": "lost_scenes",
+            "desc": f"{len(lost_scenes)}/{len(scenes)} 个场景未产出正文"
+                    f"（端点全链失败），本章内容残缺，标题与章纲可能对不上，"
+                    f"建议重跑本章或人工补写",
+        })
     if promise_results:
         n_ok = sum(1 for r in promise_results if r.get("fulfilled"))
         record["issues"].append({"type": "promise_check",
@@ -2942,8 +2988,26 @@ def main():
                        for i, c in enumerate(state["chapters"])]
             print(f"  [评估卡] reviews 为空，按正文现算 {len(reviews)} 章")
         n_block = sum(1 for r in reviews if r.get("blockers"))
+        # 成书残缺汇总（2026-09-30 可观测性）：端点全链失败导致场景丢失的章，
+        # 必须在评估卡顶部显式列出——这类章的标题与章纲对不上、内容半残，
+        # 却能拿正常评分伪装成好章。放在最前面，不允许被均分淹没。
+        lost_chapters = [c for c in state["chapters"]
+                         if int(c.get("scenes_written", c.get("scenes", 0)) or 0)
+                         < int(c.get("scenes_planned", c.get("scenes", 0)) or 0)]
         with open(card, "w", encoding="utf-8") as f:
             f.write(f"《{outline.get('title', '')}》 番茄过审评估卡\n")
+            # 残缺告警排在**均分之前**：残缺章的评分本身没有意义
+            # （内容半残、标题与章纲对不上），让读者先看均分会以为这本书质量正常。
+            if lost_chapters:
+                f.write(f"⛔ 成书残缺告警：{len(lost_chapters)} 章有场景未产出正文"
+                        f"（端点全链失败），这些章内容不完整、标题与章纲可能对不上，"
+                        f"其评分不代表真实质量，须重跑或人工补写：\n")
+                for c in lost_chapters:
+                    planned = int(c.get("scenes_planned", c.get("scenes", 0)) or 0)
+                    written = int(c.get("scenes_written", planned) or 0)
+                    f.write(f"    第 {c.get('idx')} 章：{written}/{planned} 场景"
+                            f"（{c.get('title', '')}）\n")
+                f.write("\n")
             f.write(f"题材：{args.genre}｜章节：{len(reviews)}｜评审均分："
                     f"{round(sum(r['score'] for r in reviews) / max(len(reviews), 1), 1)}\n")
             f.write(f"阻断级硬伤章数：{n_block}（有阻断项即不给「可投」，先按下列清单定点修）\n\n")

@@ -1433,6 +1433,21 @@ def load_state(path, min_words=800):
                 chapter["words"] = actual_words
                 out["chapters"].append(chapter)
                 seen_idx.add(idx)
+    # 按 idx 升序重排（2026-09-30 修复章序错乱）。
+    #
+    # 实测事故：真机 12.6 万字长篇的 jsonl 物理顺序是
+    #   1..9, **12,13,14,15,16,17, 10,11**, 18,19, **22,24,25,27,28,30,31,32,33, 20,21,23,26,29**
+    # 导出成书后章节物理顺序错乱，读者/审稿无法按序阅读，须人工重排。
+    #
+    # 根因是**断点续跑**：本函数按 jsonl 行的物理顺序 append，而 jsonl 是
+    # 「完成一章追加一行」。中断后重跑时，缺章（如 10、11）是在已有 12~17 之后
+    # 才补写的，于是物理顺序 ≠ 章序。续跑是本流水线的正常路径（配额受限时长跑
+    # 的唯一续命方式），所以这不是边界情况而是常态。
+    #
+    # 在 load 处排序而非 export 处：state["chapters"] 的所有下游消费者
+    # （export_txt / 总编终审 / 结构修复 / md_projection）都依赖它拿到有序列表，
+    # 只修导出层会留下别的乱序隐患。
+    out["chapters"].sort(key=lambda c: c.get("idx", 0))
     return out
 
 
@@ -1449,9 +1464,13 @@ def _sidecar_path(path, suffix):
 
 def export_txt(path, title, chapters):
     txt_path = _sidecar_path(path, ".txt")
+    # 按 idx 升序写（2026-09-30 修复章序错乱）：defense in depth。
+    # load_state 已排过序，这里再排一次是防调用方直接传乱序列表
+    # （写手断点续跑 / 结构补章都是就地 append 的路径）。
+    ordered = sorted(chapters, key=lambda c: c.get("idx", 0))
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(f"《{title}》\n\n")
-        for ch in chapters:
+        for ch in ordered:
             f.write(f"\n\n第 {ch['idx']} 章  {ch.get('title', '')}\n")
             f.write("—" * 20 + "\n\n")
             f.write(ch.get("content", ""))

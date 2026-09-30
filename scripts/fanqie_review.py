@@ -267,10 +267,21 @@ def paragraphs(text):
     return [p.strip() for p in (text or "").split("\n") if p.strip()]
 
 
+# 对白引号配对（与 Dart 侧 PipelineQa.dialogueRatioOf 同口径）。
+#
+# 【口径核实 2026-09-30】曾担心旧写法 `[“"『「]([^”"』」]{1,200})[”"』」]` 会让
+# 直引号 `"` 自配对（把 `'青'` 当成对白），遂改为「同类型配对」的多正则版本。
+# **实测四种边界情形（跨类型混排 / 奇数个直引号 / 奇数个中文引号 / 直角引号
+# 跨句）两种口径输出完全一致**，因为「起引号后紧跟同类型收引号」是绝大多数情况，
+# 而落单的引号两边都匹配不到。故原写法并无实际缺陷，本次改动回退，
+# 保持单正则（更短、且与历史产物对账口径不变）。
+QUOTE_RE = re.compile(r"[“\"『「]([^”\"』」]{1,200})[”\"』」]")
+
+
 def dialogue_ratio(text):
     """引号内字数占比。"""
-    quoted = "".join(re.findall(r"[“\"『「]([^”\"』」]{1,200})[”\"』」]", text or ""))
-    total = max(count_words(text), 1)
+    quoted = "".join(QUOTE_RE.findall(text or ""))
+    total = max(count_words(text or ""), 1)
     return round(count_words(quoted) / total, 3)
 
 
@@ -725,18 +736,53 @@ def local_hook_fallback(hook_hint="", protagonist="", genre=""):
     """零 LLM 钩子兜底：用章纲自带的钩子写死一句章末悬念，保证不掉钩、不跑题。
 
     用途：LLM 补写被拒（指令残留/题材漂移/重复）或全部模型不可用时，仍要留住追读命门。
+
+    【实测事故 2026-09-30】规划官的钩子**系统性**写成 `类型（说明）` 形式
+    （`钩子=威胁逼近（周管事察觉异象，封铺捉贼）`，真机 5 章 5 中）。旧实现只按
+    冒号切后半段，遇到括号时整段原样返回，于是「威胁逼近（……）」这种**大纲标注**
+    被拼进成书第 1 章末尾，读者一眼判定机器产物。故与 Dart 侧
+    `_localHookFallback` 同口径修复：
+      ① 括号/冒号两种切法都支持，剥掉 `威胁逼近` 这类类型词与外层括号；
+      ② 剥完仍带标注感的（残留 `＝`/`｜`/未闭合括号）直接放弃兜底，返回空串，
+         由上层保留原文并记日志——宁可章末无钩，也不把标注拼进正文；
+      ③ 产出为纯叙事句，绝不把「说明」当正文。
     """
     txt = (hook_hint or "").strip()
     if not txt:
         return ""
-    txt = re.sub(r"^.*?[：:]", "", txt, count=1) if "：" in txt or ":" in txt else txt
-    txt = txt.strip("（）() 「」『』")
+
+    # ① 先剥外层成对括号：取括号内说明（`威胁逼近（说明）` → `说明`）。
+    #    规划官的类型词（威胁逼近/信息反转/选择困境/反常细节/承诺未兑）
+    #    连同括号一起丢弃——它是大纲标签，不是叙事。
+    #    尾部容许句末标点：真机存在 `（……只剩九十天）。` 这种右括号后带句号的写法，
+    #    以 `$` 锚定的旧正则会整条失配 → 退回冒号切法 → 切在内层引号的冒号上，
+    #    吐出「……'拔擢试上，你会死得很难看'，……）。」，尾部 `）` 漏进正文。
+    m = re.match(r"^[^()（）]{0,12}[(（]([^()（）]*)[)）][。．.！!？?、，,；;：:\s]*$", txt)
+    if m:
+        txt = m.group(1).strip()
+    else:
+        # ② 无括号时才退回冒号切法（兼容 `威胁逼近：说明` 写法）。
+        txt = re.sub(r"^.*?[：:]", "", txt, count=1) if ("：" in txt or ":" in txt) else txt
+    txt = txt.strip("（）() 「」『』\n\r\t")
     if not txt:
         return ""
-    head = protagonist or "他"
-    if head in txt:
-        return txt if txt.endswith(("。", "！", "？", "…")) else txt + "。"
-    return f"{head}回头。{txt.rstrip('。')}。"
+
+    # ③ 标注残留自检：仍带大纲分隔符或括号不闭合，说明这不是可用的叙事素材。
+    if any(t in txt for t in ("＝", "=", "｜", "|")) or re.search(r"[（(]", txt):
+        return ""
+
+    head = (protagonist or "").strip() or "他"
+    # 剥离后仍可能以主角名开头（「宿峥必须在搜身之前藏住古钱」），此时直接补主语
+    # 会读成「宿峥回头。宿峥必须……」，故只在不含主角名时才追加主语。
+    out = txt if head in txt else f"{head}回头。{txt.rstrip('。！？')}"
+    # 补主语后若以引号起头（「回头。'你会死得很难看'」），会读成无主语引语，
+    # 直接弃用这段素材——宁可章末无钩，也不拼出病句。
+    if out and out[0] in "'\"“”‘’「」『』":
+        return ""
+    out = out.rstrip("。！？")
+    if not out:
+        return ""
+    return out + "。"
 
 
 # ------------------------------------------------------------

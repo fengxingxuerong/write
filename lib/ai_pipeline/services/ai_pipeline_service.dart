@@ -346,6 +346,8 @@ class AiPipelineService {
 
       // 2) 逐场景正文（写手）
       final List<String> sceneTexts = <String>[];
+      // 未产出正文的场景序号（1 基），用于成书残缺告警与落库记账。
+      final List<int> lostScenes = <int>[];
       String prevText = lastSummary;
       for (int si = 0; si < scenes.length; si++) {
         final Map<String, dynamic> sc = scenes[si];
@@ -392,6 +394,14 @@ class AiPipelineService {
         if (text.isNotEmpty) {
           sceneTexts.add(text);
           prevText = text;
+        } else {
+          // 【可观测性 2026-09-30】场景返回空 = 该端点/模型整条链都没出正文
+          // （思考链吃满 max_tokens、全部冷却等）。旧实现直接跳过，成书残缺却
+          // 无任何痕迹——真机第 4 章 4 个场景丢了 2 个，标题与章纲都对不上，
+          // 却伪装成正常章节落库。这里显式记账并告警。
+          lostScenes.add(si + 1);
+          task.addLog('    [WARN] 场景 $stage 未产出正文（端点全链失败），'
+              '本章将残缺 ${scenes.length - lostScenes.length}/${scenes.length} 场景');
         }
         // 字数不足补充续写
         if (w > 50 && w < tw * 0.4) {
@@ -482,12 +492,22 @@ class AiPipelineService {
             task.config.protagonist,
             task.config.genre,
           );
-          if (fallback.isNotEmpty) {
+          // 兜底产出同样要过补丁卫生闸：旧实现只审 LLM 补写，本地兜底是盲区，
+          // 大纲标注就是这么漏进成书的（实测「威胁逼近（……）」落进第 1 章末尾）。
+          final String? fbWhy = fallback.isEmpty
+              ? '无可用兜底素材'
+              : FanqieGateChecker.patchReject(
+                  fallback,
+                  baseText: fullText,
+                  genre: task.config.genre,
+                  maxWords: 160,
+                );
+          if (fallback.isNotEmpty && fbWhy == null) {
             fullText = '${fullText.trimRight()}\n\n$fallback';
             task.addLog('  [钩子] 本地兜底：'
                 '${fallback.length > 40 ? fallback.substring(0, 40) : fallback}');
           } else {
-            task.addLog('  [钩子] 无可用兜底素材，保留原文');
+            task.addLog('  [钩子] 本地兜底被拒（${fbWhy ?? '空产出'}）→ 保留原文，章末无钩需人工补');
           }
         }
       }
@@ -640,6 +660,37 @@ class AiPipelineService {
         }
       }
 
+      // 主角在场记账 + 场景残缺记账（2026-09-30 新增，可观测性）
+      //
+      // 【主角漂移实测】真机 33 章长篇：主角「陆沉」第 1~29 章正常出场，自第 30 章
+      // 起**连续 4 章 0 次**，POV 被换成了他人。提示词里早有硬约束
+      // （`本章主角：X。全章只用这个名字`，见 pipeline_prompts.dart:176），
+      // 但**提示词级指令不构成保证**——端点偶发抽风就绕过去了。
+      //
+      // 定位是「记账 + 告警」而非「判失败」：他人视角章是合法的文学选择
+      // （多线叙事常写），一刀切失败会误伤好书，也会白烧一次 LLM 调用。
+      // 真正兜底的是书级 [NovelConsistencyChecker.protagonistContinuity]：
+      // 单章可疑不动，连续多章消失才判定事故。
+      final String heroName = task.config.protagonist.trim();
+      int heroMentions = -1;
+      if (heroName.length >= 2) {
+        heroMentions = ' $fullText '.split(heroName).length - 1;
+        if (finalWords >= 800 && heroMentions == 0) {
+          issues.add('第 $idx 章主角「$heroName」本章 0 次出场（正文 $finalWords 字）'
+              '——写手可能换了 POV 人物；若本章本就是他人视角可忽略，'
+              '但若连续多章如此则成书失去主角');
+          task.addLog('  [WARN] 第 $idx 章主角「$heroName」0 次出场，'
+              '已记入本章问题（书级体检会对连续消失判事故）');
+        }
+      }
+      if (lostScenes.isNotEmpty) {
+        issues.add('第 $idx 章 ${lostScenes.length}/${scenes.length} 个场景'
+            '未产出正文（端点全链失败），本章内容残缺，'
+            '标题与章纲可能对不上，建议重跑本章或人工补写');
+        task.addLog('  [WARN] 第 $idx 章场景残缺 '
+            '${scenes.length - lostScenes.length}/${scenes.length}，已记入本章问题');
+      }
+
       final PipelineChapter chapter = PipelineChapter(
         idx: idx,
         title: title,
@@ -647,6 +698,9 @@ class AiPipelineService {
         rawWords: rawWords,
         words: _countWords(fullText),
         issues: issues,
+        scenesPlanned: scenes.length,
+        scenesWritten: scenes.length - lostScenes.length,
+        protagonistMentions: heroMentions,
       );
       task.chapters.add(chapter);
       task.chapters.sort((a, b) => a.idx.compareTo(b.idx));
@@ -769,23 +823,60 @@ class AiPipelineService {
   ///
   /// 与 Python 侧 `local_hook_fallback` 同口径。LLM 补写被拒
   /// （指令残留/题材漂移/重复）或全模型不可用时，仍要留住追读命门。
+  ///
+  /// 【实测事故 2026-09-30】规划官的钩子**系统性**写成 `类型（说明）` 形式
+  /// （`钩子=威胁逼近（周管事察觉异象，封铺捉贼）`，真机 5 章 5 中），
+  /// 旧实现只按冒号切后半段，遇到括号时整段原样返回，于是
+  /// 「威胁逼近（……）」这种**大纲标注**被拼进成书第 1 章末尾——
+  /// 读者一眼判定机器产物，直接判废。故此处必须：
+  ///   ① 括号/冒号两种切法都支持，剥掉 `威胁逼近` 这类类型词与外层括号；
+  ///   ② 剥完仍带标注感的（残留 `＝`/`｜`/未闭合括号）直接放弃兜底，交由上层保留原文；
+  ///   ③ 产出为纯叙事句，绝不把「说明」当正文。
   static String _localHookFallback(String hookHint, String protagonist, String genre) {
     String txt = hookHint.trim();
     if (txt.isEmpty) return '';
-    final RegExpMatch? colon = RegExp(r'[：:]').firstMatch(txt);
-    if (colon != null) txt = txt.substring(colon.end);
-    txt = txt.replaceAll(RegExp(r'^[（）()「」『』\s]+'), '').trim();
+
+    // ① 先剥外层成对括号：取括号内说明（`威胁逼近（说明）` → `说明`）。
+    //    规划官的类型词（威胁逼近/信息反转/选择困境/反常细节/承诺未兑）
+    //    连同括号一起丢弃——它是大纲标签，不是叙事。
+    //    尾部容许句末标点：真机存在 `（……只剩九十天）。` 这种右括号后带句号的写法，
+    //    以 `$` 锚定的旧正则会整条失配 → 退回冒号切法 → 切在内层引号的冒号上，
+    //    吐出「……'拔擢试上，你会死得很难看'，……）。」，尾部 `）` 漏进正文。
+    final RegExpMatch? paren = RegExp(
+      r'^[^(（]{0,12}[(（]([^()（）]*)[)）][。．.！!？?、，,；;：:\s]*$',
+    ).firstMatch(txt);
+    if (paren != null) {
+      txt = paren.group(1)!.trim();
+    } else {
+      // ② 无括号时才退回冒号切法（兼容 `威胁逼近：说明` 写法）。
+      final RegExpMatch? colon = RegExp(r'[：:]').firstMatch(txt);
+      if (colon != null) txt = txt.substring(colon.end);
+    }
+    txt = txt.replaceAll(RegExp(r'^[（）()「」『』\s]+'), '')
+        .replaceAll(RegExp(r'[（）()「」『』\s]+$'), '')
+        .trim();
     if (txt.isEmpty) return '';
-    final String head = protagonist.isNotEmpty ? protagonist : '他';
+
+    // ③ 标注残留自检：仍带大纲分隔符或括号不闭合，说明这不是可用的叙事素材，
+    //    与其把标注拼进正文，不如放弃兜底（上层会保留原文并记日志）。
+    if (txt.contains('＝') || txt.contains('=') || txt.contains('｜') ||
+        txt.contains('|') || RegExp(r'[（(]').hasMatch(txt)) {
+      return '';
+    }
+
+    final String head = protagonist.trim().isNotEmpty ? protagonist.trim() : '他';
     const List<String> signals = <String>[
       '还没', '突然', '竟然', '不对劲', '盯着', '动静', '浮现', '逼近', '异动',
     ];
-    String out;
-    if (txt.contains(head)) {
-      out = txt;
-    } else {
-      out = '$head回头。${txt.replaceAll(RegExp(r'。$'), '')}。';
-    }
+    // 剥离后仍可能以主角名开头（「宿峥必须在搜身之前藏住古钱」），此时直接补主语
+    // 会读成「宿峥回头。宿峥必须……」，故只在不含主角名时才追加主语。
+    String out = txt.contains(head) ? txt : '$head回头。$txt';
+    // 补主语后若以引号起头（「回头。'你会死得很难看'」），会读成无主语引语，
+    // 直接弃用这段素材——宁可章末无钩，也不拼出病句。
+    if (out.isNotEmpty && "'\"“”‘’「」『』".contains(out[0])) return '';
+    out = out.replaceAll(RegExp(r'[。！？]+$'), '');
+    if (out.isEmpty) return '';
+    out = '$out。';
     if (!signals.any(out.contains)) {
       // 保证章末有钩子信号（与 PipelineQa.hasEndingHook 的词表对齐）
       out = '${out.replaceAll(RegExp(r'。$'), '')}——他还没看清那是什么。';

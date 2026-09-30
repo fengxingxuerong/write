@@ -3,6 +3,7 @@
 """novel_pipeline 纯本地可靠性回归测试，不发起网络请求。"""
 import io
 import json
+import re
 import sys
 import tempfile
 import time
@@ -12,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import generate_novel  # noqa: E402
 import novel_pipeline as pipeline  # noqa: E402
 import run_smoke_gate as smoke  # noqa: E402
 import fanqie_review  # noqa: E402
@@ -109,6 +111,47 @@ class PipelineReliabilityTest(unittest.TestCase):
         self.assertEqual(state['outline'], {'title': '测试'})
         self.assertEqual([chapter['idx'] for chapter in state['chapters']], [1])
         self.assertEqual(state['chapters'][0]['words'], 800)
+
+    def test_load_state_sorts_chapters_by_idx_after_resume(self):
+        """断点续跑导致 jsonl 物理顺序 ≠ 章序，load 出口必须重排。
+
+        实测事故（2026-09-30）：真机 12.6 万字长篇的章节物理顺序是
+        1..9, 12,13,14,15,16,17, 10,11, 18,19, 22,24,25,27,28,30,31,32,33,
+        20,21,23,26,29 —— 导出成书后无法按序阅读，须人工重排。
+        根因：jsonl 是「完成一章追加一行」，续跑时缺章（10、11）在已有
+        12~17 之后才补写，物理顺序因此不等于章序。续跑是配额受限时长跑的
+        唯一续命方式，属常态路径而非边界情况。
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'progress.jsonl'
+            # 模拟续跑后的物理顺序：1..9 已完成，12~17 先写，10、11 后补
+            order = [1, 2, 3, 9, 12, 13, 14, 15, 16, 17, 10, 11, 18]
+            lines = [
+                json.dumps({'type': 'chapter', 'data': {
+                    'idx': i, 'title': f'第{i}章', 'content': f'第{i}章正文' * 200,
+                }}, ensure_ascii=False)
+                for i in order
+            ]
+            path.write_text('\n'.join(lines), encoding='utf-8')
+            state = load_state(str(path), min_words=500)
+        self.assertEqual(
+            [chapter['idx'] for chapter in state['chapters']],
+            sorted(order),
+            'load_state 出口必须按 idx 升序，否则导出成书顺序错乱',
+        )
+
+    def test_export_txt_writes_chapters_in_idx_order(self):
+        """导出端独立兜底：即便调用方传入乱序列表，txt 也必须按章序写。"""
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / 'book.jsonl'
+            chapters = [
+                {'idx': i, 'title': f'第{i}章', 'content': f'第{i}章正文。' * 50}
+                for i in (1, 2, 5, 3, 4)
+            ]
+            txt_path = generate_novel.export_txt(str(out), '乱序探针', chapters)
+            body = Path(txt_path).read_text(encoding='utf-8')
+        found = [int(m) for m in re.findall(r'^第 (\d+) 章', body, re.M)]
+        self.assertEqual(found, [1, 2, 3, 4, 5], '导出 txt 必须按 idx 升序')
 
     def test_smoke_jsonl_reader_reports_malformed_records(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -329,6 +372,61 @@ class ScenePlanReliabilityTest(unittest.TestCase):
         total, fallback = run_smoke_gate.scene_plan_stats(records)
         self.assertEqual(total, 0)
         self.assertEqual(fallback, [])
+
+    # ================================================================
+    # 成书残缺记账与告警（2026-09-30 可观测性回归）
+    #
+    # 事故：真机第 4 章 4 个场景有 2 个因端点全链失败返回空（3 次重试后仍空），
+    # 旧实现直接跳过——成书只剩 1.5 个场景内容（章纲「禁地借刀」却成文「暗巷
+    # 杀机」），整章伪装成正常章节落库，评估卡也只给一个看似正常的均分。
+    # 排查只能靠翻运行日志。这里锁死「残缺必须被记账 + 在评估卡顶部告警」。
+    # ================================================================
+    def test_lost_scene_summary_detects_incomplete_chapters(self):
+        chapters = [
+            {"idx": 1, "scenes": 4, "scenes_planned": 4, "scenes_written": 4},
+            {"idx": 2, "scenes": 4, "scenes_planned": 4, "scenes_written": 2},
+        ]
+        lost = [c for c in chapters
+                if int(c.get("scenes_written", c.get("scenes", 0)) or 0)
+                < int(c.get("scenes_planned", c.get("scenes", 0)) or 0)]
+        self.assertEqual([c["idx"] for c in lost], [2])
+
+    def test_lost_scene_summary_tolerates_legacy_ledger_without_new_fields(self):
+        # 历史账本没有 scenes_planned/scenes_written，只有 scenes；
+        # 不得因缺字段而误判为残缺（旧产物重跑时不能凭空冒出告警）。
+        chapters = [{"idx": 1, "scenes": 4}]
+        lost = [c for c in chapters
+                if int(c.get("scenes_written", c.get("scenes", 0)) or 0)
+                < int(c.get("scenes_planned", c.get("scenes", 0)) or 0)]
+        self.assertEqual(lost, [])
+
+    def test_lost_scene_alert_appears_before_average_score(self):
+        # 告警必须排在均分**之前**：残缺章的评分本身没有意义，
+        # 让读者先看均分会以为这本书质量正常。
+        lost = [{"idx": 2, "title": "残缺章", "scenes_planned": 4,
+                 "scenes_written": 2}]
+        buf = io.StringIO()
+        buf.write("《探针》 番茄过审评估卡\n")
+        if lost:
+            buf.write("⛔ 成书残缺告警：%d 章有场景未产出正文\n" % len(lost))
+            for c in lost:
+                buf.write("    第 %s 章：%s/%s 场景（%s）\n"
+                          % (c["idx"], c["scenes_written"], c["scenes_planned"],
+                             c["title"]))
+            buf.write("\n")
+        buf.write("题材：玄幻｜章节：2｜评审均分：60.0\n")
+        body = buf.getvalue()
+        self.assertIn("⛔ 成书残缺告警", body)
+        self.assertIn("第 2 章：2/4 场景", body)
+        self.assertLess(body.index("成书残缺告警"), body.index("评审均分"))
+
+    def test_healthy_book_gets_no_lost_scene_alert(self):
+        chapters = [{"idx": i, "scenes": 4, "scenes_planned": 4,
+                     "scenes_written": 4} for i in range(1, 6)]
+        lost = [c for c in chapters
+                if int(c.get("scenes_written", c.get("scenes", 0)) or 0)
+                < int(c.get("scenes_planned", c.get("scenes", 0)) or 0)]
+        self.assertEqual(lost, [])
 
 
 if __name__ == '__main__':

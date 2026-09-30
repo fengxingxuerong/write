@@ -77,6 +77,7 @@ void main() {
     bool autoRewriteLowScore = false,
     int rewriteThreshold = 55,
     bool useStateTrack = false,
+    String protagonist = '林舟',
     Iterable<AiRole> activeRoles = const <AiRole>[
       AiRole.planner,
       AiRole.writer,
@@ -87,7 +88,7 @@ void main() {
     totalWords: totalWords,
     maxChapters: maxChapters,
     genre: '玄幻',
-    protagonist: '林舟',
+    protagonist: protagonist,
     useEditor: useEditor,
     useVerifier: useVerifier,
     useQualityReview: useQualityReview,
@@ -102,10 +103,26 @@ void main() {
       AiPipelineTask(id: id, config: cfg, createdAt: DateTime(2026, 9, 1));
 
   /// 全书大纲（1 章，目标 60 字——小而可控）。
-  String outlineJson({int idx = 1, int target = 60, String title = '觉醒'}) =>
-      '{"title":"测试之书","world":"玄天大陆","hook":"废柴觉醒",'
-      '"chapter_outlines":[{"idx":$idx,"title":"$title","target":$target,'
-      '"goal":"林舟觉醒武魂｜钩子=威胁逼近：血煞盟的人影一闪而逝"}]}';
+  /// 预置大纲 JSON。
+  ///
+  /// [hook] 覆盖章纲 goal 里的钩子原文（用于回归「规划官写成 `类型（说明）`」
+  /// 这一真机形态）。走 jsonEncode 序列化，括号/全角标点无需手工转义。
+  String outlineJson({int idx = 1, int target = 60, String title = '觉醒', String? hook}) {
+    final String h = hook ?? '威胁逼近：血煞盟的人影一闪而逝';
+    return jsonEncode(<String, dynamic>{
+      'title': '测试之书',
+      'world': '玄天大陆',
+      'hook': '废柴觉醒',
+      'chapter_outlines': <Map<String, dynamic>>[
+        <String, dynamic>{
+          'idx': idx,
+          'title': title,
+          'target': target,
+          'goal': '林舟觉醒武魂｜钩子=$h',
+        },
+      ],
+    });
+  }
 
   /// 两场景规划（targetWords 300 → 137 字场景不触发续写阈值 120）。
   const String scenePlanJson =
@@ -221,6 +238,88 @@ void main() {
   ];
 
   // ---------------- 用例 ----------------
+
+  // ================================================================
+  // 残缺与主角记账（2026-09-30 可观测性）
+  //
+  // 实测事故：① 真机第 4 章 4 个场景有 2 个因端点全链失败返回空，成书残缺
+  // 却伪装成正常章节；② 同书第 30~33 章主角「陆沉」0 次出场，POV 被换人。
+  // 两者此前都只留在运行日志里，落库后无从核对。
+  // ================================================================
+  group('AiPipelineService 残缺与主角记账', () {
+    /// 一段不含主角名的长正文（≥800 字，触发主角 0 次判定）。
+    String noHeroLong() =>
+        List<String>.filled(40, '齐的刀已经收回。齐没有停。齐转身走开。').join();
+
+    test('主角 0 次出场（长章）→ 记入本章问题并 WARN', () async {
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          sceneTexts: <String>[noHeroLong()],
+          // 显式给一个合法钩子：否则会走章纲钩子本地兜底，而兜底句本身会带上
+          // 主角名（「XX回头。…」），导致「0 次出场」永远测不出来。
+          hookPatch: freshHook,
+        ),
+      );
+      final AiPipelineTask t =
+          await runTask(task(config(protagonist: '陆沉')), router);
+      final PipelineChapter c = t.chapters.single;
+      expect(c.protagonistMentions, 0);
+      expect(
+        c.issues.any((String e) => e.contains('主角') && e.contains('0 次出场')),
+        isTrue,
+        reason: '主角 0 次出场必须记入本章问题，否则只有日志留痕',
+      );
+    });
+
+    test('主角正常出场 → 计数为正且不告警', () async {
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          sceneTexts: <String>[blandScene('第一幕'), blandScene('第二幕')],
+        ),
+      );
+      final AiPipelineTask t =
+          await runTask(task(config(protagonist: '林舟')), router);
+      final PipelineChapter c = t.chapters.single;
+      expect(c.protagonistMentions, greaterThan(0));
+      expect(
+        c.issues.any((String e) => e.contains('0 次出场')),
+        isFalse,
+        reason: '主角有出场就不该报',
+      );
+    });
+
+    test('未配置主角名 → 计数 -1（未记账），不误报', () async {
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          sceneTexts: <String>[blandScene('第一幕'), blandScene('第二幕')],
+        ),
+      );
+      // protagonist 传空串 = 用户没填主角名
+      final AiPipelineTask t =
+          await runTask(task(config(protagonist: '')), router);
+      final PipelineChapter c = t.chapters.single;
+      expect(c.protagonistMentions, -1,
+          reason: '没配主角名就没有「主角」可数，-1 表示未记账');
+      expect(c.issues.any((String e) => e.contains('0 次出场')), isFalse);
+    });
+
+    test('场景全部写出来 → 不记残缺', () async {
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          sceneTexts: <String>[blandScene('第一幕'), blandScene('第二幕')],
+        ),
+      );
+      final AiPipelineTask t = await runTask(task(config()), router);
+      final PipelineChapter c = t.chapters.single;
+      expect(c.scenesPlanned, greaterThan(0));
+      expect(c.hasLostScenes, isFalse);
+      expect(c.issues.any((String e) => e.contains('未产出正文')), isFalse);
+    });
+  });
 
   group('AiPipelineService.run 编排', () {
     test('单章全流程：大纲 → 场景去重 → 标题 → 状态/伏笔台账落盘', () async {
@@ -384,6 +483,95 @@ void main() {
       expect(content, contains('血煞盟的人影一闪而逝')); // 章纲钩子原文
       expect(content, endsWith('他还没看清那是什么。')); // 兜底补的钩子信号
       expect(content, isNot(contains('我拿到的指令')));
+    });
+
+    // ================================================================
+    // 大纲标注漏进成书（2026-09-30 真机致命 bug 回归）
+    //
+    // 事故：规划官的钩子**系统性**写成 `类型（说明）`（真机 5 章 5 中），
+    // 旧 _localHookFallback 只按冒号切后半段，遇到括号时整段原样返回，于是
+    // 「威胁逼近（周管事察觉异象，封铺捉贼）」被拼进成书第 1 章末尾——
+    // 读者一眼判定机器产物，直接判废。下面三条锁死该行为。
+    // ================================================================
+    test('括号式章纲钩子：大纲标注绝不漏进成书（真机致命 bug 回归）', () async {
+      // 与真机逐字一致：verify_effect.jsonl 第 1 章的钩子原文
+      const String parenHook =
+          '威胁逼近（周管事察觉异象，封铺捉贼，宿峥必须在搜身之前藏住古钱）';
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(hook: parenHook),
+          sceneTexts: <String>[blandScene('第一幕'), blandScene('第二幕')],
+          hookPatch: '我拿到的指令是补写钩子，不是扩写正文。', // 触发本地兜底
+        ),
+      );
+      final AiPipelineTask t = await runTask(task(config()), router);
+
+      expect(t.status, PipelineTaskStatus.done);
+      final String content = t.chapters.single.content;
+
+      // 核心断言：类型词与外层括号都不许出现在正文里
+      expect(content, isNot(contains('威胁逼近')));
+      expect(content, isNot(contains('（周管事察觉异象')));
+      expect(content, isNot(contains('）')));
+      // 括号内的叙事素材应当被保留（钩子信号不能一并丢掉）
+      expect(content, contains('周管事察觉异象'));
+    });
+
+    test('括号式钩子剥壳后仍是无主语的说明句时，不重复补主语', () async {
+      // 「宿峥必须在搜身之前藏住古钱」已含主角名：
+      // 若再补主语会读成「宿峥回头。宿峥必须……」，必须避免这种病句。
+      const String parenHook = '威胁逼近（宿峥必须在搜身之前藏住古钱）';
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(hook: parenHook),
+          sceneTexts: <String>[blandScene('第一幕'), blandScene('第二幕')],
+          hookPatch: '我拿到的指令是补写钩子。',
+        ),
+      );
+      final AiPipelineTask t = await runTask(task(config()), router);
+      final String content = t.chapters.single.content;
+      expect(content, isNot(contains('宿峥回头。宿峥')));
+      expect(content, isNot(contains('威胁逼近')));
+    });
+
+    test('钩子素材仍带大纲分隔符时放弃兜底，宁可无钩也不拼标注', () async {
+      // 剥壳后仍残留 `＝`/`｜` → 不是可用叙事素材，必须放弃兜底。
+      const String dirtyHook = '威胁逼近（宿峥＝必须在搜身之前藏住古钱）';
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(hook: dirtyHook),
+          sceneTexts: <String>[blandScene('第一幕'), blandScene('第二幕')],
+          hookPatch: '我拿到的指令是补写钩子。',
+        ),
+      );
+      final AiPipelineTask t = await runTask(task(config()), router);
+      final String content = t.chapters.single.content;
+      expect(content, isNot(contains('宿峥＝')));
+      expect(content, isNot(contains('威胁逼近')));
+    });
+
+    test('右括号后带句号 + 内层引号含冒号（真机第 3 章原样）', () async {
+      // 真机 verify_effect.jsonl 第 3 章钩子逐字原文。这一形态同时踩三个坑：
+      //   ① 右括号后有句号 → 以 `$` 锚定的括号正则会整条失配；
+      //   ② 失配后退回冒号切法 → 切在内层引号的冒号上（不是类型词后的冒号）；
+      //   ③ 于是吐出「……'你会死得很难看'，……）。」，尾部 `）` 漏进正文。
+      const String tricky =
+          "选择困境（执事临走冷笑：'拔擢试上，你会死得很难看'，而血誓倒计时只剩九十天）。";
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(hook: tricky),
+          sceneTexts: <String>[blandScene('第一幕'), blandScene('第二幕')],
+          hookPatch: '我拿到的指令是补写钩子。',
+        ),
+      );
+      final AiPipelineTask t = await runTask(task(config()), router);
+      final String content = t.chapters.single.content;
+      // 括号必须被正确剥掉，尾部不得残留右括号
+      expect(content, isNot(contains('）')));
+      expect(content, isNot(contains('（执事临走冷笑')));
+      expect(content, isNot(contains('选择困境')));
+      // 内层叙事素材保留
+      expect(content, contains('九十天'));
     });
 
     test('编辑润色：产出达标（≥85% 字数）即采纳', () async {

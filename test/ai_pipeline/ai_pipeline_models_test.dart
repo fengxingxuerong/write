@@ -149,4 +149,64 @@ void main() {
       expect(total, lessThanOrEqualTo(3300));
     });
   });
+
+  // ================================================================
+  // PipelineChapter 场景残缺记账（2026-09-30 可观测性）
+  //
+  // 事故：真机第 4 章 4 个场景有 2 个因端点全链失败返回空，被静默丢弃，
+  // 成书只剩 1.5 个场景内容（章纲「禁地借刀」却成文「暗巷杀机」），
+  // 整章伪装成正常章节落库。现在必须能被记账、序列化、并算出残缺数。
+  // ================================================================
+  group('PipelineChapter 场景残缺记账', () {
+    PipelineChapter make({int planned = 4, int written = 4}) => PipelineChapter(
+          idx: 1,
+          title: '残缺章',
+          content: '正文',
+          rawWords: 2000,
+          words: 1900,
+          scenesPlanned: planned,
+          scenesWritten: written,
+        );
+
+    test('场景齐全时不判残缺', () {
+      final PipelineChapter c = make();
+      expect(c.hasLostScenes, isFalse);
+      expect(c.lostScenes, 0);
+    });
+
+    test('有场景丢失时算出残缺数', () {
+      final PipelineChapter c = make(planned: 4, written: 2);
+      expect(c.hasLostScenes, isTrue);
+      expect(c.lostScenes, 2);
+    });
+
+    test('written 超过 planned 时不出现负数残缺', () {
+      // 防御：字段来自落盘数据，理论上可被外部改坏。
+      final PipelineChapter c = make(planned: 2, written: 5);
+      expect(c.lostScenes, 0);
+    });
+
+    test('序列化往返保留场景计数', () {
+      final PipelineChapter c = make(planned: 4, written: 2);
+      final PipelineChapter back =
+          PipelineChapter.fromJson(c.toJson());
+      expect(back.scenesPlanned, 4);
+      expect(back.scenesWritten, 2);
+      expect(back.hasLostScenes, isTrue);
+    });
+
+    test('读旧账本（无场景计数字段）默认为 0，不误判残缺', () {
+      final PipelineChapter back = PipelineChapter.fromJson(<String, dynamic>{
+        'idx': 1,
+        'title': '旧章',
+        'content': '正文',
+        'rawWords': 2000,
+        'words': 2000,
+      });
+      expect(back.scenesPlanned, 0);
+      expect(back.scenesWritten, 0);
+      // 两边都是 0 → 无残缺（0 < 0 为假），历史产物重跑不会凭空冒告警
+      expect(back.hasLostScenes, isFalse);
+    });
+  });
 }

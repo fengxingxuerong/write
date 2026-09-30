@@ -437,12 +437,44 @@ class QualityReport {
   final List<QualityViolation> hardViolations;
 
   /// 综合质量评分（0~100，越高越好）。
+  ///
+  /// 【口径修订 2026-09-30】本项**只做文笔卫生体检**（AI 囷痕 / 段落重复 / 节奏 /
+  /// 对白结构 / 感官覆盖），**不判文学性**——情节是否成立、人物动机是否自洽、
+  /// 设定是否冲突，一律不在本检查器职责内（那些由 `NovelConsistencyChecker` 与
+  /// 终审官负责）。
+  ///
+  /// 旧实现是「满分 100 起步，只扣三项」，导致任何**结构上无硬伤**的文本都能拿
+  /// 95~100 分：实测模板引擎的随机句库拼贴稿（时间线自相矛盾、人物在同一场景里
+  /// 反复进出）拿到「文笔 98/100」。分数虚高到可以替代人工判断，是比低分更危险的
+  /// 失败模式——它让人以为可以直接投产。
+  ///
+  /// 故改为：**上限封顶 90**（干净文本 = 90，含义是「卫生合格，文学性未审」），
+  /// 并补两项本可客观测量的结构扣分（对白塌陷 / 感官空洞）。
+  /// 干净且结构达标 → 90；结构塌陷（无对白、纯描述）会实打实地掉到 60~70 区间。
+  ///
+  /// 对外文案见 [summary]，已同步说明口径，避免再被当成签约级评分引用。
   double get overallScore {
     if (totalWords == 0) return 0;
     final double echoPenalty = (aiEchoScore * 20).clamp(0, 30);
     final double repPenalty = (repetitionScore * 30).clamp(0, 25);
     final double rhythmPenalty = (rhythmScore * 15).clamp(0, 15);
-    return (100 - echoPenalty - repPenalty - rhythmPenalty).clamp(0, 100);
+
+    // 对白结构：番茄口径 25%~45%。长文（>800 字）低于 15% 即视为塌陷——
+    // 全章无人开口是移动端完读率的硬伤，且这是本检查器能客观测量的。
+    // 短文不判（几十字的样本谈对白占比没有意义）。
+    double dialoguePenalty = 0;
+    if (totalWords > 800 && dialogueRatio < 0.15) {
+      dialoguePenalty = ((0.15 - dialogueRatio) / 0.15 * 12).clamp(0, 12);
+    }
+
+    // 感官空洞：全章不写味/声/触感/冷热，只有视觉——「让读者看见、听见、感受到」
+    // 的最低要求。>2000 字仍为 0 视为空洞，扣 8 分。
+    final double sensoryPenalty = (totalWords > 2000 && sensoryScore <= 0) ? 8 : 0;
+
+    final double raw = 100 - echoPenalty - repPenalty - rhythmPenalty -
+        dialoguePenalty - sensoryPenalty;
+    // 封顶 90：本检查器未审文学性，不给满分（见上方口径说明）。
+    return raw.clamp(0, 90);
   }
 
   /// 是否需要 LLM 润色。
@@ -450,7 +482,7 @@ class QualityReport {
 
   /// 人类可读摘要。
   String get summary {
-    return '综合评分 ${overallScore.toStringAsFixed(0)} | '
+    return '卫生评分 ${overallScore.toStringAsFixed(0)}/90（非文学性评分）| '
         '囷痕 ${aiEchoScore.toStringAsFixed(2)}% | '
         '对话占比 ${(dialogueRatio * 100).toStringAsFixed(0)}% | '
         '违规 ${hardViolations.length} 处';

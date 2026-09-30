@@ -248,8 +248,19 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
     _payoffHistory.clear();
     // 文风参考存在 Novel 上（不在 ContextBundle 里——后者只承载生成上下文，
     // 而指纹是**项目设置**，由用户在设置面板写入）。与下方一致性检查同款读法。
-    final Novel proj = await _chapterRepo.db.readNovel(_novelId);
-    _refreshStyleBlock(proj.styleRef);
+    //
+    // 读不到就当作「没有文风参考」：文风指纹是**锦上添花**的注入项，
+    // 缺失只影响提示词丰富度，绝不该让整次生成失败。与本文件另两处
+    // readNovel（多章重读、一致性重读）一致，都用 try-catch 兜住。
+    // 历史缺陷：本行曾是裸调，readNovel 抛 StorageException（文件不存在 /
+    // 解析失败）时整个 generate 直接抛出，多章连写与单章生成都起不来；
+    // 单元测试（fake repo 的 db 未实现）也正是因此挂掉 18 条。
+    try {
+      final Novel proj = await _chapterRepo.db.readNovel(_novelId);
+      _refreshStyleBlock(proj.styleRef);
+    } catch (_) {
+      _refreshStyleBlock(null);
+    }
     _plotSummaryLines.addAll(
       ctx.plotSummary
           .split(RegExp(r'[\r\n]+'))
@@ -480,7 +491,14 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
             final List<Chapter> existing = await _chapterRepo.listChapters(
               _novelId,
             );
-            consistencyReport = NovelConsistencyChecker.check(existing);
+            // 传主角名以启用「主角连续性」维度（2026-09-30 新增）。
+            // 实测事故：真机 33 章长篇主角自第 30 章起连续 4 章完全消失，
+            // 而书级体检此前只有「人名差一字」这一个维度，完全看不见。
+            // 主角名取本次生成配置（用户显式填的），为空则自动跳过该维度。
+            consistencyReport = NovelConsistencyChecker.check(
+              existing,
+              protagonist: (config.protagonistName ?? '').trim(),
+            );
             if (consistencyReport.hasIssues) {
               state = state.copyWith(
                 stage: '跨章检测：发现 ${consistencyReport.totalIssues} 处矛盾',

@@ -15,6 +15,7 @@ import 'package:novel_writer/models/character.dart';
 import 'package:novel_writer/models/generation_config.dart';
 import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/models/llm_config.dart';
+import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/models/world_setting.dart';
 import 'package:novel_writer/services/sensitive_words.dart';
 import 'package:novel_writer/storage/chapter_repository.dart';
@@ -129,14 +130,38 @@ class _StaticEngine implements GenerationEngine {
 /// 用 implements 而非 extends——db 字段不可伪造，
 /// 只需在测试路径上提供 saveGeneratedChapter，其余成员 noSuchMethod 兜底。
 class _FakeChapterRepo implements ChapterRepository {
-  _FakeChapterRepo() {
-    // 空构造：无 db 依赖。
-  }
+  // 默认值必须是编译期常量，故用可空参数 + 构造体内回填
+  // （`_defaultNovel()` 含 DateTime 构造，不是 const）。
+  _FakeChapterRepo({Novel? novel}) : novel = novel ?? _defaultNovel();
+
+  /// 生成入口读到的项目。测试可替换以覆盖「有/无文风参考」两种情形。
+  final Novel novel;
+
+  /// 供 `_FakeChapterRepo()` 默认使用的空项目（无文风参考）。
+  static Novel _defaultNovel() => Novel(
+        id: 'n1',
+        title: '测试书',
+        genre: '玄幻',
+        tone: '热血',
+        targetWordsPerChapter: 3000,
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 1),
+        chapters: const <Chapter>[],
+        characters: const <Character>[],
+        worldSettings: const <WorldSetting>[],
+      );
 
   final List<Chapter> saved = <Chapter>[];
 
+  /// 只实现 readNovel 的假 db。
+  ///
+  /// 真实调用点是 `generate_viewmodel` 读文风指纹那行；生产代码已用 try-catch
+  /// 兜住读失败，这里提供确定值以便**正向断言**文风指纹真的注入了 prompt，
+  /// 而不是只验证「没崩」。
+  AppDatabase get _readOnlyDb => _ReadOnlyDb(novel);
+
   @override
-  AppDatabase get db => throw UnimplementedError('测试不应访问 db');
+  AppDatabase get db => _readOnlyDb;
 
   @override
   Future<Chapter> saveGeneratedChapter(
@@ -168,6 +193,79 @@ class _FakeChapterRepo implements ChapterRepository {
       throw UnimplementedError('${invocation.memberName} 不应在测试中调用');
 }
 
+/// 只支持 `readNovel` 的假 db：其余成员走 noSuchMethod 抛错。
+class _ReadOnlyDb implements AppDatabase {
+  _ReadOnlyDb(this.novel);
+
+  final Novel novel;
+
+  @override
+  Future<Novel> readNovel(String id) async => novel;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('AppDatabase.${invocation.memberName} 不应在测试中调用');
+}
+
+/// `readNovel` 必抛错的仓储：模拟项目文件缺失 / JSON 解析失败。
+///
+/// 用于验证「读文风指纹失败应降级为无指纹，而不是让整次生成失败」。
+class _ThrowingChapterRepo implements ChapterRepository {
+  final List<Chapter> saved = <Chapter>[];
+
+  /// 记录读取尝试次数，确保确实走到了读文风指纹那条路径。
+  int readNovelCalls = 0;
+
+  @override
+  AppDatabase get db => _ThrowingDb(this);
+
+  @override
+  Future<Chapter> saveGeneratedChapter(
+    String novelId,
+    int order,
+    String title,
+    String content,
+  ) async {
+    final Chapter c = Chapter(
+      id: 'ch$order',
+      novelId: novelId,
+      title: title,
+      order: order,
+      content: content,
+      createdAt: DateTime(2026, 1, 1),
+      updatedAt: DateTime(2026, 1, 1),
+    );
+    saved.add(c);
+    return c;
+  }
+
+  @override
+  Future<List<Chapter>> listChapters(String novelId) async =>
+      List<Chapter>.from(saved)
+        ..sort((Chapter a, Chapter b) => a.order.compareTo(b.order));
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName} 不应在测试中调用');
+}
+
+/// `readNovel` 抛 StorageException 的假 db（对齐真实 `AppDatabase.readNovel`）。
+class _ThrowingDb implements AppDatabase {
+  _ThrowingDb(this.repo);
+
+  final _ThrowingChapterRepo repo;
+
+  @override
+  Future<Novel> readNovel(String id) async {
+    repo.readNovelCalls++;
+    throw const StorageException('项目文件不存在');
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('AppDatabase.${invocation.memberName} 不应在测试中调用');
+}
+
 /// 假设置仓储：测试不触碰 db。
 class _FakeSettingRepo implements SettingRepository {
   @override
@@ -197,6 +295,36 @@ void main() {
       expect(repo.saved.length, equals(3));
       expect(repo.saved[0].title, contains('第1章'));
       expect(repo.saved[2].order, equals(3));
+      expect(vm.state.isGenerating, isFalse);
+      expect(vm.state.error, isNull);
+    });
+
+    // ================================================================
+    // 生成入口读文风指纹失败不得阻断生成（2026-09-30 修复）
+    //
+    // 该行曾是裸调 `await _chapterRepo.db.readNovel(...)`：项目文件缺失 /
+    // 解析失败时抛 StorageException，整个 generate 直接抛出，单章与多章
+    // 连写都起不来（HEAD 上 18 条测试即因此长期挂红）。文风指纹只是
+    // 锦上添花的提示词注入项，读不到应降级为「无指纹」。
+    // ================================================================
+    test('项目文件读不到（文风指纹降级）时生成照常完成', () async {
+      final engine = _FakeEngine();
+      // 假 db 的 readNovel 抛错，模拟文件缺失/解析失败
+      final repo = _ThrowingChapterRepo();
+      final vm = GenerateViewModel(
+        engine,
+        repo,
+        _FakeSettingRepo(),
+        'n1',
+        _fakeRef(),
+      );
+
+      await vm.generate(_cfg(chapterCount: 2), _bundle(), 1, '第1章');
+
+      // 生成必须完成、章节必须落库、状态不得带错误
+      expect(repo.readNovelCalls, greaterThan(0), reason: '应尝试读取文风指纹');
+      expect(engine.calls.length, equals(2));
+      expect(repo.saved.length, equals(2));
       expect(vm.state.isGenerating, isFalse);
       expect(vm.state.error, isNull);
     });

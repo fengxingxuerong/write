@@ -238,6 +238,36 @@ class PipelineChapter {
   /// 审校/质检记录的问题（每行一条）。
   final List<String> issues;
 
+  /// 规划出的场景总数（2026-09-30 新增，可观测性）。
+  ///
+  /// 【实测事故】真机第 4 章：4 个场景里 2 个因端点失效返回空（`-> 1 字`），
+  /// 被**静默丢弃**——最终成书只有 1.5 个场景的内容，标题与章纲完全对不上
+  /// （章纲「禁地借刀」/ 成文「暗巷杀机」），且整章伪装成正常章节落库。
+  /// 排查只能靠翻运行日志，作者与用户都无从察觉。
+  final int scenesPlanned;
+
+  /// 成功写出正文的场景数（2026-09-30 新增）。
+  ///
+  /// `scenesWritten < scenesPlanned` 即表示有场景丢失，成书是**残缺的**。
+  final int scenesWritten;
+
+  /// 是否有场景因端点失效而丢失（成书残缺）。
+  bool get hasLostScenes => scenesWritten < scenesPlanned;
+
+  /// 残缺场景数。
+  int get lostScenes => (scenesPlanned - scenesWritten).clamp(0, scenesPlanned);
+
+  /// 本章主角出场次数（-1 = 未记账，即未配置主角名）。
+  ///
+  /// 【实测事故 2026-09-30】真机 33 章长篇里主角「陆沉」自第 30 章起连续 4 章
+  /// 0 次出场，POV 被换成他人。提示词里早有「本章主角：X，只用这个名字」的硬
+  /// 约束（pipeline_prompts.dart），但提示词不构成保证——端点偶发抽风就绕过去了。
+  ///
+  /// 落进章节记录，是让「主角有没有出场」成为可核对的事实。单章 0 次可能是合法
+  /// 的他人视角章（多线叙事常写），真正的事故由书级
+  /// [NovelConsistencyChecker.protagonistContinuity] 判「连续多章消失」。
+  final int protagonistMentions;
+
   /// 构造记录。
   const PipelineChapter({
     required this.idx,
@@ -246,6 +276,9 @@ class PipelineChapter {
     required this.rawWords,
     required this.words,
     this.issues = const <String>[],
+    this.scenesPlanned = 0,
+    this.scenesWritten = 0,
+    this.protagonistMentions = -1,
   });
 
   /// 序列化。
@@ -256,6 +289,9 @@ class PipelineChapter {
         'rawWords': rawWords,
         'words': words,
         'issues': issues,
+        'scenesPlanned': scenesPlanned,
+        'scenesWritten': scenesWritten,
+        'protagonistMentions': protagonistMentions,
       };
 
   /// 反序列化。
@@ -269,6 +305,9 @@ class PipelineChapter {
       issues: (json['issues'] as List<dynamic>? ?? const [])
           .map((dynamic e) => e.toString())
           .toList(),
+      scenesPlanned: json['scenesPlanned'] as int? ?? 0,
+      scenesWritten: json['scenesWritten'] as int? ?? 0,
+      protagonistMentions: json['protagonistMentions'] as int? ?? -1,
     );
   }
 }

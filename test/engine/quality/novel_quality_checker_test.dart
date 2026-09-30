@@ -22,13 +22,49 @@ void main() {
       expect(r.aiEchoScore, 0.0);
     });
 
-    test('完美段落综合分 100', () {
-      // 一段纯原创、无 AI 高频词的内容
+    test('干净段落卫生分封顶 90（不判文学性，不给满分）', () {
+      // 一段纯原创、无 AI 高频词的内容。
+      // 口径修订 2026-09-30：本检查器只查文笔卫生，不判情节/人物/设定，
+      // 故干净文本封顶 90——满分会让人误以为「可以直接投产」。
       const String good = '张三推开门，看见院子里那棵老槐树。'
           '树下的石桌上放着半杯残茶。风一吹，落叶擦过他的鞋面。';
       final QualityReport r = NovelQualityChecker.check(good);
       expect(r.hardViolations, isEmpty);
-      expect(r.overallScore, 100);
+      expect(r.overallScore, 90);
+    });
+
+    test('随机句库拼贴稿拿不到高分（评分虚高回归）', () {
+      // 实测事故：模板引擎的随机拼贴稿（无硬伤但毫无文学性）曾拿「文笔 98/100」。
+      // 修复后：长文且对白塌陷（<15%）必须实打实扣分。
+      final String junk = List<String>.generate(
+        80,
+        (int i) => '陆沉站在擂台边上，第$i步落下，石砖裂开一道缝，风从巷口灌进来。',
+      ).join('\n\n');
+      final QualityReport r = NovelQualityChecker.check(junk);
+      expect(r.totalWords, greaterThan(2000));
+      expect(r.dialogueRatio, lessThan(0.15));
+      // 无硬伤也必须拿不到 90 以上的「看似优秀」分
+      expect(r.overallScore, lessThan(90));
+    });
+
+    test('长文对白塌陷（<15%）触发对白扣分', () {
+      final String noDialogue = List<String>.filled(
+        60,
+        '他走到门口，屋里传来响动，灯灭了，外头风很大，脚步声停在廊下。',
+      ).join('\n\n');
+      final QualityReport r = NovelQualityChecker.check(noDialogue);
+      expect(r.totalWords, greaterThan(800));
+      expect(r.dialogueRatio, 0.0);
+      expect(r.overallScore, lessThan(90));
+    });
+
+    test('短文本不判对白占比（样本太小无意义）', () {
+      // 34 字，远低于 800 字门槛；对白 0% 不应触发扣分。
+      // 节奏项仍会扣分（单段 <30 字属节奏失衡），故基线是 85 而非 90。
+      final QualityReport r = NovelQualityChecker.check('他点了点头。门开了。');
+      expect(r.totalWords, lessThan(800));
+      expect(r.dialogueRatio, 0.0);
+      expect(r.overallScore, 85);
     });
 
     test('命中 AI 囷痕关键词命中数会累加', () {
@@ -103,7 +139,8 @@ void main() {
   group('QualityReport.summary', () {
     test('输出包含关键字段', () {
       final QualityReport r = NovelQualityChecker.check('测试文字');
-      expect(r.summary, contains('综合评分'));
+      expect(r.summary, contains('卫生评分'));
+      expect(r.summary, contains('非文学性评分'));
       expect(r.summary, contains('囷痕'));
       expect(r.summary, contains('对话占比'));
       expect(r.summary, contains('违规'));
