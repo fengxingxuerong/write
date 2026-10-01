@@ -1263,7 +1263,7 @@ class PipelineQa {
   /// （POWER_SURGE 通道），不算本违规（与 Python `ending_triad` 同步）。
   static String endingTriad(String text) {
     if (text.isEmpty) return '';
-    final int w = QualityRules.triadEndWindow;
+    const int w = QualityRules.triadEndWindow;
     final String seg = text.length > w ? text.substring(text.length - w) : text;
     for (final String w in _triadEndWords) {
       int start = 0;
