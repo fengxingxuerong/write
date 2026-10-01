@@ -165,20 +165,36 @@ jobs:
           node-version: '22'
 
       - name: Ensure Chrome available
-        # runner 镜像不保证预装 google-chrome（首跑 8 秒秒挂的根因疑点）：
-        # 优先用镜像自带的，没有就用 @puppeteer/browsers 装一份稳定版。
+        # ⚠️ 优先装「Chrome for Testing」，**不要**用 runner 镜像自带的 google-chrome
+        # （2026-10-01 修正）。Ubuntu runner 上 /usr/bin/google-chrome 是 snap 包装器
+        # （snap-bin/google-chrome），在容器里起不了 headless：症状是浏览器回归
+        # **4 秒即挂**（不是等满 30s 冷启动超时），报错难懂。
+        # 实测对照：run #19 走 puppeteer 安装分支（9s）→ 回归 34s 通过；
+        #           run #20 走系统自带分支（1s）→ 回归 4s 失败。
+        # 故：先装 Chrome for Testing，只有装不上才回退系统 chrome，
+        # 并且无论哪条路都**当场验证能否真的 headless 起一次**，把故障留在本步骤。
         run: |
-          if command -v google-chrome >/dev/null 2>&1; then
-            echo "Chrome found: $(google-chrome --version)"
-            echo "CHROME_PATH=$(command -v google-chrome)" >> "$GITHUB_ENV"
-          else
-            echo "::notice::google-chrome not preinstalled on runner image, installing via @puppeteer/browsers"
-            npx -y @puppeteer/browsers install chrome@stable --path "$RUNNER_TEMP/chrome"
+          BIN=""
+          if npx -y @puppeteer/browsers install chrome@stable --path "$RUNNER_TEMP/chrome" >/dev/null 2>&1; then
             BIN=$(find "$RUNNER_TEMP/chrome" -type f -name chrome | head -n 1)
-            if [ -z "$BIN" ]; then echo "::error::Chrome install finished but binary not found"; exit 1; fi
-            echo "Installed Chrome at: $BIN"
-            echo "CHROME_PATH=$BIN" >> "$GITHUB_ENV"
+            echo "Installed Chrome for Testing: ${BIN:-<not found>}"
           fi
+          if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
+            echo "::notice::Chrome for Testing unavailable, falling back to system google-chrome"
+            BIN=$(command -v google-chrome || true)
+          fi
+          if [ -z "$BIN" ]; then
+            echo "::error::No usable Chrome binary found"
+            exit 1
+          fi
+          # 当场验证：能不能真的 headless 起一次并吐 DOM。起不来就在这里失败，
+          # 而不是留到回归步骤里报一句看不懂的错。
+          if ! "$BIN" --headless --no-sandbox --disable-gpu --dump-dom about:blank >/dev/null 2>&1; then
+            echo "::error::Chrome at $BIN cannot start headless (snap wrapper?); see comment above"
+            exit 1
+          fi
+          echo "CHROME_PATH=$BIN" >> "$GITHUB_ENV"
+          echo "Usable Chrome: $BIN"
 
       - name: Browser regression (3 suites)
         run: |
