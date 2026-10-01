@@ -262,12 +262,9 @@ class FanqieGateChecker {
   ];
 
   /// 网文高频套句（同质化风险）。
-  static const List<String> _cliche = <String>[
-    '空气仿佛凝固', '嘴角勾起一抹', '眼底闪过一丝', '心中一凛', '心头一震',
-    '不由得倒吸一口凉气', '瞳孔骤缩', '深吸一口气', '缓缓开口', '淡淡开口',
-    '全场寂静', '鸦雀无声', '面面相觑', '就在这时', '谁也没想到',
-    '从这一刻起', '命运的车轮', '像有什么东西醒', '仿佛在诉说',
-  ];
+  /// 值来自 [QualityRules.gateClichePhrases]（Dart 闸门口径 19 条）；
+  /// Python 侧同名指标用的是另一张表（见 docs/quality-rules-current.md 第三节）。
+  static const List<String> _cliche = QualityRules.gateClichePhrases;
 
   /// 「推进力」词：段落里出现即视为该段在推进剧情。
   static const List<String> _drive = <String>[

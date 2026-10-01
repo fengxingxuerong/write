@@ -37,6 +37,7 @@ CHAPTER_RE = re.compile(r"^第\s*(\d+)\s*章")
 try:  # pragma: no cover - 分支取决于调用方式
     from .quality_rules_generated import (
         FIX_MIN_RATIO,
+        REVIEW_CLICHE_SENTENCES,
         TRIAD_END_WINDOW,
         TRIAD_END_WORDS,
     )
@@ -46,6 +47,7 @@ except ImportError:  # pragma: no cover - 平铺导入（脚本直跑/同目录 
         sys.path.insert(0, _here)
     from quality_rules_generated import (
         FIX_MIN_RATIO,
+        REVIEW_CLICHE_SENTENCES,
         TRIAD_END_WINDOW,
         TRIAD_END_WORDS,
     )
@@ -101,18 +103,11 @@ REDLINE_WHITELIST = {
 # ============================================================
 # 2) 同质化套句库（网文高频"AI 也爱写"的句子骨架）
 #    命中越多 → 越像流水线产物 → 查重/低质判定风险越高
+#    值来自 rules/quality_rules.json 的 reviewClicheSentences（Python 评审口径）。
+#    注意：Dart 闸门用的是**另一张**表 gateClichePhrases（同公式不同词表，
+#    两端差异记录于 docs/quality-rules-current.md 第三节 asymmetries.clicheTables）。
 # ============================================================
-CLICHE_SENTENCES = [
-    "空气仿佛凝固", "嘴角勾起一抹", "眼底闪过一丝", "心中一凛", "心头一震",
-    "不由得倒吸一口凉气", "瞳孔骤缩", "深吸一口气", "缓缓开口", "淡淡开口",
-    "声音不大，却清晰地传入每个人耳中", "全场寂静", "鸦雀无声", "面面相觑",
-    "众所周知", "谁也没想到", "就在这时", "一阵狂风刮过", "天空乌云密布",
-    "仿佛在诉说着什么", "如同一头苏醒的洪荒巨兽", "周身气势暴涨",
-    "气息陡然变强", "境界壁垒应声而碎", "突破了", "觉醒了",
-    "他知道，从这一刻起，一切都不一样了", "命运的车轮开始转动",
-    "既然如此，那便", "他握紧拳头，指甲嵌入掌心", "血液沸腾",
-    "不服来战", "莫欺少年穷", "三十年河东三十年河西",
-]
+CLICHE_SENTENCES = REVIEW_CLICHE_SENTENCES
 
 # ============================================================
 # 3) 章末三件套收尾（FANQIE 规则 20 / 规则 10 / scene_prompt 双端承诺的检测器）

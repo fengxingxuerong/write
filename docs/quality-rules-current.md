@@ -17,6 +17,8 @@
 | `sideReactionWords` / `SIDE_REACTION_WORDS` | 47 | 侧面反响信号词（三视角震惊环：反派崩溃 / 路人倒吸冷气 / 权威暗惊）。同时是「爽点断供」判定的逃生通道——在场者确有反应的章不判断供。 |
 | `triadEndWords` / `TRIAD_END_WORDS` | 12 | 章末三件套收尾词表（规则 20：禁止发烫/亮起/苏醒类收束）。**顺序敏感**——Dart endingTriad 返回首个命中词，长词必须排在前（像有什么东西醒了 > 醒了过来 > 醒了；亮了起来 > 亮了）。 |
 | `triadHookOnly` / `TRIAD_HOOK_ONLY` | 2 | hookWords 中属三件套性质的成员：作为唯一尾部钩子信号时不采信。 |
+| `gateClichePhrases` / `GATE_CLICHE_PHRASES` | 19 | 网文高频套句（Dart 侧过审闸门「同质化」判定用）：distinct 命中 ×1000/字 > 1.2 判修改。**注意**：与 Python 的 reviewClicheSentences 是同一套指标公式、不同词表——Dart 19 条多为短词（如「命运的车轮」「仿佛在诉说」，匹配更宽），Python 34 条多为长句（匹配更准但覆盖更窄）。两侧漂移见 asymmetries.clicheTables。 |
+| `reviewClicheSentences` / `REVIEW_CLICHE_SENTENCES` | 34 | 网文高频套句（Python 侧 fanqie_review.cliche_overlap「同质化」判定用）：同样按 distinct 命中 ×1000/字 > 1.2 触发「修改」。与 gateClichePhrases 公式同、词表不同（见 asymmetries.clicheTables）。 |
 
 ## 二、阈值
 
@@ -37,6 +39,7 @@
 | `editorMinRatio` | 尚未实现该守卫 | 0.85 | novel_pipeline.apply_text_patch 的整章级补丁采纳下限。比 FIX_MIN_RATIO 松一档是设计意图（提示词从严，守卫兜底）；Dart 端补齐前不要把两者合并。 |
 | `genreThrillExtras` | 只用基础 thrillWords / powerSurgeWords | GENRE_THRILL_EXTRA / GENRE_SURGE_EXTRA 题材加成词 | 题材加成词仅 Python 侧存在（2026-09-10 题材感知质检）。因此断供判定（payoff_drought_*）在 Python 侧显式只用基础词表，否则双端不同口径。 |
 | `countWords` | AppConstants.countWords | fanqie_review.count_words | 已知既有差异：Python 侧把「字母->数字」转换算新词、Dart 算同一个词，且 Python 缺 CJK 扩展 A 区。密度类指标因此允许极小的数值差异，**不要**为此改动字数口径（那是影响界面显示的产品级决定，见 docs/quality-enhancement-log.md 第 31 节）。 |
+| `clicheTables` | gateClichePhrases（19 条，短词偏多） | reviewClicheSentences（34 条，长句偏多） | 同质化指标公式与阈值两端一致（distinct 命中 ×1000/字 > 1.2），但词表内容不同：Dart 独有「从这一刻起/命运的车轮/像有什么东西醒」等短词，Python 独有「莫欺少年穷/三十年河东三十年河西/命运的车轮开始转动」等长句。**待产品裁决**：统一成一张表会同时改变两端分数与定点修触发率，必须先用真机成书复验（A/B 分数变化）再落地——2026-10-01 只做收编与记录，不改语义。 |
 
 ## 四、改判据的正确流程
 
