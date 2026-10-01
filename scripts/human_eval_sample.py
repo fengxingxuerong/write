@@ -47,16 +47,20 @@ from human_eval_correlation import metrics_of  # noqa: E402
 OUT_DIR = ROOT / "docs" / "human-eval" / "samples"
 ANN = ROOT / "docs" / "human-eval" / "annotations.jsonl"
 
-# 已生成的成书（书名, 相对路径）。data/ 是本地产物目录，已 gitignore。
+# 已生成的成书（相对路径）。data/ 是本地产物目录，已 gitignore。
+# 书名不写在这里——一律从各书 outline 记录的 title 字段现取：
+# 早先版本在下面硬编码了「碎脉铸仙录/废脉纪元…」等自造书名，实测与成书真名
+# 全不一致（如 novel_200k 实为《逆鳞焚天》），且 novel_10w 与 novel_200k
+# 竟是同一本书——自造名会把两份产物当成两本书，样本来源就说不清了。
 BOOKS = [
-    ("碎脉铸仙录", "data/generated/novel_10w_pipeline.jsonl"),
-    ("废脉纪元", "data/novel_200k.jsonl"),
-    ("寒门崛起", "data/generated/chief_test_v2.jsonl"),
-    ("烟雨长歌", "data/generated/full_imnovel.jsonl"),
-    ("北荒行记", "data/generated/novel_10w.jsonl"),
-    ("焚天纪", "data/generated/smoke_gate_v7.jsonl"),
-    ("赤霄令", "data/generated/verify_12roles.jsonl"),
-    ("临渊录", "data/generated/smoke_gate_v6.jsonl"),
+    "data/generated/novel_10w_pipeline.jsonl",
+    "data/novel_200k.jsonl",
+    "data/generated/chief_test_v2.jsonl",
+    "data/generated/full_imnovel.jsonl",
+    "data/generated/novel_10w.jsonl",
+    "data/generated/smoke_gate_v7.jsonl",
+    "data/generated/verify_12roles.jsonl",
+    "data/generated/smoke_gate_v6.jsonl",
 ]
 
 # 手册建议 1500~3000 字/章。实测 8 本书里落进该区间的仅 22 章，不够「建议 30 章」，
@@ -105,12 +109,35 @@ def load_chapters(rel_path):
     return out
 
 
+def read_title(rel_path):
+    """从 jsonl 的 outline 记录里取书名（取不到就退回文件名）。"""
+    try:
+        with io.open(ROOT / rel_path, encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                rec = json.loads(line)
+                if rec.get("type") == "outline":
+                    t = (rec.get("data") or {}).get("title")
+                    if t:
+                        return str(t)
+    except (json.JSONDecodeError, OSError):
+        pass
+    return Path(rel_path).stem
+
+
 def collect():
     """筛出候选章并算好指标。返回 [(book, idx, title, text, words, metrics)]。"""
     pool = []
-    for book, rel in BOOKS:
+    seen_books = {}          # 书名 -> 已计入章数；同一本书的多个产物只取一次
+    for rel in BOOKS:
         if not (ROOT / rel).exists():
             print(f"  跳过（缺文件）：{rel}")
+            continue
+        book = read_title(rel)
+        if book in seen_books:
+            print(f"  跳过 {rel}：与 {seen_books[book]} 同为《{book}》，"
+                  f"同一本书不重复取样")
             continue
         chapters = load_chapters(rel)
         kept = 0
@@ -125,7 +152,9 @@ def collect():
                 continue
             pool.append((book, idx, title, content, w, m))
             kept += 1
-        print(f"  {book}: {len(chapters)} 章 -> 落在 {MIN_W}~{MAX_W} 字区间 {kept} 章")
+        seen_books[book] = rel
+        print(f"  《{book}》({Path(rel).name}): {len(chapters)} 章 "
+              f"-> 落在 {MIN_W}~{MAX_W} 字区间 {kept} 章")
     return pool
 
 
@@ -184,7 +213,8 @@ def main():
     picked = pick(pool)
     fan = [p[5]["fanqie_score"] for p in picked]
     thr = [p[5]["thrill_per_k"] for p in picked]
-    print(f"\n候选 {len(pool)} 章 -> 取样 {len(picked)} 章")
+    n_books = len({p[0] for p in pool})
+    print(f"\n候选 {len(pool)} 章（来自 {n_books} 本书）-> 取样 {len(picked)} 章")
     print(f"  机器指标跨度：番茄分 {min(fan):.0f}~{max(fan):.0f}｜"
           f"💥爽点 {min(thr):.2f}~{max(thr):.2f}")
     if args.dry_run:
@@ -215,7 +245,7 @@ def main():
             },
         })
 
-    head = HEADER.replace("# 生成方式", f"# 取样：{len(picked)} 章 / {len(BOOKS)} 本书 / "
+    head = HEADER.replace("# 生成方式", f"# 取样：{len(picked)} 章 / {len({p[0] for p in pool})} 本书 / "
                                        f"字数 {MIN_W}~{MAX_W}\n# 生成方式")
     ANN.write_text("\n".join(head.split("\n") +
                              [json.dumps(r, ensure_ascii=False) for r in records]) + "\n",
