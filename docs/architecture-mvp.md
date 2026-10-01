@@ -1,5 +1,19 @@
 # 墨匠 / InkSmith — MVP 系统架构设计 + 任务分解
 
+> ⚠️ **历史归档文档（2026-07-31 的 MVP 设计基线），不是当前架构。**
+>
+> 当前架构以 [`ARCHITECTURE.md`](ARCHITECTURE.md) 为准，本文档仅供追溯
+> 「当初为什么这么设计」。使用时注意以下**已过时**之处（2026-10-01 核对）：
+>
+> | 本文档写的 | 实际已是 |
+> | --- | --- |
+> | Flutter 3.24+ / Dart 3.5+ | Flutter 3.44+ / Dart 3.12+（见 `pubspec.yaml`） |
+> | 28 个 `lib/*.dart` 文件 | **119 个**；整个 `lib/ai_pipeline/` 子系统（长篇流水线、多模型路由、组合质检网关）当时尚不存在 |
+> | 「P2 再接本地大模型」 | 已接入（OpenAI 兼容协议 + 本地 llama-server / Ollama） |
+> | 无质量门禁体系 | 已有三套并行的质检层（规则层 `FanqieGateChecker` / 商业层 `PipelineQa` / 组合网关 `CompositeQualityGate`） |
+>
+> 任务分解（第 5 节）已全部完成或被后续设计取代，**不要当待办清单用**。
+
 | 项目 | 内容 |
 | --- | --- |
 | 文档类型 | 架构设计 + 任务分解（Architect 产出） |

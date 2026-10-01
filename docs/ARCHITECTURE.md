@@ -1,7 +1,9 @@
 # 墨匠 InkSmith —— 架构文档
 
 > 面向维护者。说明代码分层、关键抽象、AI 生成链路、数据流与测试策略。
-> 本文档与最新代码同步（2026-08-05，含编辑器 mixin 拆分、数据可靠性、写作风格等全部新功能）。
+> 本文档与最新代码同步（2026-10-01：新增 `ai_pipeline/` 长篇流水线子系统、
+> `engine/quality/` 质检层、`cross_chapter_qa.dart` / `style_fingerprint.dart`
+> 两个子模块拆分）。
 
 ## 1. 分层总览
 
@@ -11,10 +13,15 @@ lib/
 ├── core/                           # 横切关注点
 │   ├── di/providers.dart           # Riverpod 依赖注入（全应用单一来源）
 │   ├── router/                     # go_router 路由表
-│   ├── theme/                      # 主题
-│   ├── constants/                  # AppConstants（单章上限/防抖/字数统计）
+│   ├── theme/                      # 主题（app_theme + app_tokens 设计令牌）
+│   ├── constants/                  # AppConstants（单章上限/防抖/字数统计）+ genre_presets 题材预设
 │   ├── errors/                     # AppException 层级（sealed）
-│   └── security/                   # SecretStore + Windows DPAPI MethodChannel
+│   ├── security/                   # SecretStore + Windows DPAPI MethodChannel
+│   ├── crash_reporter.dart         # 崩溃日志上报（用户主动开启，默认不联网）
+│   └── utils/                      # 通用工具
+│       ├── text_index.dart         # TextIndex 词表预筛 + countOccurrences（非重叠计数）
+│       ├── text_fmt.dart           # 时间/字数/百分比格式化
+│       └── entity_highlight.dart   # 实体高亮片段
 ├── models/                         # 纯数据模型（不可变 + copyWith + 序列化）
 │   ├── novel.dart                  # 聚合根（含 drafts/exportPrefs/preferredStyle/preferredProseStyle）
 │   ├── chapter.dart                # 章节（含 outline）
@@ -23,28 +30,59 @@ lib/
 │   ├── world_setting.dart           # 世界观设定
 │   ├── generation_config.dart       # 生成配置（含 chapterCount/volumeOutline/expandOutline/writingStyle/proseStyle）
 │   ├── llm_config.dart             # LLM 配置 + isLocal/isConfigured
+│   ├── style_ref.dart              # 文风参考（只存分布数值，不留原文）
 │   ├── export_prefs.dart           # 一键导出配置（lastFormat/includeSettings）
 │   └── reader_settings.dart         # 阅读设置（主题/字号/行距/衬线）+ Repository
 ├── storage/                        # 持久化
 │   ├── app_database.dart           # 单例（私有构造 + init），三层可靠性（原子写 + .bak.json 备份 + 读时自愈）
 │   ├── novel_backup_service.dart   # JSON 备份导入/导出
+│   ├── chapter_snapshot_service.dart # 章节快照（定点修回滚）
 │   └── *_repository.dart           # Novel/Chapter/Setting 仓库（具体类）
 ├── engine/                         # 生成引擎（核心抽象）
-│   ├── generation_engine.dart       # GenerationEngine 接口 + ContextBundle(+plotSummary)
-│   ├── template_engine.dart         # 模板引擎（Isolate）
+│   ├── generation_engine.dart      # GenerationEngine 接口 + ContextBundle(+plotSummary/payoffHistory)
+│   ├── template_engine.dart        # 模板引擎（Isolate）
 │   ├── llm_engine.dart             # LLM 引擎（流式 OpenAI 兼容 + 大纲扩写）
-│   ├── llm_chat_client.dart         # 对话客户端（标题/记忆/续写/校对）
+│   ├── llm_chat_client.dart        # 对话客户端（标题/记忆/续写/校对）
+│   ├── llm_retry.dart              # 重试策略 + 可取消退避
+│   ├── llm_http_errors.dart        # LLM 传输异常分类（retryable 标记）
+│   ├── llm_context_brief.dart      # 上下文摘要构造（省 token）
+│   ├── writing_guidelines.dart     # 写作准则常量（注入提示词的硬约束）
 │   ├── editor_ai.dart              # 编辑器 AI（续写/修改/校对 + ProofreadResult 客户端修正）
-│   ├── story_memory.dart            # AI 记忆（提取新角色/设定 + 去重合并）
-│   └── corpora/                    # 题材语料（姓名/地名/句式/骨架）
+│   ├── story_memory.dart           # AI 记忆（提取新角色/设定 + 去重合并）
+│   ├── quality/                    # 规则层质检（engine 内，不依赖 ai_pipeline）
+│   │   ├── quality_gate.dart       # QualityGateReport/Issue 模型 + QualityGate 接口
+│   │   ├── fanqie_gate_checker.dart# 番茄过审闸门（规则 20/10 等硬门槛）
+│   │   ├── novel_quality_checker.dart # 全书级一致性（设定/专名/世界观冲突）
+│   │   ├── novel_consistency_checker.dart # 跨章一致性（主角连续性等）
+│   │   ├── token_tier.dart         # 按 max_tokens 选推理档位
+│   │   └── quality_rules.g.dart    # **生成物**，勿手改（源：rules/quality_rules.json）
+│   ├── multipass/                  # 多遍章节引擎（场景规划 → 写手 → 编辑）
+│   │   ├── multi_pass_chapter_engine.dart # 多遍编排 + 爽点补修
+│   │   ├── scene_builder.dart      # 场景骨架（强制含一处「转」爽点场景）
+│   │   └── scene_plan.dart         # 场景数据结构
+│   ├── constraints/ + random/      # 字数约束 + 种子随机
+│   └── corpus/                     # 题材语料（姓名/地名/句式/骨架/节拍）
+├── ai_pipeline/                    # 长篇小说 AI 流水线（质量门的组合实现层）
+│   ├── models/                     # PipelineChapter 等流水线模型
+│   ├── prompts/pipeline_prompts.dart # 各角色提示词（大纲终审/写手/编辑/读者官…）
+│   ├── services/
+│   │   ├── ai_pipeline_service.dart # 流水线编排（多角色 + 多轮迭代）
+│   │   ├── llm_router.dart         # 多链 failover（云端/本地/降级）
+│   │   ├── pipeline_qa.dart        # 单章商业指标 + **对外门面**（薄封装转调下面两个）
+│   │   ├── style_fingerprint.dart  # 文风指纹 + 统计层 AI 腔（StyleFingerprintQa）
+│   │   ├── cross_chapter_qa.dart   # 跨章维度（CrossChapterQa）：爽点断供/意象复读/对白塌陷
+│   │   ├── composite_quality_gate.dart # 统一质检网关（汇总三套结果给 UI）
+│   │   ├── book_qa_service.dart    # 全书体检入口
+│   │   └── pipeline_storage.dart   # 流水线状态持久化
+│   └── fixed_workflow_preset.dart  # 固定工作流预设
 ├── services/                       # 业务服务
 │   ├── sensitive_words.dart         # 敏感词检查（内置 5 类 100+ 词 + 自定义 + hitStats 历史命中）
 │   └── search_service.dart          # 搜索
 ├── features/                       # 页面 + 状态管理（按功能聚合）
 │   ├── project_list/               # 项目列表（搜索/筛选/归档）
-│   ├── workspace/                  # 三栏工作区 + 卷纲总览/大纲编辑
+│   ├── workspace/                  # 三栏工作区 + 卷纲总览/大纲编辑/文风参考
 │   ├── editor/                    # 编辑器（含 mixin 拆分：search/pomodoro/ai + 写作统计/章节分割）
-│   │   ├── editor_page.dart        # 编辑器核心（346 行，with AutosaveMixin + 3 mixin）
+│   │   ├── editor_page.dart        # 编辑器核心（with AutosaveMixin + 3 mixin）
 │   │   ├── editor_search_mixin.dart # 查找替换（状态+操作+搜索条 UI）
 │   │   ├── editor_pomodoro_mixin.dart # 番茄钟（计时/启停/标签）
 │   │   ├── editor_ai_mixin.dart    # AI 动作（续写/修改/校对/存稿/统计/应用结果）
@@ -53,12 +91,20 @@ lib/
 │   │   ├── split_chapter_dialog.dart # 章节分割确认弹窗
 │   │   └── sensitive_check_dialog.dart # 敏感词检查（含历史命中 TOP5）
 │   ├── generate/                  # 生成对话框 + GenerateViewModel（多章/预览/偏好持久化）
+│   ├── ai_pipeline/               # 流水线页面（角色矩阵 + 质检面板）
 │   ├── export/                   # 导出（5 格式）+ 封面
 │   └── reader/                   # 阅读模式（三主题/字号/行距/衬线）
 └── widgets/                      # 通用组件
 ```
 
-**分层规则**：`features` → `engine`/`services` → `storage` → `models`；`core` 被任意层引用。依赖只允许向下，禁止反向。
+**分层规则**：`features` → `ai_pipeline`/`engine`/`services` → `storage` → `models`；
+`core` 被任意层引用。依赖只允许向下，禁止反向。
+`ai_pipeline` → `engine`（可，质检实现依赖规则层模型）；
+**`engine` 不反向依赖 `ai_pipeline`**（`style_ref.dart` 放在 `models/` 正是为了避开这个环）。
+
+> **质检模块的拆分约定（2026-10-01）**：`pipeline_qa.dart` 保留同名静态方法作为
+> **门面**，实现分别在 `StyleFingerprintQa` / `CrossChapterQa`。新增跨章或文风
+> 维度时请加到对应类里，不要塞回 `PipelineQa`——否则它会重新长回 1400+ 行。
 
 ## 2. 核心抽象：生成引擎
 
