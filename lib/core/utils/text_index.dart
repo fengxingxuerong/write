@@ -50,3 +50,22 @@ class TextIndex {
     return _pairs.contains((first << 16) | word.codeUnitAt(1));
   }
 }
+
+/// 统计 [needle] 在 [text] 中出现的次数（不重叠计数）。
+///
+/// 原来只是 `PipelineQa._countOccurrences` 一个私有方法，但文风指纹子模块
+/// （style_fingerprint.dart）拆出后两边都要用；放这里避免为了共用一个 8 行
+/// 循环而让 ai_pipeline 反向依赖。实现逐字照搬，**非重叠**语义不变
+/// （`idx` 跳到 `found + needle.length`，故 "aa" 在 "aaa" 里记 1 次）。
+int countOccurrences(String text, String needle) {
+  if (needle.isEmpty) return 0;
+  int count = 0;
+  int idx = 0;
+  while (true) {
+    final int found = text.indexOf(needle, idx);
+    if (found < 0) break;
+    count++;
+    idx = found + needle.length;
+  }
+  return count;
+}
