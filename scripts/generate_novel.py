@@ -60,6 +60,10 @@ from fanqie_review import count_words as _count_words  # noqa: E402
 
 # 词表/阈值单一数据源（rules/quality_rules.json 的生成物，与 Dart QualityRules 同源）。
 from quality_rules_generated import (  # noqa: E402
+    BODY_REACTION_WORDS,
+    SENTENCE_CONNECTORS,
+    AI_ADVERBS,
+    NEGATION,
     HOOK_WORDS,
     OPENING_STRONG,
     OPENING_WEAK,
@@ -654,7 +658,7 @@ def count_words(text):
 AI_CLICHE = ['嘴角', '唇角', '眼底', '眼神', '目光', '仿佛', '似乎', '宛如',
              '空气', '心跳', '深吸', '命运', '轨迹', '万语', '舒了一口',
              '微微上扬', '闪过一丝', '勾起一抹']
-NEGATION = ['不', '没', '无', '没有', '并未', '不曾', '决不', '毫无']
+NEGATION = NEGATION = list(NEGATION)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
 
 # ============================================================
 # 单一数据源（2026-10-01）：以下词表**不再**在本文件写死，而是从
@@ -933,10 +937,8 @@ def release_ev_fragment(text):
 # ============================================================
 # AI 味深度检测（统计层：句长均匀度 / 的字密度 / 叠词 / 句首连接词）
 # ============================================================
-AI_ADVERBS = ['微微', '轻轻', '淡淡', '深深', '缓缓', '悄悄', '默默', '隐隐',
-              '幽幽', '怔怔', '静静', '浅浅']
-SENTENCE_CONNECTORS = ['然而', '但是', '因此', '与此同时', '于是', '随即',
-                       '紧接着', '然后', '不过', '可是']
+AI_ADVERBS = AI_ADVERBS = list(AI_ADVERBS)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
+SENTENCE_CONNECTORS = SENTENCE_CONNECTORS = list(SENTENCE_CONNECTORS)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
 
 # —— 句式层 AI 指纹（2026-09-12 补：词表层/统计层抓不到的三类句式模式）——
 # 对齐 FANQIE_SYSTEM_PROMPT 第 21 条（「像……似的」每千字不超过 2 次）：
@@ -949,10 +951,7 @@ METAPHOR_PAT = re.compile(
 
 # 身体反应四件套（发烫/发凉/嗓子发干/汗毛立起一类）：真人写作只在关键节点用，
 # AI 会每个场景配一套，形成可统计的风格指纹。阈值 2.5/千字（回测校准后定）。
-BODY_REACTION_WORDS = ['发烫', '发凉', '发冷', '嗓子发干', '喉咙发干', '汗毛',
-                       '头皮发麻', '掌心出汗', '手心出汗', '脊背发凉', '寒意',
-                       '牙根发酸', '后槽牙', '呼吸一窒', '心跳漏拍', '胃里发紧',
-                       '指尖发麻', '指尖发凉', '太阳穴一跳']
+BODY_REACTION_WORDS = BODY_REACTION_WORDS = list(BODY_REACTION_WORDS)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
 
 # 单句成段阈值：段落 ≤14 字视为单句段（喘气段），占比过高 = 机械节奏感
 SINGLE_PARA_MAX_CHARS = 14

@@ -86,9 +86,8 @@ class PipelineQa {
   ];
 
   /// 否定词（前缀 6 字内出现则视为否定表述）。
-  static const List<String> negations = <String>[
-    '不', '没', '无', '没有', '并未', '不曾', '决不', '毫无',
-  ];
+  /// 值来自 [QualityRules.negation]（rules/quality_rules.json 生成）。
+  static const List<String> negations = QualityRules.negation;
 
   /// AI 味密度（%）：命中次数 / 总字数 * 100。
   static double aiEchoPct(String text) {
@@ -865,16 +864,10 @@ class PipelineQa {
   static String _releasePct(double v) => '${(v * 100).round()}%';
 
   /// AI 高频叠词修饰（轻轻/微微/淡淡…，AI 腔典型特征）。
-  static const List<String> _aiAdverbs = <String>[
-    '微微', '轻轻', '淡淡', '深深', '缓缓', '悄悄', '默默', '隐隐',
-    '幽幽', '怔怔', '静静', '浅浅',
-  ];
+  static const List<String> _aiAdverbs = QualityRules.aiAdverbs;
 
   /// 句首连接词（AI 爱用「然而/于是/随即」起句，真人少用）。
-  static const List<String> _sentenceConnectors = <String>[
-    '然而', '但是', '因此', '与此同时', '于是', '随即', '紧接着',
-    '然后', '不过', '可是',
-  ];
+  static const List<String> _sentenceConnectors = QualityRules.sentenceConnectors;
 
   /// 句式层 AI 指纹·比喻强结构正则（与 Python METAPHOR_PAT 同口径）：
   /// 只抓明喻强结构（像X一样/似的/般、跟X似的、如同X一般）+ 比喻独词；
@@ -887,12 +880,8 @@ class PipelineQa {
   );
 
   /// 句式层 AI 指纹·身体反应四件套词表（与 Python BODY_REACTION_WORDS 同步）。
-  static const List<String> _bodyReactionWords = <String>[
-    '发烫', '发凉', '发冷', '嗓子发干', '喉咙发干', '汗毛',
-    '头皮发麻', '掌心出汗', '手心出汗', '脊背发凉', '寒意',
-    '牙根发酸', '后槽牙', '呼吸一窒', '心跳漏拍', '胃里发紧',
-    '指尖发麻', '指尖发凉', '太阳穴一跳',
-  ];
+  /// 值来自 [QualityRules.bodyReactionWords]（rules/quality_rules.json 生成）。
+  static const List<String> _bodyReactionWords = QualityRules.bodyReactionWords;
 
   /// 单句成段阈值：段落 ≤14 字视为单句段（喘气段）。
   static const int _singleParaMaxChars = 14;

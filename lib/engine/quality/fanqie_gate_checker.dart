@@ -287,46 +287,30 @@ class FanqieGateChecker {
   ];
 
   /// 骨架/提示词泄漏（漏进正文即判废）。
-  static const List<String> _leak = <String>[
-    '本场景任务', '必须完成的节拍', '爽点：', '钩子：', '一次奇缘让主角获得机缘',
-    '遭遇强敌或瓶颈', '心境蜕变', '就在众人以为风平浪静时', 'targetWords',
-    '【场景', '【跨章状态',
-  ];
+  /// 值来自 [QualityRules.promptLeak]（rules/quality_rules.json 生成）。
+  static const List<String> _leak = QualityRules.promptLeak;
 
   /// 元话语/指令残留（模型把「补写操作说明」当正文吐出来 = 直接判废）。
   ///
   /// 实测事故：钩子补写返回「我拿到的指令是补写钩子，不是扩写…」被原样拼进第 1 章末尾，
   /// 旧词表只覆盖骨架词，抓不到这类元话语。选词原则：只收叙事里不可能出现的短语。
-  static const List<String> _metaTalk = <String>[
-    '我拿到的指令', '拿到的指令是', '根据你的指令', '按你的指令', '按照你的要求', '按你的要求',
-    '作为AI', '作为人工智能', '作为一个AI', '作为语言模型', '我无法完成', '我无法直接',
-    '抱歉，我', '很抱歉，我', '你贴的那段', '你提供的文本', '以下是我的改写', '以上是补写',
-    '字数要求', '扩写到', '如需继续', '如果你需要', '希望这符合', '无法满足这个要求',
-  ];
+  static const List<String> _metaTalk = QualityRules.metaTalk;
 
   /// 题材漂移：给非现代题材用的现代生活标志词。
   ///
   /// 实测事故：玄幻书第 3 章整章变成现代都市悬疑（路灯/手机/牛皮纸袋/面包车），
   /// 逐章本地评审仍给 84 分，直到终审官通读才发现。玄幻里也可能合法的词（钥匙/医院/巷口）
   /// 一律不收，避免误伤。
-  static const List<String> _modernMarkers = <String>[
-    '手机', '电脑', '网络', '微信', '支付宝', '电梯', '汽车', '面包车', '出租车', '公交车',
-    '马路', '红绿灯', '路灯', '屏幕', '短信', '沙发', '咖啡', '监控', '摄像头', '银行卡',
-    '外卖', '快递', '物业', '办公室', '上班', '加班', '房租', '塑料袋', '牛皮纸袋', '客服',
-    '二维码', '充电', '导航', '直播', '朋友圈', '地铁', '高铁', '身份证',
-  ];
+  static const List<String> _modernMarkers = QualityRules.modernMarkers;
 
   /// 需要锁题材的非现代题材（都市/校园/悬疑等题材不做现代词漂移判定）。
-  static const List<String> _ancientGenres = <String>[
-    '玄幻', '仙侠', '武侠', '修真', '历史', '古代', '宫斗', '权谋', '奇幻', '东方', '洪荒',
-    '仙', '古言',
-  ];
+  static const List<String> _ancientGenres = QualityRules.ancientGenres;
 
   /// 章内重复块最短字数（与 Python 侧 INTRA_REPEAT_MIN_BLOCK 同口径）。
-  static const int intraRepeatMinBlock = 120;
+  static const int intraRepeatMinBlock = QualityRules.intraRepeatMinBlock;
 
   /// 章内重复指纹长度（与 Python 侧 INTRA_REPEAT_GRAM 同口径）。
-  static const int _intraGram = 12;
+  static const int _intraGram = QualityRules.intraRepeatGram;
 
   /// 滑动指纹的滚动哈希底数与掩码（模 2^30 运算，保持 int 有界且不依赖平台）。
   static const int _hashBase = 31;

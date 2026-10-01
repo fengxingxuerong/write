@@ -30,6 +30,14 @@
 | `sensitiveAbuse` / `SENSITIVE_ABUSE` | 27 | Dart 编辑自查词库·脏话辱骂类。分类名 `脏话辱骂`，共 27 词。 |
 | `sensitiveIllegal` / `SENSITIVE_ILLEGAL` | 32 | Dart 编辑自查词库·违法违规类。分类名 `违法违规`，共 32 词。 |
 | `sensitiveAds` / `SENSITIVE_ADS` | 28 | Dart 编辑自查词库·广告引流类（群号/私域引流等）。分类名 `广告引流`，共 28 词。 |
+| `promptLeak` / `PROMPT_LEAK` | 11 | 骨架/提示词泄漏标记：规划/场景 prompt 的结构词漏进正文即判废（阻断级）。双端逐值一致（各 11 词）。 |
+| `metaTalk` / `META_TALK` | 24 | 元话语/指令残留：补写与定点修把「我拿到的指令是…」当正文吐出来（实测被拼进成书）。双端逐值一致（各 24 词）。 |
+| `modernMarkers` / `MODERN_MARKERS` | 38 | 现代词汇标记：古风题材出现手机/电梯/网络等即判题材漂移；与 ancientGenres 配套。双端逐值一致（各 38 词）。 |
+| `ancientGenres` / `ANCIENT_GENRES` | 13 | 古风题材白名单：命中则不把现代词判定为题材漂移（玄幻/仙侠/武侠/修真/历史…）。双端逐值一致（各 13 词）。 |
+| `negation` / `NEGATION` | 8 | 否定词（前缀 6 字内出现即视为否定表述）：世界观「同一关键词肯定/否定」冲突检测用。双端逐值一致（各 8 词）。 |
+| `aiAdverbs` / `AI_ADVERBS` | 12 | AI 腔副词（微微/轻轻/淡淡…）：统计层 AI 味指标之一。双端逐值一致（各 12 词）。 |
+| `sentenceConnectors` / `SENTENCE_CONNECTORS` | 10 | 句首连接词率：统计层 AI 味指标之一（然而/但是/因此…）。双端逐值一致（各 10 词）。 |
+| `bodyReactionWords` / `BODY_REACTION_WORDS` | 19 | 身体反应词表：句式指纹 body_reaction_density 项（发烫/发凉/汗毛…）。双端逐值一致（各 19 词）。 |
 
 ## 二、阈值
 
@@ -42,6 +50,8 @@
 | `droughtSidePerK` / `DROUGHT_SIDE_PER_K` | 0.3 | 断供逃生通道的侧面反响密度线：💥 低但侧面反响 ≥ 此值 = 兑现已送达读者，不判断供（防误伤不写套话的好稿）。 |
 | `droughtMinRun` / `DROUGHT_MIN_RUN` | 3 | 连续多少章双低才算「断供带」（1~2 章连低属正常节奏起伏）。 |
 | `fixMinRatio` / `FIX_MIN_RATIO` | 0.92 | 定点修提示词里的字数硬下限（改写后不得低于原文的该比例）。必须比采纳守卫（Python EDITOR_MIN_RATIO=0.85）更严一档，否则模型会照「删水段」整章压缩、产出被守卫整份拒绝、定点修白跑。 |
+| `intraRepeatMinBlock` / `INTRA_REPEAT_MIN_BLOCK` | 120 | 章内重复检测的最短重复块字数（超过此长度的重复块判「凑字」，rewrite 级）。Dart FanqieGateChecker.intraRepeatMinBlock 与本值同口径。 |
+| `intraRepeatGram` / `INTRA_REPEAT_GRAM` | 12 | 章内重复检测的滑动指纹长度（n-gram）。Dart FanqieGateChecker._intraGram 同口径。 |
 
 ## 三、已知的端间不对称（**故意如此**，不要「顺手统一」）
 
@@ -52,6 +62,11 @@
 | `countWords` | AppConstants.countWords | fanqie_review.count_words | 已知既有差异：Python 侧把「字母->数字」转换算新词、Dart 算同一个词，且 Python 缺 CJK 扩展 A 区。密度类指标因此允许极小的数值差异，**不要**为此改动字数口径（那是影响界面显示的产品级决定，见 docs/quality-enhancement-log.md 第 31 节）。 |
 | `clicheTables` | gateClichePhrases（19 条，短词偏多） | reviewClicheSentences（34 条，长句偏多） | 同质化指标公式与阈值两端一致（distinct 命中 ×1000/字 > 1.2），但词表内容不同：Dart 独有「从这一刻起/命运的车轮/像有什么东西醒」等短词，Python 独有「莫欺少年穷/三十年河东三十年河西/命运的车轮开始转动」等长句。**待产品裁决**：统一成一张表会同时改变两端分数与定点修触发率，必须先用真机成书复验（A/B 分数变化）再落地——2026-10-01 只做收编与记录，不改语义。 |
 | `complianceTables` | sensitiveViolence/Sexual/Abuse/Illegal/Ads（5 类 157 词，编辑自查） | redlinePolitics/Religion/MinorRisk/Gore/BrandCelebrity/IllegalDetail（6 类 137 词，番茄平台审核红线） | 两端作用域不同**且几乎不相交**（词级交集仅 17 / 合计 295，2026-10-01 实测），而 fanqie_review 的旧注释称「与 Dart 侧保持同步扩充」——该表述与事实不符，已改为如实描述。**不要合并成一张表**：合并会同时改变平台红线判定、编辑自查命中与 UI 分类展示（分类名是对外可见的），需产品先定「平台红线是否要覆盖色情/脏话、编辑自查是否要含时政/宗教」再动。 |
+| `conflictWords` | _conflict（31 词） | CONFLICT_WORDS（40 词） | **同用途**（首屏「有无冲突信号」检查，Dart firstScreenCheck ↔ Python first_screen_check），但 Dart 表是 Python 的真子集，Python 多 9 词（今天必须/不交/递/按在/推到/盯上 等）→ 同一段文字两端可能一处判「首屏无冲突」、另一处判「有」。收编前需真机 A/B 定哪一侧更准。 |
+| `driveWords` | _drive（44 词） | DRIVE_WORDS（45 词，多「一个亿」） | **同用途**（水段判定的「该段是否在推进」条件，Dart fillerStats ↔ Python filler_ratio）。Python 多一个「一个亿」→ 该段落一端算推进、另一端算水段，直接影响**水段率与评分**。收编前需真机 A/B。 |
+| `aiClicheWords` | aiClicheWords（21 词） | AI_CLICHE（18 词） | 同用途（AI 味密度 aiEchoPct ↔ AI_CLICHE 命中数）。Dart 是 Python 的超集（多 空气凝固/嘴角勾起/眼底闪过）→ 同一章两端 AI 味数值不同、「AI 腔」告警阈值判定不同。收编前需真机 A/B。 |
+| `instructionMarks` | _instructionMark（21 词，含「招募」） | INSTRUCTION_MARKERS（25 词，含错别字「招摹」、且「代办」重复两次） | Python 侧的「招摹」是错别字，**永远匹配不到**「招募」；实测 124 份真实成书里「招募」出现 2 次、「招摹」0 次 → Python 在这两处会漏判指令痕迹。是否补「招募」需评估误伤（阻断级判定），故本轮只记录不改。 |
+| `narrativeOkCategories` | _narrativeOkCategories（4 个分类键） | NARRATIVE_OK_CATEGORIES（3 个分类键，多「教唆与违法细节」） | 「叙事成立的分类」白名单（例：教唆类词出现在叙述里不算违规）。两侧键集合不同（Dart 有 违法违规/广告引流，Python 有 教唆与违法细节）→ 白名单豁免范围不一致。 |
 
 ## 四、改判据的正确流程
 

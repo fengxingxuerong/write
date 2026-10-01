@@ -46,7 +46,13 @@ try:  # pragma: no cover - 分支取决于调用方式
         REVIEW_CLICHE_SENTENCES,
         TRIAD_END_WINDOW,
         TRIAD_END_WORDS,
-    )
+            PROMPT_LEAK,
+        META_TALK,
+        MODERN_MARKERS,
+        ANCIENT_GENRES,
+        INTRA_REPEAT_MIN_BLOCK,
+        INTRA_REPEAT_GRAM,
+)
 except ImportError:  # pragma: no cover - 平铺导入（脚本直跑/同目录 import）
     _here = os.path.dirname(os.path.abspath(__file__))
     if _here not in sys.path:
@@ -62,7 +68,13 @@ except ImportError:  # pragma: no cover - 平铺导入（脚本直跑/同目录 
         REVIEW_CLICHE_SENTENCES,
         TRIAD_END_WINDOW,
         TRIAD_END_WORDS,
-    )
+            PROMPT_LEAK,
+        META_TALK,
+        MODERN_MARKERS,
+        ANCIENT_GENRES,
+        INTRA_REPEAT_MIN_BLOCK,
+        INTRA_REPEAT_GRAM,
+)
 
 # ============================================================
 # 1) 红线词表（番茄平台审核红线，6 类）
@@ -169,40 +181,26 @@ CONFLICT_WORDS = ["吼", "骂", "砸", "押", "欠", "逐", "抢", "抓", "审",
                   "盯上", "警告", "通融", "期限", "三天内", "当场", "搜", "抬走", "拉走"]
 
 # 骨架/规划官提示词泄漏（漏进正文 = 直接判废）
-PROMPT_LEAK = ["本场景任务", "必须完成的节拍", "爽点：", "钩子：", "一次奇缘让主角获得机缘",
-               "遭遇强敌或瓶颈", "心境蜕变", "就在众人以为风平浪静时", "targetWords",
-               "【场景", "【跨章状态"]
+PROMPT_LEAK = PROMPT_LEAK = list(PROMPT_LEAK)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
 
 # 元话语/指令残留（模型把「补写操作说明」当正文吐出来，拼进成书 = 直接判废）
 # 实测事故：钩子补写返回「我拿到的指令是补写钩子，不是扩写。你贴的那段"充到 2000 字以上"…」
 # 被原样拼到第 1 章末尾，本地评审仍给 92 分（旧 PROMPT_LEAK 只覆盖骨架词，抓不到这类）。
 # 选词原则：只收「叙事里不可能出现」的短语，避免误伤正文（不用「抱歉」「请确认」这类口语）。
-META_TALK = [
-    "我拿到的指令", "拿到的指令是", "根据你的指令", "按你的指令", "按照你的要求", "按你的要求",
-    "作为AI", "作为人工智能", "作为一个AI", "作为语言模型", "我无法完成", "我无法直接",
-    "抱歉，我", "很抱歉，我", "你贴的那段", "你提供的文本", "以下是我的改写", "以上是补写",
-    "字数要求", "扩写到", "如需继续", "如果你需要", "希望这符合", "无法满足这个要求",
-]
+META_TALK = META_TALK = list(META_TALK)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
 
 # 题材漂移：给「古风/非现代」题材用的现代生活标志词。
 # 实测事故：玄幻书第 3 章整章变成现代都市悬疑（路灯/手机/牛皮纸袋/面包车），
 # 逐章本地评审仍给 84 分，直到终审官通读才发现「书名标称玄幻，末章主角换人」。
 # 只收古风题材几乎不可能自然出现的词：「钥匙/医院/巷口」这类玄幻也合法的词一律不收。
-MODERN_MARKERS = [
-    "手机", "电脑", "网络", "微信", "支付宝", "电梯", "汽车", "面包车", "出租车", "公交车",
-    "马路", "红绿灯", "路灯", "屏幕", "短信", "沙发", "咖啡", "监控", "摄像头", "银行卡",
-    "外卖", "快递", "物业", "办公室", "上班", "加班", "房租", "塑料袋", "牛皮纸袋", "客服",
-    "二维码", "充电", "导航", "直播", "朋友圈", "地铁", "高铁", "身份证",
-]
+MODERN_MARKERS = MODERN_MARKERS = list(MODERN_MARKERS)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
 
 # 需要锁题材的「非现代」题材（其余题材如都市/校园/悬疑不做现代词漂移判定）
-ANCIENT_GENRES = ("玄幻", "仙侠", "武侠", "修真", "历史", "古代", "宫斗", "权谋",
-                  "奇幻", "东方", "洪荒", "仙", "古言")
+ANCIENT_GENRES = ANCIENT_GENRES = tuple(ANCIENT_GENRES)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
 
 # 章内大段重复判定：重复块最短字数 / 指纹长度
-INTRA_REPEAT_MIN_BLOCK = 120
-INTRA_REPEAT_GRAM = 12
-
+INTRA_REPEAT_MIN_BLOCK = INTRA_REPEAT_MIN_BLOCK  # 值来自 rules/quality_rules.json 生成物
+INTRA_REPEAT_GRAM = INTRA_REPEAT_GRAM  # 值来自 rules/quality_rules.json 生成物
 # 阻断级硬伤的下限字数：番茄单章建议 2000~3000，低于这条线不给「可投」
 BLOCKING_MIN_WORDS = 1500
 
