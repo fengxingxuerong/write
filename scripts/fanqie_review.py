@@ -37,6 +37,12 @@ CHAPTER_RE = re.compile(r"^第\s*(\d+)\s*章")
 try:  # pragma: no cover - 分支取决于调用方式
     from .quality_rules_generated import (
         FIX_MIN_RATIO,
+        REDLINE_BRAND_CELEBRITY,
+        REDLINE_GORE,
+        REDLINE_ILLEGAL_DETAIL,
+        REDLINE_MINOR_RISK,
+        REDLINE_POLITICS,
+        REDLINE_RELIGION,
         REVIEW_CLICHE_SENTENCES,
         TRIAD_END_WINDOW,
         TRIAD_END_WORDS,
@@ -47,48 +53,31 @@ except ImportError:  # pragma: no cover - 平铺导入（脚本直跑/同目录 
         sys.path.insert(0, _here)
     from quality_rules_generated import (
         FIX_MIN_RATIO,
+        REDLINE_BRAND_CELEBRITY,
+        REDLINE_GORE,
+        REDLINE_ILLEGAL_DETAIL,
+        REDLINE_MINOR_RISK,
+        REDLINE_POLITICS,
+        REDLINE_RELIGION,
         REVIEW_CLICHE_SENTENCES,
         TRIAD_END_WINDOW,
         TRIAD_END_WORDS,
     )
 
 # ============================================================
-# 1) 红线词表（与 Dart 侧 lib/services/sensitive_words.dart 保持同步扩充）
+# 1) 红线词表（番茄平台审核红线，6 类）
+#    值来自 rules/quality_rules.json 的 redline* 六张表（与 Dart 编辑自查词库**不是**
+#    同一套**：词级交集仅 17/295，作用域与分类都不同——见
+#    docs/quality-rules-current.md 第三节 asymmetries.complianceTables）
+#    白名单：命中该词但上下文属于合法叙事时降级为「提示」而非「否决」
 # ============================================================
 REDLINE = {
-    "时政敏感": [
-        "国家主席", "国务院", "中南海", "政治局", "省委书记", "市委书记", "中央委员会",
-        "全国人大", "政协会议", "入党", "开除党籍", "纪委", "巡视组", "维稳", "上访",
-        "信访局", "政府大楼", "市委大楼", "派出所值班", "国安局", "情报部门", "政变",
-        "选举舞弊", "游行", "示威", "暴乱", "骚乱", "分裂势力", "台独", "港独",
-    ],
-    "宗教民族": [
-        "真主", "安拉", " Jesus", "佛祖显灵", "基督", "天主教", "清真寺", "礼拜",
-        "古兰经", "藏传佛教", "活佛转世", "蒙古大汗", "回族", "维吾尔", "穆斯林",
-        "异教徒", "圣战", "驱魔仪式", "苗疆蛊", "蛊毒", "降头", "养小鬼", "请神",
-        "问米", "问仙", "通灵", "招魂", "借尸还魂", "转世投胎实证",
-    ],
-    "未成年风险": [
-        "未成年发生关系", "辍学少女", "师生恋", "初中生怀孕", "高中生开房", "萝莉",
-        "正太", "诱奸", "迷奸少女", "童养媳圆房", "包养学生", "陪读母亲",
-        "校园霸凌视频", "拍视频传播", "搜身羞辱", "扒光衣服", "拍裸照",
-    ],
-    "过度血腥": [
-        "分尸", "碎尸", "肢解", "凌迟", "剥皮", "人彘", "开膛", "挖眼", "剔骨",
-        "千刀万剐", "五马分尸", "肠子", "脑浆", "血流成河", "尸横遍野", "吃人肉",
-        "烹尸", "熬人油", "人血馒头", "活体解剖", "虐杀", "鞭尸",
-    ],
-    "现实品牌与真人": [
-        "微信", "支付宝", "淘宝", "京东", "拼多多", "抖音", "快手", "百度", "腾讯",
-        "阿里巴巴", "华为手机", "苹果手机", "茅台", "可口可乐", "星巴克", "麦当劳",
-        "清华大学", "北京大学", "协和医院", "钟南山", "马云", "马化腾", "任正非",
-        "刘翔", "姚明",
-    ],
-    "教唆与违法细节": [
-        "制作炸药的方法", "配比", "土制炸弹", "开锁技巧", "撬锁工具", "伪造身份证",
-        "办假证", "洗钱方法", "跑路路线", "如何逃脱追查", "下毒剂量", "无色无味",
-        "自制枪支", "射钉枪改造", "弩的图纸",
-    ],
+    "时政敏感": list(REDLINE_POLITICS),
+    "宗教民族": list(REDLINE_RELIGION),
+    "未成年风险": list(REDLINE_MINOR_RISK),
+    "过度血腥": list(REDLINE_GORE),
+    "现实品牌与真人": list(REDLINE_BRAND_CELEBRITY),
+    "教唆与违法细节": list(REDLINE_ILLEGAL_DETAIL),
 }
 
 # 白名单：命中该词但上下文属于合法叙事时降级为「提示」而非「否决」

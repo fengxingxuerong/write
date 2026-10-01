@@ -19,6 +19,17 @@
 | `triadHookOnly` / `TRIAD_HOOK_ONLY` | 2 | hookWords 中属三件套性质的成员：作为唯一尾部钩子信号时不采信。 |
 | `gateClichePhrases` / `GATE_CLICHE_PHRASES` | 19 | 网文高频套句（Dart 侧过审闸门「同质化」判定用）：distinct 命中 ×1000/字 > 1.2 判修改。**注意**：与 Python 的 reviewClicheSentences 是同一套指标公式、不同词表——Dart 19 条多为短词（如「命运的车轮」「仿佛在诉说」，匹配更宽），Python 34 条多为长句（匹配更准但覆盖更窄）。两侧漂移见 asymmetries.clicheTables。 |
 | `reviewClicheSentences` / `REVIEW_CLICHE_SENTENCES` | 34 | 网文高频套句（Python 侧 fanqie_review.cliche_overlap「同质化」判定用）：同样按 distinct 命中 ×1000/字 > 1.2 触发「修改」。与 gateClichePhrases 公式同、词表不同（见 asymmetries.clicheTables）。 |
+| `redlinePolitics` / `REDLINE_POLITICS` | 30 | Python 番茄过审红线·时政类（veto 级：命中即一票否决，部分词可经 REDLINE_WHITELIST 降级为提示）。分类名 `时政敏感`，共 30 词。 |
+| `redlineReligion` / `REDLINE_RELIGION` | 29 | Python 番茄过审红线·宗教/民族类（含邪教、巫术、通灵等封建迷信渲染）。分类名 `宗教民族`，共 29 词。 |
+| `redlineMinorRisk` / `REDLINE_MINOR_RISK` | 17 | Python 番茄过审红线·未成年人类（含校园、偷拍视频、性化描写；此类为平台最高风险之一）。分类名 `未成年风险`，共 17 词。 |
+| `redlineGore` / `REDLINE_GORE` | 22 | Python 番茄过审红线·过度血腥类（分尸/肢解/凌迟等，多数词在 REDLINE_WHITELIST 中按叙事语境降级）。分类名 `过度血腥`，共 22 词。 |
+| `redlineBrandCelebrity` / `REDLINE_BRAND_CELEBRITY` | 25 | Python 番茄过审红线·现实品牌与在世真人（平台禁止出现真实商业品牌与公众人物名）。分类名 `现实品牌与真人`，共 25 词。 |
+| `redlineIllegalDetail` / `REDLINE_ILLEGAL_DETAIL` | 15 | Python 番茄过审红线·可被照做的违法/危险操作细节（配方、撬锁、洗钱、跑路等），属「方法可复现」类高危。分类名 `教唆与违法细节`，共 15 词。 |
+| `sensitiveViolence` / `SENSITIVE_VIOLENCE` | 37 | Dart 编辑自查词库·暴力血腥类（自用提示，不做平台判定）。分类名 `暴力血腥`，共 37 词。 |
+| `sensitiveSexual` / `SENSITIVE_SEXUAL` | 33 | Dart 编辑自查词库·色情低俗类。分类名 `色情低俗`，共 33 词。 |
+| `sensitiveAbuse` / `SENSITIVE_ABUSE` | 27 | Dart 编辑自查词库·脏话辱骂类。分类名 `脏话辱骂`，共 27 词。 |
+| `sensitiveIllegal` / `SENSITIVE_ILLEGAL` | 32 | Dart 编辑自查词库·违法违规类。分类名 `违法违规`，共 32 词。 |
+| `sensitiveAds` / `SENSITIVE_ADS` | 28 | Dart 编辑自查词库·广告引流类（群号/私域引流等）。分类名 `广告引流`，共 28 词。 |
 
 ## 二、阈值
 
@@ -40,6 +51,7 @@
 | `genreThrillExtras` | 只用基础 thrillWords / powerSurgeWords | GENRE_THRILL_EXTRA / GENRE_SURGE_EXTRA 题材加成词 | 题材加成词仅 Python 侧存在（2026-09-10 题材感知质检）。因此断供判定（payoff_drought_*）在 Python 侧显式只用基础词表，否则双端不同口径。 |
 | `countWords` | AppConstants.countWords | fanqie_review.count_words | 已知既有差异：Python 侧把「字母->数字」转换算新词、Dart 算同一个词，且 Python 缺 CJK 扩展 A 区。密度类指标因此允许极小的数值差异，**不要**为此改动字数口径（那是影响界面显示的产品级决定，见 docs/quality-enhancement-log.md 第 31 节）。 |
 | `clicheTables` | gateClichePhrases（19 条，短词偏多） | reviewClicheSentences（34 条，长句偏多） | 同质化指标公式与阈值两端一致（distinct 命中 ×1000/字 > 1.2），但词表内容不同：Dart 独有「从这一刻起/命运的车轮/像有什么东西醒」等短词，Python 独有「莫欺少年穷/三十年河东三十年河西/命运的车轮开始转动」等长句。**待产品裁决**：统一成一张表会同时改变两端分数与定点修触发率，必须先用真机成书复验（A/B 分数变化）再落地——2026-10-01 只做收编与记录，不改语义。 |
+| `complianceTables` | sensitiveViolence/Sexual/Abuse/Illegal/Ads（5 类 157 词，编辑自查） | redlinePolitics/Religion/MinorRisk/Gore/BrandCelebrity/IllegalDetail（6 类 137 词，番茄平台审核红线） | 两端作用域不同**且几乎不相交**（词级交集仅 17 / 合计 295，2026-10-01 实测），而 fanqie_review 的旧注释称「与 Dart 侧保持同步扩充」——该表述与事实不符，已改为如实描述。**不要合并成一张表**：合并会同时改变平台红线判定、编辑自查命中与 UI 分类展示（分类名是对外可见的），需产品先定「平台红线是否要覆盖色情/脏话、编辑自查是否要含时政/宗教」再动。 |
 
 ## 四、改判据的正确流程
 
