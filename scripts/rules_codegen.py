@@ -24,8 +24,13 @@
 """
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
+
+# 词条里出现这些字符时，本脚本的「原样塞进引号」产出会生成语法错误的源码。
+# 含前导/尾随空白由 validate() 单独判定（错误信息不同：那是永不命中而非语法错）。
+_UNSAFE = re.compile(r"""['"\\\n\r\t]|[\x00-\x1f]""")
 
 ROOT = Path(__file__).resolve().parent.parent
 RULES_PATH = ROOT / "rules" / "quality_rules.json"
@@ -49,10 +54,78 @@ def snake_upper(camel: str) -> str:
     return "".join(out)
 
 
+def validate(rules: dict) -> list:
+    """校验数据源本身，返回问题列表（空 = 通过）。
+
+    为什么需要（2026-10-01）：本脚本的 Dart/Python 产出都**直接把词条原文塞进
+    引号**（dart_literal / python_literal 均不做转义）。实测当前 803 个词条里
+    没有任何词条含引号/反斜杠/换行/首尾空白，所以一直没炸——但这是**运气，
+    不是护栏**：往 JSON 里加一个英文缩写（don't）、一个 Windows 路径或一个带
+    首尾空格的词（历史上真出现过 " Jesus" 前导空格），就会生成**语法错误**的
+    Dart/Python 源码，或者生成一个永不命中的词条。
+
+    与其赌运气，不如在这里挡住：让问题在 codegen 阶段就以明确的报错出现。
+    """
+    problems = []
+    lists = rules.get("lists")
+    scalars = rules.get("scalars")
+    if not isinstance(lists, list) or not lists:
+        problems.append("lists 缺失或为空")
+    if not isinstance(scalars, list):
+        problems.append("scalars 缺失")
+    for section, items in (("lists", lists or []), ("scalars", scalars or [])):
+        for item in items:
+            if not isinstance(item, dict):
+                problems.append(f"{section}: 存在非对象条目")
+                continue
+            iid = item.get("id", "<无 id>")
+            if section == "lists":
+                values = item.get("values")
+                kind = item.get("kind")
+                if kind not in ("list", "set"):
+                    problems.append(f"lists/{iid}: kind 必须是 'list' 或 'set'，实为 {kind!r}")
+                if not isinstance(values, list) or not values:
+                    problems.append(f"lists/{iid}: values 缺失或为空")
+                    continue
+                for v in values:
+                    if not isinstance(v, str):
+                        problems.append(f"lists/{iid}: 词条必须是字符串，实为 {v!r}")
+                    elif v != v.strip():
+                        problems.append(
+                            f"lists/{iid}: 词条 {v!r} 有首尾空白——永不命中，请删掉空白")
+                    elif _UNSAFE.search(v):
+                        problems.append(
+                            f"lists/{iid}: 词条 {v!r} 含引号/反斜杠/换行/控制字符，"
+                            "本脚本的产出不做转义，会生成语法错误的 Dart/Python")
+                # 重复项会让「命中数」在两端算法里含义不一致（记两次）。
+                if len(set(values)) != len(values):
+                    dupes = sorted({v for v in values if values.count(v) > 1})
+                    problems.append(f"lists/{iid}: 存在重复词条 {dupes}")
+            else:
+                if not isinstance(item.get("value"), (int, float)):
+                    problems.append(f"scalars/{iid}: value 必须是数字")
+                if item.get("dartType") not in ("int", "double"):
+                    problems.append(
+                        f"scalars/{iid}: dartType 必须是 'int' 或 'double'，"
+                        f"实为 {item.get('dartType')!r}")
+    ids = [i.get("id") for i in (lists or []) if isinstance(i, dict)]
+    dup_ids = sorted({i for i in ids if ids.count(i) > 1})
+    if dup_ids:
+        problems.append(f"lists: 存在重复 id {dup_ids}")
+    return problems
+
+
 def load_rules() -> dict:
     if not RULES_PATH.exists():
         raise SystemExit(f"缺少数据源：{RULES_PATH}")
-    return json.loads(RULES_PATH.read_text(encoding="utf-8"))
+    rules = json.loads(RULES_PATH.read_text(encoding="utf-8"))
+    problems = validate(rules)
+    if problems:
+        print("数据源 rules/quality_rules.json 自身有问题，已中止（避免生成坏产物）：")
+        for p in problems:
+            print("  -", p)
+        raise SystemExit(1)
+    return rules
 
 
 def dart_literal(item: dict) -> str:
