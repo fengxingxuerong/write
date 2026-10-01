@@ -18,15 +18,17 @@ import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 /// - `scripts/test_quality_rules_parity.py`（Python 常量 vs JSON）
 /// 本脚本负责剩下的一半：**算法**与真实成书上的逐书对账。
 ///
+/// 基线生成：`python tool/gen_parity_baselines.py`（写入 verify-logs/），
+/// `--check` 可重算比对，确认基线与当前代码/产物一致。
+///
 /// 运行：flutter test tool/verify_payoff_drought_parity_test.dart
 void main() {
   test('Dart 与 Python 断供带判定逐书一致（需本地基线）', () {
     final File f = File('verify-logs/py_drought2.json');
     expect(f.existsSync(), isTrue,
-        reason: '基线缺失：${f.path}。它是本地一次性脚本用 Python 侧 '
-            'generate_novel.payoff_drought_zones（含侧面反响通道）从 '
-            'data/generated/*.jsonl 复算出来的产物，不入库；'
-            '没有它就无法做真实成书的逐书对账。');
+        reason: '基线缺失：${f.path}。生成方式：python tool/gen_parity_baselines.py --only drought\n'
+            '它按章逐章算 Python 侧 💥/侧反密度后调 payoff_drought_zones（阈值同 '
+            'rules/quality_rules.json），依赖本机 gitignore 的 data/generated/*.jsonl。');
     final Directory gen = Directory('data/generated');
     expect(gen.existsSync(), isTrue, reason: '真机成书产物缺失：${gen.path}');
 

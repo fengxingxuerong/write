@@ -10,13 +10,16 @@ import 'package:novel_writer/engine/multipass/multi_pass_chapter_engine.dart';
 /// 为什么在 tool/ 而不是 test/：依赖 `verify-logs/py_payscene.json`（gitignore），
 /// 放 test/ 时 CI 必然「基线缺失 -> SKIP 即通过」，是假绿。缺失依赖时**直接失败**。
 ///
+/// 基线生成：`python tool/gen_parity_baselines.py`（--only payscene）。
+///
 /// 运行：flutter test tool/verify_payoff_scene_parity_test.dart
 void main() {
   test('isPayoffScene 与 Python 逐例一致（需本地基线）', () {
     final File f = File('verify-logs/py_payscene.json');
     expect(f.existsSync(), isTrue,
-        reason: '基线缺失：${f.path}（本地一次性脚本用 Python 侧 '
-            'novel_pipeline.is_payoff_scene 枚举 240 例的产物，不入库）');
+        reason: '基线缺失：${f.path}。生成方式：python tool/gen_parity_baselines.py --only payscene\n'
+            '它枚举 10 目标 × 4 场景拍 × 6 位置 = 240 例，逐例调 Python 侧 '
+            'novel_pipeline.is_payoff_scene 记录判定（枚举口径与本用例的 Dart 取值字段一致）。');
     final List<dynamic> cases = json.decode(f.readAsStringSync()) as List<dynamic>;
     expect(cases.length, 240, reason: '基线应为 240 例矩阵');
 

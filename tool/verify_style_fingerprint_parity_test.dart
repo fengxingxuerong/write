@@ -10,13 +10,16 @@ import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 /// `data/generated/*.txt`（均 gitignore），放 test/ 时 CI 必然「基线缺失 ->
 /// SKIP 即通过」，是假绿。缺失依赖时**直接失败**，绝不静默通过。
 ///
+/// 基线生成：`python tool/gen_parity_baselines.py`（--only stylefp）。
+///
 /// 运行：flutter test tool/verify_style_fingerprint_parity_test.dart
 void main() {
   test('styleFingerprint 与 Python 逐值一致（需本地基线）', () {
     final File f = File('verify-logs/py_stylefp.json');
     expect(f.existsSync(), isTrue,
-        reason: '基线缺失：${f.path}（本地一次性脚本用 Python 侧 '
-            'generate_novel.style_fingerprint 对下列三个真实成书复算的产物，不入库）');
+        reason: '基线缺失：${f.path}。生成方式：python tool/gen_parity_baselines.py --only stylefp\n'
+            '它用 Python 侧 generate_novel.style_fingerprint 对下列三个真实成书复算'
+            '（ref = files[0]，samples[i] = files[i+1]）。');
     final Map<String, dynamic> py =
         json.decode(f.readAsStringSync()) as Map<String, dynamic>;
     final List<Map<String, dynamic>> cases = <Map<String, dynamic>>[

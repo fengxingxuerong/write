@@ -96,7 +96,7 @@ python scripts/rules_codegen.py --check
 | 当前阈值是多少、为什么是这个数 | `docs/quality-rules-current.md`（生成物，别手改） |
 | 双端常量是否被手改 | `test/engine/quality/quality_rules_parity_test.dart` + `scripts/test_quality_rules_parity.py` |
 | 指标与人评是否真的相关（该不该用） | `docs/human-eval-workflow.md` + `scripts/human_eval_correlation.py` |
-| 真实成书上双端**算法**是否一致 | `tool/verify_*_parity_test.dart`（需本地基线，按需手动跑） |
+| 真实成书上双端**算法**是否一致 | `tool/verify_*_parity_test.dart`（需本地基线，按需手动跑；基线用 `python tool/gen_parity_baselines.py` 生成，`--check` 可重算比对） |
 
 > CI 里跑的 `flutter test` **不再**包含「基线缺失即 SKIP 通过」的用例——这类检查已移入 `tool/`，缺依赖时会直接失败，避免「测试全绿但双端口径其实不一致」的假绿。
 
