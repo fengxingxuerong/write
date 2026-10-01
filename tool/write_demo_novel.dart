@@ -1,6 +1,15 @@
 // 端到端离线写作演示：用 TemplateEngine（零网络、零 API）一键生成三章正文，
 // 并用工程内置的 NovelQualityChecker + FanqieGateChecker 出质检报告。
-// 用法：dart run tool/write_demo_novel.dart
+// 用法：**不能用 `dart run`**（见下），改由 test/smoke/write_demo_novel_test.dart 调用
+//
+// ⚠️ 为什么不能用 `dart run`（2026-10-01 修正）：
+// 本工程的生成链路会传递依赖到 package:flutter（generation_engine ->
+// pipeline_qa -> ai_pipeline_models -> llm_config -> secret_store ->
+// flutter/services.dart），而 `dart run` 用的是**不带 dart:ui 的纯 Dart VM**，
+// 于是必然报 "Dart library 'dart:ui' is not available on this platform"。
+// 早期 CI 里写的正是 `dart run tool/write_demo_novel.dart`，从加入那天起就没绿过
+// （该提交长期未推送，所以没人发现）。`dart:ui` 只有 flutter 工具链能加载。
+//
 // 产物：verify-logs/demo_novel.txt（正文）+ verify-logs/demo_novel_qa.txt（质检报告）
 import 'dart:io';
 
@@ -39,7 +48,27 @@ String _tailForContinuation(String content, {int tailChars = 300}) {
   return tail.substring(m.end);
 }
 
-Future<void> main() async {
+/// 演示结果：交给调用方（测试）断言用。
+class DemoWriteResult {
+  /// 逐章正文。
+  final List<String> chapters;
+
+  /// 质检报告全文。
+  final String qaReport;
+
+  const DemoWriteResult({required this.chapters, required this.qaReport});
+
+  /// 是否产出了三章非空正文（CI 冒烟的判定条件）。
+  bool get ok =>
+      chapters.length == _volumeOutline.length &&
+      chapters.every((String c) => c.trim().isNotEmpty);
+}
+
+/// 跑一遍离线三章成书 + 双质检，返回结果供断言。
+///
+/// 独立成函数（而非只有 main()）是为了让 `flutter test` 能直接调用它——
+/// 见文件头关于 `dart run` 不可用的说明。
+Future<DemoWriteResult> runDemo() async {
   final Directory logDir = Directory('verify-logs')
     ..createSync(recursive: true);
 
@@ -159,4 +188,5 @@ Future<void> main() async {
   stdout.writeln(qa.toString());
   stdout.writeln('[产物] 正文：${novelFile.path}');
   stdout.writeln('[产物] 质检：${qaFile.path}');
+  return DemoWriteResult(chapters: contents, qaReport: qa.toString());
 }

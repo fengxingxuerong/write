@@ -77,7 +77,7 @@ lib/
 └── widgets/                        # 通用组件
 ```
 
-> 辅助目录：`scripts/`（Python 辅助脚本：`generate_novel.py` 长篇小说 LLM 批量生成、`demo_novel_gen.py` 模板引擎演示、`rules_codegen.py` 规则代码生成、`human_eval_correlation.py` 人评相关性实验）、`tool/`（Dart 工具：`write_demo_novel.dart` 离线三章成书 + 番茄过审双质检端到端演示，支持 `DEMO_RANDOM_LEVEL` 抽样；`verify_*_parity_test.dart` 依赖本地基线的**手动**双端对账）、`data/`（本地语料数据，已 gitignore）、`verify-logs/`（本地验证日志，已被 .gitignore 忽略）、`.env.example`（密钥模板，入库；真值放 `.env.local`，不入库）。
+> 辅助目录：`scripts/`（Python 辅助脚本：`generate_novel.py` 长篇小说 LLM 批量生成、`demo_novel_gen.py` 模板引擎演示、`rules_codegen.py` 规则代码生成、`human_eval_sample.py` 人评取样器、`human_eval_correlation.py` 人评相关性实验）、`tool/`（Dart 工具：`write_demo_novel.dart` 离线三章成书 + 番茄过审双质检端到端演示，支持 `DEMO_RANDOM_LEVEL` 抽样——⚠️ 因生成链路传递依赖 package:flutter，**不能用 `dart run` 跑**，改由 `flutter test test/smoke/write_demo_novel_test.dart` 驱动；`verify_*_parity_test.dart` 依赖本地基线的**手动**双端对账）、`data/`（本地语料数据，已 gitignore）、`verify-logs/`（本地验证日志，已被 .gitignore 忽略）、`.env.example`（密钥模板，入库；真值放 `.env.local`，不入库）。
 
 ### 质检判据与阈值（单一数据源）
 

@@ -73,7 +73,13 @@ jobs:
         # 零 API 费端到端回归：模板引擎连写三章 + 番茄双质检（NovelQualityChecker
         # + FanqieGateChecker）必须产出非空正文并返回成功。结果会写入
         # verify-logs/（gitignore），不污染工作区。
-        run: dart run tool/write_demo_novel.dart
+        #
+        # ⚠️ 必须用 `flutter test`，不能写成 `dart run tool/write_demo_novel.dart`
+        # （2026-10-01 修正）：生成链路传递依赖到 package:flutter，而 `dart run`
+        # 用的是不带 dart:ui 的纯 Dart VM，必然报 "Dart library 'dart:ui' is not
+        # available on this platform"。旧写法从加入那天起就没绿过（该提交长期
+        # 未推送，所以没人发现）。详见 tool/write_demo_novel.dart 文件头。
+        run: flutter test test/smoke/write_demo_novel_test.dart
 
       - name: Dart analyze
         # --fatal-infos：任何 info（含 deprecation）都算失败，兑现 README「零告警」承诺
