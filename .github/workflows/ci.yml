@@ -33,6 +33,9 @@ jobs:
           python3 -m pip install --quiet 'ruff==0.16.2'
           # 只对「已入库的脚本」做 F 类检查：临时探针/诊断脚本不入库也不设防
           git ls-files 'scripts/*.py' | xargs -r python3 -m ruff check --select=F --output-format=concise
+          # 规则单一数据源：生成物必须与 rules/quality_rules.json 完全一致
+          # （词表/阈值改了 JSON 却忘了跑 rules_codegen 就在此失败）
+          python3 scripts/rules_codegen.py --check
           python3 -m unittest discover -s scripts -p 'test_*.py' -v
           # compileall 不会发现同目录导入/模块入口错误，补运行时导入回归。
           python3 -m scripts.generate_novel --help >/dev/null
@@ -54,12 +57,10 @@ jobs:
         run: flutter config --enable-web
 
       - name: Pub get
-        # pubspec.lock 由国内镜像环境生成（条目 url 指向 pub.flutter-io.cn），
-        # GitHub runner 访问该镜像不可靠（首两次 CI 均挂在此，重试也救不回）。
-        # CI 上先改写到 pub.dev 再 enforce-lockfile；本地不受影响——镜像由
-        # PUB_HOSTED_URL 决定，本地 pub get 会按本地源自动改写回 lockfile。
+        # pubspec.lock 统一指向 pub.dev（2026-10-01 起不再写镜像源）：本地要用国内
+        # 镜像时设置 PUB_HOSTED_URL 即可，不必让 lockfile 携带镜像 URL。
+        # 钉死 lockfile 保证 CI/团队可复现。
         run: |
-          sed -i 's|https://pub.flutter-io.cn|https://pub.dev|g' pubspec.lock
           for i in 1 2 3; do
             if flutter pub get --enforce-lockfile; then exit 0; fi
             echo "::notice::flutter pub get attempt ${i} failed (network or resolution), retrying in 20s"
@@ -108,10 +109,23 @@ jobs:
               for line in lcov.splitlines()
               if line.startswith('SF:')
           }
+          # 「关键安全/存储/质检文件必须进 LCOV」的**实际**清单
+          # （README 承诺过这道闸门；清单依据 2026-09-28 本地 lcov 实测在册文件补全，
+          #  2026-10-01 起从 3 个扩到 12 个，避免文案比实现严的口径漂移）。
+          # 注意：不把纯常量生成物 quality_rules.g.dart 放进来——常量声明不产生可执行行。
           required = {
               'lib/core/security/secret_store.dart',
               'lib/models/llm_config.dart',
+              'lib/models/novel.dart',
               'lib/ai_pipeline/services/pipeline_storage.dart',
+              'lib/ai_pipeline/services/composite_quality_gate.dart',
+              'lib/storage/app_database.dart',
+              'lib/storage/chapter_repository.dart',
+              'lib/storage/chapter_snapshot_service.dart',
+              'lib/storage/novel_repository.dart',
+              'lib/storage/setting_repository.dart',
+              'lib/engine/quality/novel_quality_checker.dart',
+              'lib/engine/quality/fanqie_gate_checker.dart',
           }
           missing = sorted(required - covered)
           source_count = len(list(Path('lib').rglob('*.dart')))
@@ -182,11 +196,10 @@ jobs:
           cache: true
 
       - name: Pub get
-        # 与 analyze-test 同因：lockfile 镜像源在 runner 上不可达，先改写再拉。
+        # 与 analyze-test 同口径：lockfile 已统一指向 pub.dev，只保留重试以抗网络抖动。
         # 注意 windows-latest 默认 shell 是 PowerShell，此脚本为 bash 语法须显式指定。
         shell: bash
         run: |
-          sed -i 's|https://pub.flutter-io.cn|https://pub.dev|g' pubspec.lock
           for i in 1 2 3; do
             if flutter pub get --enforce-lockfile; then exit 0; fi
             echo "::notice::flutter pub get attempt ${i} failed, retrying in 20s"

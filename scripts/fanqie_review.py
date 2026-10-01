@@ -28,6 +28,28 @@ except Exception:
 
 CHAPTER_RE = re.compile(r"^第\s*(\d+)\s*章")
 
+# 词表/阈值单一数据源（rules/quality_rules.json 的生成物，与 Dart QualityRules 同源）。
+# 两种入口都要能导入：`python -m scripts.fanqie_review`（包内，走相对导入）与
+# `python scripts/fanqie_review.py` / 被 generate_novel 同目录导入（走平铺导入）。
+# 下方 TRIAD_END_WORDS / TRIAD_END_WINDOW / FIX_MIN_RATIO 即由该生成物提供——
+# 本文件不再保存字面量（改词表请改 JSON 后跑 scripts/rules_codegen.py）。
+# TRIAD_HOOK_ONLY 本模块不用（由 generate_novel 直接从生成物导入），故不在此转发。
+try:  # pragma: no cover - 分支取决于调用方式
+    from .quality_rules_generated import (
+        FIX_MIN_RATIO,
+        TRIAD_END_WINDOW,
+        TRIAD_END_WORDS,
+    )
+except ImportError:  # pragma: no cover - 平铺导入（脚本直跑/同目录 import）
+    _here = os.path.dirname(os.path.abspath(__file__))
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    from quality_rules_generated import (
+        FIX_MIN_RATIO,
+        TRIAD_END_WINDOW,
+        TRIAD_END_WORDS,
+    )
+
 # ============================================================
 # 1) 红线词表（与 Dart 侧 lib/services/sensitive_words.dart 保持同步扩充）
 # ============================================================
@@ -99,18 +121,14 @@ CLICHE_SENTENCES = [
 #    当钩子词，三件套收尾反被判「有钩」（真实成书 116 章实测 93% 反向奖励，
 #    历史事故「52% 章节落在发光物件+苏醒」即此形态）。2026-09-28 补齐。
 # ============================================================
-# 收束区域判定词表：长词在前（像有什么东西醒了 > 醒了过来 > 醒了、亮了起来 > 亮了）。
+# 收束区域判定词表（TRIAD_END_WORDS）：值来自 rules/quality_rules.json -> 生成物。
+# 长词在前（像有什么东西醒了 > 醒了过来 > 醒了、亮了起来 > 亮了）。
 # 「亮」字族带天字排除（「天亮了」是时间过渡，不是发光物件收束）。
-TRIAD_END_WORDS = [
-    "像有什么东西醒了", "醒了过来", "亮了起来", "亮起来",
-    "发烫", "发热", "亮起", "苏醒", "醒来", "醒了", "发光", "亮了",
-]
-# HOOK_WORDS 中属于三件套性质的成员：作为**唯一**尾部钩子信号时不采信。
-TRIAD_HOOK_ONLY = {"发烫", "醒了过来"}
+TRIAD_END_WORDS = list(TRIAD_END_WORDS)  # 本地可变副本（值来自生成物）
+# HOOK_WORDS 中属于三件套性质的成员：作为**唯一**尾部钩子信号时不采信（frozenset，生成物）。
 # 收束区域窗口（校准：tool/probe_ending_and_simile.py 三窗口 × 词表敏感性——
 # 末句 6.9% / 末60字 11.2% / 末200字 25.9%；取末 60 字，200 字窗会把
 # 「尾部另有真钩子、三件套只出现在中段」的章误伤）。
-TRIAD_END_WINDOW = 60
 
 
 def ending_triad(text):
@@ -941,7 +959,7 @@ def review_book(chapters, genre="", protagonist="", world_terms=()):
 # 否则模型会照【改写要求】的「删水段/短句」把整章压掉三成，产出全被守卫拒绝、
 # 定点修白跑、问题原地复发（门禁 v7 实测 4 次：4087→2847 / 3465→2718 /
 # 4176→2707 / 5983→1517，四次全部「拒绝采纳保留原文」）。
-FIX_MIN_RATIO = 0.92
+FIX_MIN_RATIO = FIX_MIN_RATIO  # 值来自 rules/quality_rules.json -> 生成物（0.92）
 
 
 def fix_prompt(review, content, world_terms=()):

@@ -4,6 +4,7 @@ import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/engine/quality/fanqie_gate_checker.dart';
 import 'package:novel_writer/engine/quality/novel_quality_checker.dart';
 import 'package:novel_writer/engine/quality/quality_gate.dart';
+import 'package:novel_writer/engine/quality/quality_rules.g.dart';
 
 /// 组合质检网关：把三套本地质检合并为一次统一检查。
 ///
@@ -46,9 +47,9 @@ class CompositeQualityGate implements QualityGate {
   /// [chaptersInZones] / [total] 供 UI 算比例；[spans] 供报告直接展示区间。
   static ({int chaptersInZones, int total, List<String> spans}) bookPayoffDrought(
     List<ChapterPayoff> history, {
-    double threshold = 0.5,
-    double sideThreshold = 0.3,
-    int minRun = 3,
+    double threshold = QualityRules.droughtThrillPerK,
+    double sideThreshold = QualityRules.droughtSidePerK,
+    int minRun = QualityRules.droughtMinRun,
   }) {
     final List<String> spans = <String>[];
     int inZones = 0;

@@ -77,7 +77,28 @@ lib/
 └── widgets/                        # 通用组件
 ```
 
-> 辅助目录：`scripts/`（Python 辅助脚本：`generate_novel.py` 长篇小说 LLM 批量生成、`demo_novel_gen.py` 模板引擎演示）、`tool/`（Dart 工具：`write_demo_novel.dart` 离线三章成书 + 番茄过审双质检端到端演示，支持 `DEMO_RANDOM_LEVEL` 抽样）、`data/`（本地语料数据，已 gitignore）、`verify-logs/`（本地验证日志，已被 .gitignore 忽略）。
+> 辅助目录：`scripts/`（Python 辅助脚本：`generate_novel.py` 长篇小说 LLM 批量生成、`demo_novel_gen.py` 模板引擎演示、`rules_codegen.py` 规则代码生成、`human_eval_correlation.py` 人评相关性实验）、`tool/`（Dart 工具：`write_demo_novel.dart` 离线三章成书 + 番茄过审双质检端到端演示，支持 `DEMO_RANDOM_LEVEL` 抽样；`verify_*_parity_test.dart` 依赖本地基线的**手动**双端对账）、`data/`（本地语料数据，已 gitignore）、`verify-logs/`（本地验证日志，已被 .gitignore 忽略）、`.env.example`（密钥模板，入库；真值放 `.env.local`，不入库）。
+
+### 质检判据与阈值（单一数据源）
+
+词表（钩子/爽点/变强异动/侧面反响/开场强弱/三件套…共 320 词）与阈值（对白下限、水段上限、断供三参、定点修字数下限…共 7 项）只存在一份：`rules/quality_rules.json`。
+
+```bash
+# 改判据：只改 JSON，然后重新生成三份产物（Dart 常量 / Python 常量 / 人读总表）
+python scripts/rules_codegen.py
+
+# 校验（CI 门禁）：生成物与 JSON 必须逐字一致，否则失败
+python scripts/rules_codegen.py --check
+```
+
+| 想知道 | 看哪里 |
+|---|---|
+| 当前阈值是多少、为什么是这个数 | `docs/quality-rules-current.md`（生成物，别手改） |
+| 双端常量是否被手改 | `test/engine/quality/quality_rules_parity_test.dart` + `scripts/test_quality_rules_parity.py` |
+| 指标与人评是否真的相关（该不该用） | `docs/human-eval-workflow.md` + `scripts/human_eval_correlation.py` |
+| 真实成书上双端**算法**是否一致 | `tool/verify_*_parity_test.dart`（需本地基线，按需手动跑） |
+
+> CI 里跑的 `flutter test` **不再**包含「基线缺失即 SKIP 通过」的用例——这类检查已移入 `tool/`，缺依赖时会直接失败，避免「测试全绿但双端口径其实不一致」的假绿。
 
 ## 本地运行与构建
 
@@ -122,6 +143,9 @@ flutter create .
 # Windows 便携包：CI 上传 ZIP 与同名 .sha256
 flutter build windows --release
 
+# 规则单一数据源校验（CI 同口径）：生成物与 rules/quality_rules.json 必须一致
+python scripts/rules_codegen.py --check
+
 # 本地全量验证：analyze、测试/覆盖率、Python、Web、Windows 构建
 powershell -ExecutionPolicy Bypass -File verify-novel.ps1
 ```
@@ -145,16 +169,17 @@ flutter analyze
 flutter test
 ```
 
-当前测试与覆盖率以 CI 实际输出为准；CI 要求已采集生产文件的行覆盖率不低于 **80%**，并检查关键安全/存储文件必须进入 LCOV。测试覆盖模型序列化、模板生成、存储可靠性、导出、AI 流水线、断点续传、导入幂等、隐私文案和 Windows DPAPI 通道。
+当前测试与覆盖率以 CI 实际输出为准；CI 要求已采集生产文件的行覆盖率不低于 **80%**，并校验 12 个关键安全/存储/质检文件必须进入 LCOV（`secret_store` / `llm_config` / `novel` / `pipeline_storage` / `composite_quality_gate` / `app_database` / `chapter_repository` / `chapter_snapshot_service` / `novel_repository` / `setting_repository` / `novel_quality_checker` / `fanqie_gate_checker`）。测试覆盖模型序列化、模板生成、存储可靠性、导出、AI 流水线、断点续传、导入幂等、隐私文案、Windows DPAPI 通道，以及**质检词表/阈值的双端对账**（`quality_rules_parity_test`）。
 
 ### CI 流水线
 
 仓库已配置 GitHub Actions（`.github/workflows/ci.yml`）：push / PR 到 `main` 或 `master` 自动执行。Windows 构建会等待 Flutter 测试和 Web 回归全部通过后才打包上传。
 
 1. **dart analyze --fatal-infos** — 静态检查零告警（任何 info 含 deprecation 都算失败）
-2. **flutter test --coverage** — 全量测试 + 覆盖率门槛 **80%**，并校验关键安全/存储文件进入 LCOV
-3. **Web 回归** — 书架、编辑器、AI 守卫、导入原子性和错误路径
-4. **flutter build windows --release** — Windows 便携 ZIP + SHA-256 校验文件自动上传
+2. **Python 侧门禁** — `compileall` + `ruff --select=F` + **`rules_codegen.py --check`（规则生成物与数据源一致性）** + 全量 `unittest` + 各模块 `--help` 入口回归 + 离线三章成书冒烟
+3. **flutter test --coverage** — 全量测试 + 覆盖率门槛 **80%**，并校验 12 个关键安全/存储/质检文件进入 LCOV
+4. **Web 回归** — 书架、编辑器、AI 守卫、导入原子性和错误路径
+5. **flutter build windows --release** — Windows 便携 ZIP + SHA-256 校验文件自动上传
 
 本地等效命令：`powershell -ExecutionPolicy Bypass -File verify-novel.ps1`（默认含 analyze、Flutter 测试/覆盖率、Python、Web 回归和 Windows 构建）。
 
@@ -165,6 +190,13 @@ flutter test
 - 阅读设置：`app_settings.json`（主题/字号/行距/衬线）。
 - 敏感词：`sensitive_words.json`（自定义词）+ `sensitive_stats.json`（历史命中统计）。
 - 跨端迁移：直接拷贝对应的 `<id>.json` 文件到目标设备的 `novels/` 目录即可；也可以在书架使用「导入备份」选择 JSON 文件恢复为新作品。
+
+## 密钥与安全
+
+- **模板入库、真值不入库**：把 `.env.example` 复制成 `.env.local` 填真 Key；`.gitignore` 的 `.env.*` 规则覆盖它，且 `scripts/test_secret_hygiene.py`（CI 跑）会断言它确实处于被忽略状态、并扫描**已入库文件**里是否出现高熵密钥串（防止 `git add -f` 与误粘贴）。
+- **真机跑书默认不花钱**：`python tool/live_run.py` 只做 Key 体检 + 花费试算，不发一次请求；确认后显式加 `--yes` 才会拉起 `novel_pipeline.py`。
+- **凭据加密**：应用内的 AI 设置在 Windows 桌面用 DPAPI 加密 API Key（`lib/core/security/secret_store.dart`），不落明文 JSON；DPAPI 通道本身有单测。
+- 本仓库**禁止**在代码/文档/日志里写入真 Key；`.env.local` 若曾被分享或提交过，请到各平台轮换密钥。
 
 ## 架构要点
 

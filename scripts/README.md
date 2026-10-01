@@ -11,6 +11,9 @@
 | `fanqie_review.py` | **番茄过审评审器**（本地零成本）：合规红线 / 首屏 / 对白占比 / 水段率 / 套句 / 主角漂移，输出分数与「定点修」提示 |
 | `fanqie_prompts.py` | 番茄向写作准则与 prompt 库（与 `fanqie_review.py` 指标一一对应） |
 | `demo_novel_gen.py` | 离线模板引擎演示（纯语料拼接，无 API，用于对比） |
+| `rules_codegen.py` | **质检规则单一数据源**：读 `rules/quality_rules.json` 生成 Dart/Python 双端常量与 `docs/quality-rules-current.md`；`--check` 为 CI 门禁 |
+| `human_eval_correlation.py` | **人评相关性实验**：Spearman + 置换检验，回答「指标涨了人评涨了吗」（见 `docs/human-eval-workflow.md`） |
+| `test_secret_hygiene.py` | 密钥卫生回归：`.env.local` 必须被忽略、入库文件不得出现真 Key |
 | `watchdog_pipeline.ps1` | 守护脚本：检测 pipeline 进程退出自动续传重启（长任务防中断） |
 
 ---

@@ -1,0 +1,5 @@
+# 人评标注（JSONL，一行一章；以 # 开头的行与本文件说明都不参与计算）
+# 字段：id / file 或 text / chapter / human(0~100) / rater / human_dims(可选) / note
+# 选取原则：好中差三档各约 1/3，同题材、同字数区间（1500~3000 字），避免只看甜点样本。
+# 例（**请替换成你真实读过的章节**，编造数据会让整份报告失去意义）：
+# {"id": "作品A-01", "file": "data/generated/xxx.txt", "chapter": 1, "human": 78, "rater": "A", "note": "开篇有变故，爽点偏淡"}

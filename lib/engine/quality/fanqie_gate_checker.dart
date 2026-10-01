@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:novel_writer/core/utils/text_index.dart';
 import 'package:novel_writer/services/sensitive_words.dart';
+import 'package:novel_writer/engine/quality/quality_rules.g.dart';
 
 /// 定点修字数下限（与 Python 侧 `fanqie_review.FIX_MIN_RATIO` 同口径）。
 ///
@@ -9,7 +10,7 @@ import 'package:novel_writer/services/sensitive_words.dart';
 /// 提示词必须比守卫更严一档，并写明「评审的压缩诉求让位于本下限」，否则模型会照
 /// 【改写要求】的「删水段/短句」把整章压掉三成，产出全被拒、定点修白跑
 /// （门禁 v7 实测 4 次：4087→2847 / 3465→2718 / 4176→2707 / 5983→1517）。
-const double fixMinRatio = 0.92;
+const double fixMinRatio = QualityRules.fixMinRatio;
 
 /// 番茄过审闸门（本地零成本，纯函数，可单测）。
 ///
@@ -213,8 +214,8 @@ class FanqieGateChecker {
     this.genre = '',
     this.protagonist = '',
     this.worldTerms = const <String>[],
-    this.minDialogue = 0.18,
-    this.maxFiller = 12.0,
+    this.minDialogue = QualityRules.minDialogueRatio,
+    this.maxFiller = QualityRules.maxFillerRatio,
   });
 
   /// 题材（用于红线降级判断）。

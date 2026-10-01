@@ -4,7 +4,8 @@ import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 /// 文风指纹（P1-1 Dart 侧）：分析 / 渲染 / 距离 的离线回归。
 ///
 /// 与 Python `scripts/test_style_fingerprint.py` 同口径同键名（双端同源）。
-/// 另见 `style_fingerprint_parity_test.dart`：对真实成书逐值对账 drift=0。
+/// 另见 `tool/verify_style_fingerprint_parity_test.dart`：对真实成书逐值对账 drift=0
+/// （需本地基线，按需手动跑；CI 侧的常量一致性由 quality_rules_parity_test 覆盖）。
 void main() {
   /// 参考文风格 A：对白密集 + 短句
   final String dialogueStyle =

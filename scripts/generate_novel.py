@@ -54,10 +54,20 @@ from fanqie_review import (  # noqa: E402
     fix_prompt,
     review_chapter,
     self_repeat_ratio,
-    TRIAD_HOOK_ONLY,
 )
 # 字数唯一定义在 fanqie_review（下方 count_words 只做薄转发，见该处说明）。
 from fanqie_review import count_words as _count_words  # noqa: E402
+
+# 词表/阈值单一数据源（rules/quality_rules.json 的生成物，与 Dart QualityRules 同源）。
+from quality_rules_generated import (  # noqa: E402
+    HOOK_WORDS,
+    OPENING_STRONG,
+    OPENING_WEAK,
+    POWER_SURGE_WORDS,
+    SIDE_REACTION_WORDS,
+    THRILL_WORDS,
+    TRIAD_HOOK_ONLY,
+)
 
 
 from fanqie_prompts import GOLDEN3_SPEC as _GOLDEN3, GOAL_FORMAT as _GOAL_FORMAT  # noqa: E402
@@ -647,13 +657,16 @@ AI_CLICHE = ['嘴角', '唇角', '眼底', '眼神', '目光', '仿佛', '似乎
 NEGATION = ['不', '没', '无', '没有', '并未', '不曾', '决不', '毫无']
 
 # ============================================================
-# 双端同步须知：以下词表与 Dart 端 lib/ai_pipeline/services/pipeline_qa.dart
-# 对应常量同步维护（HOOK_WORDS<->_hookWords、OPENING_STRONG/_WEAK、
-# THRILL_WORDS<thrillWords>、POWER_SURGE_WORDS<powerSurgeWords>、SIDE_REACTION_WORDS<sideReactionWords>、
+# 单一数据源（2026-10-01）：以下词表**不再**在本文件写死，而是从
+# rules/quality_rules.json 的生成物 quality_rules_generated.py 导入
+# （HOOK_WORDS / OPENING_STRONG / OPENING_WEAK / THRILL_WORDS /
+# POWER_SURGE_WORDS / SIDE_REACTION_WORDS），与 Dart 侧 QualityRules 同源。
+# 改词表请改 JSON 再跑 scripts/rules_codegen.py——两端结构上不会再漂移。
+# 仍属「双端同步」范畴（尚未收进 JSON）的有：
 # release_profile<->releaseProfile（落点判定：n>=2 适用线 + 0.6/0.5 阈值）、
 # ending_triad/ending_ev_fragment<->endingTriad/endingEvFragment（三件套收束窗口 60 +
-# TRIAD_END_WORDS/TRIAD_HOOK_ONLY 词表，定义于 fanqie_review.py；fanqie_review 不得
-# 反向 import 本文件，防循环依赖）、
+# TRIAD_END_WORDS 词表，均在 rules/quality_rules.json -> quality_rules_generated 生成物，
+# fanqie_review 从该生成物取值、不得反向 import 本文件，防循环依赖）、
 # AI_ADVERBS<_aiAdverbs>、SENTENCE_CONNECTORS<_sentenceConnectors>、
 # AI_ECHO<aiClicheWords>、NEGATION<negations>），以及 deep_ai_metrics
 # 四项统计阈值。调优时必须同一次同时更新两端，防止标准漂移。
@@ -661,26 +674,15 @@ NEGATION = ['不', '没', '无', '没有', '并未', '不曾', '决不', '毫无
 # 章末钩子信号词（结尾 200 字内命中即视为有钩子，与 Dart PipelineQa 对齐）
 # 经《碎脉铸仙录》33 章结尾全量实测校准：覆盖直白突变 + 隐喻式钩子
 # （监视/诡谲意象/悬而未决），人工基线 91% 覆盖率。
-HOOK_WORDS = ['突然', '猛然', '竟然', '就在这时', '就在此时', '刹那', '一瞬',
-              '缓缓', '响起', '逼近', '袭来', '浮现', '动静', '不对劲',
-              '怎么回事', '为什么', '究竟', '难道', '敲门声', '脚步声',
-              '目光', '视线', '盯着', '没开过口', '探猎物', '不安全', '跟着',
-              '尾随', '跟踪', '有人', '像有人', '一道人影', '一个声音', '一声冷笑',
-              '有什么', '探出来', '那只眼', '正看着他', '暗处', '暗影',
-              '旧疤', '刃口', '符箓', '未展开', '惨白', '泛着', '异动',
-              '火燎', '咬掉', '又闪', '又响', '醒了过来', '暗红', '风铃', '渗',
-              '看不清', '看不透', '将落未落', '还没有断', '没断', '发烫', '滴水',
-              '黑影', '还没', '尚未', '来不及', '远远没', '不知何时', '轰', '嗡']
+# 词表值：rules/quality_rules.json 的 hookWords -> quality_rules_generated.HOOK_WORDS
+# （本文件不再保存字面量；改词表请改 JSON 并跑 scripts/rules_codegen.py）
 
 # 开场节奏·强信号词（双字/特定短语，1 个即视为快速进入事件）
 # 双级判定避免单字词（碎/撞/压）在比喻语境（"像纸一样一碰就碎"）的误报。
-OPENING_STRONG = ['穿越', '醒来', '重生', '系统', '觉醒', '废物', '杂种', '契约',
-                  '丹田', '灵根', '考核', '耳光', '滚出']
+# 词表值：rules/quality_rules.json 的 openingStrong -> OPENING_STRONG
 
 # 开场节奏·弱信号词（单字动词/名词，需 >=2 个同时出现）
-OPENING_WEAK = ['闯', '砸', '吼', '骂', '跪', '杀', '死', '血', '痛',
-                '摔', '怒', '冲', '撞', '剑', '刀', '雷', '震', '裂', '碎',
-                '废', '辱', '欺', '压', '滚', '魂']
+# 词表值：rules/quality_rules.json 的 openingWeak -> OPENING_WEAK
 
 # 兼容旧引用（qa_scan_existing.py 等曾 import 该名）
 OPENING_ACTION_WORDS = OPENING_STRONG + OPENING_WEAK
@@ -689,36 +691,10 @@ OPENING_ACTION_WORDS = OPENING_STRONG + OPENING_WEAK
 # 选「语义明确」的词避免宽泛误报；每千字 <0.5 视为爽点过淡。
 # 2026-09-07 扩展：原表为玄幻向（突破/玉简/功法），补入都市/悬疑/末世/科幻/游戏
 # 题材的通用爽点词，避免题材词表失准（如《逆袭之巅》《雾锁迷城》被打低分）。
-THRILL_WORDS = ['突破', '觉醒', '晋升', '顿悟', '蜕变', '脱胎换骨', '突破瓶颈', '进阶',
-                '哑口无言', '脸色铁青', '目瞪口呆', '鸦雀无声', '颜面扫地',
-                '下不来台', '难以置信', '不敢置信', '灰头土脸', '噤声', '讪讪',
-                '愣住', '说不出话',
-                '收入囊中', '白捡', '意外之喜', '认主', '获得传承', '获得功法',
-                '大丰收', '捡到宝', '至宝', '契约',
-                '真相大白', '水落石出', '恍然大悟', '惊觉', '识破', '原来是你',
-                '竟然是他', '谜底', '露出真面目',
-                '一模一样', '对得上',
-                # —— 2026-09-07 题材扩展（都市/悬疑/末世/科幻/游戏）——
-                # 系统流 / 都市金手指
-                '系统激活', '绑定成功', '完成任务', '任务完成', '解锁', '权限提升',
-                '经验值', '奖励到账', '到账', '首杀', '通关', '满级',
-                # 打脸通用（都市/职场/商战）
-                # 注：「鸦雀无声」已在上面的通用分组出现，此处不再重复登记——
-                # 词表重复会让 text.count() 把同一处命中数记两次，导致 Python 侧
-                # 💥 密度高于 Dart 侧（2026-09-29 双端对账在《碎脉铸仙录》第 12 章
-                # 实测到该漂移），故全表保持唯一。
-                '碾压', '碾压全场', '全场震惊', '刮目相看', '俯首',
-                '乖乖交出', '低头认错', '自取其辱', '搬起石头', '打脸',
-                # 悬疑/推理反转
-                # 注：「水落石出」同理由，已在上面出现，不重复登记。
-                '真凶', '反转', '神反转', '真相浮出', '证据确凿',
-                '铁证如山', '一锤定音', '当场拆穿', '原形毕露', '身份暴露',
-                # 末世/科幻 变强
-                '进化', '异能觉醒', '获得异能', '能力提升', '升级成功', '吞噬成功',
-                '融合成功', '突破极限', '超频', '进化完成', '变异强化', '战力飙升',
-                # 游戏/竞技
-                '击败', '完胜', '绝杀', '反超', '夺冠', '晋级', '破纪录', 'MVP',
-                '团灭', '一波带走']
+# 词表值：rules/quality_rules.json 的 thrillWords -> THRILL_WORDS
+# 注：全表必须唯一（重复项会让 text.count 把同一处命中记两次，造成两端密度不一致）；
+# 生成器 scripts/rules_codegen.py 已内置查重。题材加成词仍是 Python 侧独有的
+# GENRE_THRILL_EXTRA（见 docs/quality-rules-current.md 第三节）。
 
 
 # 题材专属爽点词表（2026-09-10 题材感知质检）：基础 THRILL_WORDS 为全题材通用，
@@ -767,15 +743,7 @@ def thrill_per_thousand(text, genre=""):
 # 实测：直白爽点词在《碎脉铸仙录》仅命中 5 处，而本类命中 58 处——
 # 含蓄文风的爽点藏在「丹田温热/掌心发烫/铁粉苏醒」里，需双通道检测。
 # 2026-09-07 扩展：补入异能/系统流身体异动（骨刺/断茬/星纹/数据流等）。
-POWER_SURGE_WORDS = ['发烫', '温热', '流转', '苏醒', '凝聚', '暴涨', '充盈', '贯通',
-                     '蠕动', '微光', '亮了一亮', '震颤', '嗡鸣', '顺着经脉', '涌入丹田',
-                     '沉进丹田', '吞吸', '周天', '拱了一下', '醒了', '睁开眼',
-                     # —— 2026-09-07 题材扩展（异能/系统/末世）——
-                     '星纹', '光纹', '发亮', '一明一灭', '热流', '涌入体内', '灌入',
-                     '钻进体内', '钻进经脉', '皮肉底下', '骨刺', '断茬', '长出',
-                     '顶开', '破土', '抽芽', '生根', '融合', '数据流', '面板',
-                     '提示音', '嘀', '叮', '进度条', '金光', '青芒', '白光',
-                     '烫得', '灼热', '胀热', '酸麻', '发麻', '暴起', '腾起']
+# 词表值：rules/quality_rules.json 的 powerSurgeWords -> POWER_SURGE_WORDS
 
 
 GENRE_SURGE_EXTRA = {
@@ -806,17 +774,8 @@ def surge_per_thousand(text, genre=""):
     return round(hits / words * 1000, 2) if words > 0 else 0.0
 
 # 侧面反响/震惊链信号词（三视角震惊环，与 Dart PipelineQa 对齐）
-SIDE_REACTION_WORDS = [
-    '倒吸一口凉气', '倒吸凉气', '倒吸一口气', '倒抽一口凉气', '倒抽凉气',
-    '失声', '惊呼', '骇然', '哗然', '炸开了锅', '全场哗然', '满座皆惊',
-    '瞠目结舌', '目瞪口呆', '呆若木鸡', '看怪物一样', '看疯子一样',
-    '难以置信', '不可置信', '绝不可能', '怎么可能', '不可能',
-    '脸色惨白', '面如死灰', '面色惨白', '脸色铁青', '面色铁青',
-    '两腿发软', '踉跄后退', '连连后退', '一屁股坐', '瘫坐在地',
-    '冷汗直流', '冷汗涔涔', '汗如雨下', '道心动摇', '道心崩溃',
-    '暗自心惊', '心中巨震', '心头巨震', '瞳孔骤缩', '瞳孔猛缩',
-    '倒退数步', '倒退几步', '刮目相看', '重新审视', '倒吸冷气',
-]
+# 词表值：rules/quality_rules.json 的 sideReactionWords -> SIDE_REACTION_WORDS
+# （同时是「爽点断供」判定的逃生通道，见 docs/quality-rules-current.md）
 
 
 def side_reaction_per_thousand(text):

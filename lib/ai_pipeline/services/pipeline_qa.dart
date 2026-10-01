@@ -4,6 +4,7 @@ import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/utils/text_index.dart';
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 import 'package:novel_writer/models/character.dart';
+import 'package:novel_writer/engine/quality/quality_rules.g.dart';
 
 /// 一章的「外显兑现」度量（供跨章断供判定）。
 ///
@@ -189,22 +190,9 @@ class PipelineQa {
   /// （发烫/醒了过来）且末 60 字无问号/省略号悬念 → 判无钩。修正
   /// 「三件套收尾反被判有钩」的检测矛盾（真实成书 116 章实测 93% 反向
   /// 奖励；回测仅 1/116 章因此翻转，其余三件套章尾部另有真实钩子信号）。
-  static const List<String> _hookWords = <String>[
-    // 直白突变 / 意外
-    '突然', '猛然', '竟然', '就在这时', '就在此时', '刹那', '一瞬',
-    '缓缓', '响起', '逼近', '袭来', '浮现', '动静', '不对劲',
-    '怎么回事', '为什么', '究竟', '难道', '敲门声', '脚步声',
-    // 威胁 / 窥伺 / 追踪
-    '目光', '视线', '盯着', '没开过口', '探猎物', '不安全', '跟着',
-    '尾随', '跟踪', '有人', '像有人', '一道人影', '一个声音', '一声冷笑',
-    '有什么', '探出来', '那只眼', '正看着他', '暗处', '暗影',
-    // 身份伏笔 / 反常细节 / 诡谲意象
-    '旧疤', '刃口', '符箓', '未展开', '惨白', '泛着', '异动',
-    '火燎', '咬掉', '又闪', '又响', '醒了过来', '暗红', '风铃', '渗',
-    // 悬而未决 / 未知
-    '看不清', '看不透', '将落未落', '还没有断', '没断', '发烫', '滴水',
-    '黑影', '还没', '尚未', '来不及', '远远没', '不知何时', '轰', '嗡',
-  ];
+  /// 值来自 [QualityRules.hookWords]（rules/quality_rules.json 生成）——
+  /// 本文件不再保存字面量，双端结构上不可能再漂移。
+  static const List<String> _hookWords = QualityRules.hookWords;
 
   /// 章末三件套收尾词表（FANQIE 规则 20「禁止发烫/亮起/苏醒收尾」+
   /// 规则 10 + scene_prompt「禁止发热/发光/苏醒收束」——与 Python
@@ -215,67 +203,30 @@ class PipelineQa {
   /// 校准：tool/probe_ending_and_simile.py 三窗口敏感性——末句 6.9% /
   /// 末60字 11.2% / 末200字 25.9%，取末 60 字收束窗口（与 Python
   /// TRIAD_END_WINDOW 同步）。
-  static const List<String> _triadEndWords = <String>[
-    '像有什么东西醒了', '醒了过来', '亮了起来', '亮起来',
-    '发烫', '发热', '亮起', '苏醒', '醒来', '醒了', '发光', '亮了',
-  ];
+  /// 值来自 [QualityRules.triadEndWords]（顺序敏感，取决于生成物中的登记顺序）。
+  static const List<String> _triadEndWords = QualityRules.triadEndWords;
 
   /// [_hookWords] 中属三件套性质的成员：作为**唯一**尾部钩子信号时不采信。
-  static const Set<String> _triadHookOnly = <String>{'发烫', '醒了过来'};
+  static const Set<String> _triadHookOnly = QualityRules.triadHookOnly;
 
   /// 开场节奏·强信号词（双字/特定短语，1 个即视为快速进入事件）。
   ///
   /// 双级判定避免单字词（碎/撞/压）在比喻语境（"像纸一样一碰就碎"）
   /// 的误报：强信号 1 个达标，弱信号需 ≥2 个才达标。
-  static const List<String> _openingStrong = <String>[
-    '穿越', '醒来', '重生', '系统', '觉醒', '废物', '杂种', '契约',
-    '丹田', '灵根', '考核', '耳光', '滚出',
-  ];
+  /// 值来自 [QualityRules.openingStrong]（rules/quality_rules.json 生成）。
+  static const List<String> _openingStrong = QualityRules.openingStrong;
 
   /// 开场节奏·弱信号词（单字动词/名词，需 ≥2 个同时出现）。
-  static const List<String> _openingWeak = <String>[
-    '闯', '砸', '吼', '骂', '跪', '杀', '死', '血', '痛',
-    '摔', '怒', '冲', '撞', '剑', '刀', '雷', '震', '裂', '碎',
-    '废', '辱', '欺', '压', '滚', '魂',
-  ];
+  /// 值来自 [QualityRules.openingWeak]（rules/quality_rules.json 生成）。
+  static const List<String> _openingWeak = QualityRules.openingWeak;
 
   /// 爽点信号词（打脸 / 升级 / 收获 / 揭露 四大类）。
   ///
   /// 番茄签约的核心追读指标：每千字爽点数过低 = 读者流失风险。
   /// 词表选「语义明确」的词，避免「获得/发现/到手」类宽泛误报。
-  static const List<String> thrillWords = <String>[
-    // 升级类
-    '突破', '觉醒', '晋升', '顿悟', '蜕变', '脱胎换骨', '突破瓶颈', '进阶',
-    // 打脸类
-    '哑口无言', '脸色铁青', '目瞪口呆', '鸦雀无声', '颜面扫地',
-    '下不来台', '难以置信', '不敢置信', '灰头土脸', '噤声', '讪讪',
-    // 具象反应信号（回归自《逆命修仙录》短样：对手震惊/打脸常写身体反应）
-    '愣住', '说不出话',
-    // 收获类
-    '收入囊中', '白捡', '意外之喜', '认主', '获得传承', '获得功法',
-    '大丰收', '捡到宝', '至宝', '契约',
-    // 揭露类
-    '真相大白', '水落石出', '恍然大悟', '惊觉', '识破', '原来是你',
-    '竟然是他', '谜底', '露出真面目',
-    // 具象真相信号（真相反转/物件对照的具象写法）
-    '一模一样', '对得上',
-    // —— 2026-09-07 题材扩展（都市/悬疑/末世/科幻/游戏）——
-    // 系统流 / 都市金手指
-    '系统激活', '绑定成功', '完成任务', '任务完成', '解锁', '权限提升',
-    '经验值', '奖励到账', '到账', '首杀', '通关', '满级',
-    // 打脸通用（都市/职场/商战）
-    '碾压', '碾压全场', '全场震惊', '刮目相看', '俯首',
-    '乖乖交出', '低头认错', '自取其辱', '搬起石头', '打脸',
-    // 悬疑/推理反转
-    '真凶', '反转', '神反转', '真相浮出', '证据确凿',
-    '铁证如山', '一锤定音', '当场拆穿', '原形毕露', '身份暴露',
-    // 末世/科幻 变强
-    '进化', '异能觉醒', '获得异能', '能力提升', '升级成功', '吞噬成功',
-    '融合成功', '突破极限', '超频', '进化完成', '变异强化', '战力飙升',
-    // 游戏/竞技
-    '击败', '完胜', '绝杀', '反超', '夺冠', '晋级', '破纪录', 'MVP',
-    '团灭', '一波带走',
-  ];
+  /// 值来自 [QualityRules.thrillWords]（rules/quality_rules.json 生成）。
+  /// 全表必须唯一（重复登记会让命中数被记两次，双端密度不一致）。
+  static const List<String> thrillWords = QualityRules.thrillWords;
 
   /// 爽点密度（每千字命中数）。网文参考线：≥1.5 为合格，<1.0 偏淡。
   static double thrillPerThousand(String text) {
@@ -295,17 +246,8 @@ class PipelineQa {
   /// 「发烫/温热/苏醒/流转」类变强异动命中 58 处——含蓄文风的爽点
   /// 全藏在「丹田那团温热」「掌心微微发烫」里。双通道检测避免误判
   /// 「爽点过淡」，同时也能识别「只有异动缺外显爽点」的书。
-  static const List<String> powerSurgeWords = <String>[
-    '发烫', '温热', '流转', '苏醒', '凝聚', '暴涨', '充盈', '贯通',
-    '蠕动', '微光', '亮了一亮', '震颤', '嗡鸣', '顺着经脉', '涌入丹田',
-    '沉进丹田', '吞吸', '周天', '拱了一下', '醒了', '睁开眼',
-    // —— 2026-09-07 题材扩展（异能/系统/末世）——
-    '星纹', '光纹', '发亮', '一明一灭', '热流', '涌入体内', '灌入',
-    '钻进体内', '钻进经脉', '皮肉底下', '骨刺', '断茬', '长出',
-    '顶开', '破土', '抽芽', '生根', '融合', '数据流', '面板',
-    '提示音', '嘀', '叮', '进度条', '金光', '青芒', '白光',
-    '烫得', '灼热', '胀热', '酸麻', '发麻', '暴起', '腾起',
-  ];
+  /// 值来自 [QualityRules.powerSurgeWords]（rules/quality_rules.json 生成）。
+  static const List<String> powerSurgeWords = QualityRules.powerSurgeWords;
 
   /// 变强异动密度（每千字命中数）。玄幻文参考线：>=1.0 为「含蓄变强流」。
   static double surgePerThousand(String text) {
@@ -322,20 +264,9 @@ class PipelineQa {
   ///
   /// 网文爽感放大的核心机制：主角装逼或打脸时，若无配角与围观者的侧面反响，
   /// 会沦为「自嗨式平铺」。本词表量化侧面反应密度，确保爽点产生波澜。
-  static const List<String> sideReactionWords = <String>[
-    // 围观路人震惊 / 失声 / 倒抽气
-    '倒吸一口凉气', '倒吸凉气', '倒吸一口气', '倒抽一口凉气', '倒抽凉气',
-    '失声', '惊呼', '骇然', '哗然', '炸开了锅', '全场哗然', '满座皆惊',
-    '瞠目结舌', '目瞪口呆', '呆若木鸡', '看怪物一样', '看疯子一样',
-    // 反派绝望 / 脸色骤变 / 怀疑人生
-    '难以置信', '不可置信', '绝不可能', '怎么可能', '不可能',
-    '脸色惨白', '面如死灰', '面色惨白', '脸色铁青', '面色铁青',
-    '两腿发软', '踉跄后退', '连连后退', '一屁股坐', '瘫坐在地',
-    '冷汗直流', '冷汗涔涔', '汗如雨下', '道心动摇', '道心崩溃',
-    // 权威重估 / 重新审视 / 暗自心惊
-    '暗自心惊', '心中巨震', '心头巨震', '瞳孔骤缩', '瞳孔猛缩',
-    '倒退数步', '倒退几步', '刮目相看', '重新审视', '倒吸冷气',
-  ];
+  /// 值来自 [QualityRules.sideReactionWords]（rules/quality_rules.json 生成）。
+  /// 同时是「爽点断供」判定的逃生通道（见 docs/quality-rules-current.md）。
+  static const List<String> sideReactionWords = QualityRules.sideReactionWords;
 
   /// 侧面反响密度（每千字命中数）。网文参考线：>=0.8 为合格，<0.3 偏淡。
   static double sideReactionPerThousand(String text) {
@@ -420,10 +351,10 @@ class PipelineQa {
   /// 故凡侧面反响达标（在场者确有反应）的章一律不判断供。传 null 保持旧口径。
   static List<({int start, int end, int chapters})> payoffDroughtZones(
     List<double> thrillPerK, {
-    double threshold = 0.5,
-    int minRun = 3,
+    double threshold = QualityRules.droughtThrillPerK,
+    int minRun = QualityRules.droughtMinRun,
     List<double>? sidePerK,
-    double sideThreshold = 0.3,
+    double sideThreshold = QualityRules.droughtSidePerK,
   }) {
     final List<({int start, int end, int chapters})> zones =
         <({int start, int end, int chapters})>[];
@@ -461,10 +392,10 @@ class PipelineQa {
   /// 「十几章没有一次外显爽点」判成节奏紧凑。
   static String payoffDroughtEvFragment(
     List<double> thrillPerK, {
-    double threshold = 0.5,
-    int minRun = 3,
+    double threshold = QualityRules.droughtThrillPerK,
+    int minRun = QualityRules.droughtMinRun,
     List<double>? sidePerK,
-    double sideThreshold = 0.3,
+    double sideThreshold = QualityRules.droughtSidePerK,
   }) {
     final List<({int start, int end, int chapters})> zones =
         payoffDroughtZones(thrillPerK,
@@ -495,8 +426,8 @@ class PipelineQa {
   /// 不计断供（`THRILL_WORDS` 是 96 词闭合套话表，不套话的好稿天然被误伤）。
   static int trailingDroughtLen(
     List<ChapterPayoff> history, {
-    double threshold = 0.5,
-    double sideThreshold = 0.3,
+    double threshold = QualityRules.droughtThrillPerK,
+    double sideThreshold = QualityRules.droughtSidePerK,
   }) {
     int k = 0;
     for (int i = history.length - 1; i >= 0; i--) {
@@ -807,11 +738,11 @@ class PipelineQa {
     required double surge,
     bool minWordsOk = true,
     int droughtLen = 0,
-    double threshold = 0.5,
+    double threshold = QualityRules.droughtThrillPerK,
     double surgeOk = 1.0,
-    int droughtMinRun = 3,
+    int droughtMinRun = QualityRules.droughtMinRun,
     double side = 0.0,
-    double sideOk = 0.3,
+    double sideOk = QualityRules.droughtSidePerK,
   }) {
     if (!minWordsOk) return false;
     if (sideOk > 0 && side >= sideOk) return false;
@@ -869,8 +800,8 @@ class PipelineQa {
     List<Character> characters = const <Character>[],
     double minRatio = 0.7,
     double maxRatio = 1.6,
-    double threshold = 0.5,
-    double sideOk = 0.3,
+    double threshold = QualityRules.droughtThrillPerK,
+    double sideOk = QualityRules.droughtSidePerK,
   }) {
     final int oW = AppConstants.countWords(original);
     final int fW = AppConstants.countWords(fix);
@@ -1343,8 +1274,8 @@ class PipelineQa {
   /// （POWER_SURGE 通道），不算本违规（与 Python `ending_triad` 同步）。
   static String endingTriad(String text) {
     if (text.isEmpty) return '';
-    final String seg =
-        text.length > 60 ? text.substring(text.length - 60) : text;
+    final int w = QualityRules.triadEndWindow;
+    final String seg = text.length > w ? text.substring(text.length - w) : text;
     for (final String w in _triadEndWords) {
       int start = 0;
       while (true) {

@@ -163,6 +163,9 @@ if (-not $SkipPython) {
         Push-Location $proj
         & $python.Source -m compileall -q scripts
         $compileOk = ($LASTEXITCODE -eq 0)
+        # 规则单一数据源：生成物必须与 rules/quality_rules.json 完全一致（与 CI 同口径）
+        & $python.Source scripts/rules_codegen.py --check
+        $rulesOk = ($LASTEXITCODE -eq 0)
         & $python.Source -m unittest discover -s scripts -p 'test_*.py' -v
         $pythonOk = ($LASTEXITCODE -eq 0)
         & $python.Source -m scripts.generate_novel --help *> $null
@@ -174,7 +177,7 @@ if (-not $SkipPython) {
         & $python.Source -m scripts.qa_semantic_check --help *> $null
         $semanticHelpOk = ($LASTEXITCODE -eq 0)
         Pop-Location
-        if (-not ($compileOk -and $pythonOk -and $generateNovelOk -and $pipelineHelpOk -and $fanqieHelpOk -and $semanticHelpOk)) {
+        if (-not ($compileOk -and $rulesOk -and $pythonOk -and $generateNovelOk -and $pipelineHelpOk -and $fanqieHelpOk -and $semanticHelpOk)) {
             $global:allOk = $false
         }
         Write-Result 'Python compileall' $compileOk
