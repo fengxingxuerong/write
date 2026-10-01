@@ -38,6 +38,10 @@ coverage/
 # 大体积数据与生成产物（不入库）
 data/
 
+# 人评样本正文（30 章约 300KB，由 data/ 下的成书切出，属可再生产物）。
+# annotations.jsonl 入库；samples/ 不入库——换机器上跑 scripts/human_eval_sample.py 即可重建。
+docs/human-eval/samples/
+
 # Python 缓存
 __pycache__/
 *.py[cod]

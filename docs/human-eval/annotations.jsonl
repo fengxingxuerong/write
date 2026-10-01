@@ -1,5 +1,49 @@
-# 人评标注（JSONL，一行一章；以 # 开头的行与本文件说明都不参与计算）
-# 字段：id / file 或 text / chapter / human(0~100) / rater / human_dims(可选) / note
-# 选取原则：好中差三档各约 1/3，同题材、同字数区间（1500~3000 字），避免只看甜点样本。
-# 例（**请替换成你真实读过的章节**，编造数据会让整份报告失去意义）：
-# {"id": "作品A-01", "file": "data/generated/xxx.txt", "chapter": 1, "human": 78, "rater": "A", "note": "开篇有变故，爽点偏淡"}
+# 人评标注（JSONL，一行一章；本行及以 # 开头的行不参与计算）
+# 字段：id / file / chapter / human(0~100) / rater / note / human_dims(可选)
+#
+# 【怎么用】
+#   1) 读 samples/ 下同名 .txt；
+#   2) 按**整体阅读感受**给 0~100 总分（可分次填，human 为 null 的行会被跳过）；
+#   3) 把 human 与 rater 填回本行；rater 填你自己的代号，便于追溯一致性。
+#
+# 【重要·别作弊】
+#   每行末尾的 _machine_hint 是机器指标，仅备查。**请不要看它，也不要按它反推
+#   分数**——「指标准不准」正是本实验要检验的东西，凭指标打分等于循环论证。
+#   样本已按指标铺开高中低三档正是为了提高区分度，不是为了证明指标准。
+#
+# 评分参考：<60 读不下去 / 60~75 能看但套路明显 / 76~85 还行 / >85 好看
+# 五维可选（human_dims）：开篇 / 爽点 / 钩子 / 动机 / 节奏，各 1~5 分
+#
+# 取样：30 章 / 8 本书 / 字数 1200~3500
+# 生成方式：python scripts/human_eval_sample.py（样本正文不入库，需本地重跑）
+
+{"id": "临渊录-01", "file": "docs/human-eval/samples/临渊录-01.txt", "chapter": 1, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 100.0, "thrill_per_k": 1.14, "surge_per_k": 3.05, "has_hook": 1, "dialogue_ratio": 0.196, "ai_depth_level": 0, "words": 2623}}
+{"id": "北荒行记-03", "file": "docs/human-eval/samples/北荒行记-03.txt", "chapter": 3, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 88.0, "thrill_per_k": 1.27, "surge_per_k": 1.27, "has_hook": 1, "dialogue_ratio": 0.112, "ai_depth_level": 0, "words": 3151}}
+{"id": "临渊录-04", "file": "docs/human-eval/samples/临渊录-04.txt", "chapter": 4, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 96.0, "thrill_per_k": 0.33, "surge_per_k": 2.3, "has_hook": 1, "dialogue_ratio": 0.27, "ai_depth_level": 0, "words": 3042}}
+{"id": "寒门崛起-06", "file": "docs/human-eval/samples/寒门崛起-06.txt", "chapter": 6, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 96.0, "thrill_per_k": 0.0, "surge_per_k": 5.07, "has_hook": 1, "dialogue_ratio": 0.182, "ai_depth_level": 0, "words": 2961}}
+{"id": "寒门崛起-04", "file": "docs/human-eval/samples/寒门崛起-04.txt", "chapter": 4, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 92.0, "thrill_per_k": 0.32, "surge_per_k": 1.59, "has_hook": 1, "dialogue_ratio": 0.086, "ai_depth_level": 0, "words": 3151}}
+{"id": "赤霄令-04", "file": "docs/human-eval/samples/赤霄令-04.txt", "chapter": 4, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 88.0, "thrill_per_k": 0.33, "surge_per_k": 2.28, "has_hook": 1, "dialogue_ratio": 0.135, "ai_depth_level": 0, "words": 3071}}
+{"id": "烟雨长歌-25", "file": "docs/human-eval/samples/烟雨长歌-25.txt", "chapter": 25, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 76.0, "thrill_per_k": 1.22, "surge_per_k": 2.44, "has_hook": 1, "dialogue_ratio": 0.038, "ai_depth_level": 1, "words": 3280}}
+{"id": "碎脉铸仙录-23", "file": "docs/human-eval/samples/碎脉铸仙录-23.txt", "chapter": 23, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 84.0, "thrill_per_k": 0.35, "surge_per_k": 1.38, "has_hook": 1, "dialogue_ratio": 0.031, "ai_depth_level": 1, "words": 2894}}
+{"id": "烟雨长歌-08", "file": "docs/human-eval/samples/烟雨长歌-08.txt", "chapter": 8, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 72.0, "thrill_per_k": 1.43, "surge_per_k": 3.15, "has_hook": 1, "dialogue_ratio": 0.091, "ai_depth_level": 1, "words": 3488}}
+{"id": "烟雨长歌-18", "file": "docs/human-eval/samples/烟雨长歌-18.txt", "chapter": 18, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 72.0, "thrill_per_k": 1.25, "surge_per_k": 0.62, "has_hook": 1, "dialogue_ratio": 0.026, "ai_depth_level": 0, "words": 3204}}
+{"id": "废脉纪元-01", "file": "docs/human-eval/samples/废脉纪元-01.txt", "chapter": 1, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 84.0, "thrill_per_k": 0.0, "surge_per_k": 2.76, "has_hook": 1, "dialogue_ratio": 0.074, "ai_depth_level": 0, "words": 2903}}
+{"id": "废脉纪元-14", "file": "docs/human-eval/samples/废脉纪元-14.txt", "chapter": 14, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 84.0, "thrill_per_k": 0.0, "surge_per_k": 0.0, "has_hook": 1, "dialogue_ratio": 0.131, "ai_depth_level": 1, "words": 3163}}
+{"id": "寒门崛起-07", "file": "docs/human-eval/samples/寒门崛起-07.txt", "chapter": 7, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 84.0, "thrill_per_k": 0.0, "surge_per_k": 5.16, "has_hook": 1, "dialogue_ratio": 0.332, "ai_depth_level": 0, "words": 3292}}
+{"id": "碎脉铸仙录-05", "file": "docs/human-eval/samples/碎脉铸仙录-05.txt", "chapter": 5, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 80.0, "thrill_per_k": 0.33, "surge_per_k": 2.3, "has_hook": 1, "dialogue_ratio": 0.014, "ai_depth_level": 1, "words": 3037}}
+{"id": "碎脉铸仙录-02", "file": "docs/human-eval/samples/碎脉铸仙录-02.txt", "chapter": 2, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 80.0, "thrill_per_k": 0.3, "surge_per_k": 3.91, "has_hook": 1, "dialogue_ratio": 0.035, "ai_depth_level": 1, "words": 3328}}
+{"id": "碎脉铸仙录-08", "file": "docs/human-eval/samples/碎脉铸仙录-08.txt", "chapter": 8, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 76.0, "thrill_per_k": 0.4, "surge_per_k": 1.2, "has_hook": 1, "dialogue_ratio": 0.047, "ai_depth_level": 0, "words": 2509}}
+{"id": "废脉纪元-11", "file": "docs/human-eval/samples/废脉纪元-11.txt", "chapter": 11, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 80.0, "thrill_per_k": 0.0, "surge_per_k": 6.43, "has_hook": 1, "dialogue_ratio": 0.002, "ai_depth_level": 2, "words": 2954}}
+{"id": "废脉纪元-29", "file": "docs/human-eval/samples/废脉纪元-29.txt", "chapter": 29, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 80.0, "thrill_per_k": 0.0, "surge_per_k": 0.99, "has_hook": 1, "dialogue_ratio": 0.049, "ai_depth_level": 2, "words": 3033}}
+{"id": "碎脉铸仙录-21", "file": "docs/human-eval/samples/碎脉铸仙录-21.txt", "chapter": 21, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 76.0, "thrill_per_k": 0.3, "surge_per_k": 0.91, "has_hook": 0, "dialogue_ratio": 0.128, "ai_depth_level": 1, "words": 3307}}
+{"id": "碎脉铸仙录-03", "file": "docs/human-eval/samples/碎脉铸仙录-03.txt", "chapter": 3, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 68.0, "thrill_per_k": 0.87, "surge_per_k": 5.82, "has_hook": 1, "dialogue_ratio": 0.024, "ai_depth_level": 1, "words": 3434}}
+{"id": "碎脉铸仙录-10", "file": "docs/human-eval/samples/碎脉铸仙录-10.txt", "chapter": 10, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 76.0, "thrill_per_k": 0.0, "surge_per_k": 1.15, "has_hook": 1, "dialogue_ratio": 0.128, "ai_depth_level": 0, "words": 3483}}
+{"id": "废脉纪元-05", "file": "docs/human-eval/samples/废脉纪元-05.txt", "chapter": 5, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 76.0, "thrill_per_k": 0.0, "surge_per_k": 3.47, "has_hook": 0, "dialogue_ratio": 0.08, "ai_depth_level": 2, "words": 3463}}
+{"id": "烟雨长歌-22", "file": "docs/human-eval/samples/烟雨长歌-22.txt", "chapter": 22, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 76.0, "thrill_per_k": 0.0, "surge_per_k": 8.55, "has_hook": 1, "dialogue_ratio": 0.053, "ai_depth_level": 0, "words": 3040}}
+{"id": "烟雨长歌-07", "file": "docs/human-eval/samples/烟雨长歌-07.txt", "chapter": 7, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 72.0, "thrill_per_k": 0.34, "surge_per_k": 1.35, "has_hook": 1, "dialogue_ratio": 0.098, "ai_depth_level": 1, "words": 2953}}
+{"id": "废脉纪元-58", "file": "docs/human-eval/samples/废脉纪元-58.txt", "chapter": 58, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 72.0, "thrill_per_k": 0.0, "surge_per_k": 4.25, "has_hook": 0, "dialogue_ratio": 0.0, "ai_depth_level": 1, "words": 3062}}
+{"id": "烟雨长歌-15", "file": "docs/human-eval/samples/烟雨长歌-15.txt", "chapter": 15, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 68.0, "thrill_per_k": 0.29, "surge_per_k": 3.23, "has_hook": 1, "dialogue_ratio": 0.0, "ai_depth_level": 1, "words": 3402}}
+{"id": "碎脉铸仙录-17", "file": "docs/human-eval/samples/碎脉铸仙录-17.txt", "chapter": 17, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 68.0, "thrill_per_k": 0.0, "surge_per_k": 3.36, "has_hook": 1, "dialogue_ratio": 0.001, "ai_depth_level": 3, "words": 2979}}
+{"id": "废脉纪元-04", "file": "docs/human-eval/samples/废脉纪元-04.txt", "chapter": 4, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 68.0, "thrill_per_k": 0.0, "surge_per_k": 0.94, "has_hook": 1, "dialogue_ratio": 0.032, "ai_depth_level": 2, "words": 3189}}
+{"id": "废脉纪元-56", "file": "docs/human-eval/samples/废脉纪元-56.txt", "chapter": 56, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 64.0, "thrill_per_k": 0.31, "surge_per_k": 5.98, "has_hook": 1, "dialogue_ratio": 0.001, "ai_depth_level": 2, "words": 3179}}
+{"id": "废脉纪元-34", "file": "docs/human-eval/samples/废脉纪元-34.txt", "chapter": 34, "human": null, "rater": "", "note": "", "_machine_hint": {"fanqie_score": 64.0, "thrill_per_k": 0.0, "surge_per_k": 4.93, "has_hook": 1, "dialogue_ratio": 0.008, "ai_depth_level": 1, "words": 3243}}
