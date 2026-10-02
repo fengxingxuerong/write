@@ -326,6 +326,104 @@ $ev
 $text''';
 }
 
+/// 终审官的系统提示。
+const String chiefEditorSystemPrompt =
+    '你是番茄/起点的资深签约终审编辑，只输出 JSON。';
+
+/// 终审官 prompt：全书收官总评（六维 + 签约建议）。
+///
+/// **只喂「结构化摘要 + 三段样本正文」，不喂全文**——40 章 10 万字塞不进
+/// 上下文。摘要给逐章指标，样本给首章/末章/最低分章各一段（对齐 Python
+/// `chief_editor_prompt` 的输入裁剪策略）。
+///
+/// [rows] 是逐章指标行（由调用方按 Python 同口径拼好），[openForeshadows] 是
+/// 未收伏笔行。[worstIdx]/[first]/[last]/[worstText] 为三段样本正文。
+String chiefEditorPrompt({
+  required String title,
+  required String genre,
+  required int totalWords,
+  required int chapterCount,
+  required String rows,
+  required String openForeshadows,
+  required String stateTrack,
+  required String first,
+  required String last,
+  required int worstIdx,
+  required String worstText,
+}) {
+  final String fs = openForeshadows.trim().isEmpty
+      ? '（无未收伏笔）'
+      : openForeshadows;
+  final String st = stateTrack.trim().isEmpty ? '（无）' : stateTrack;
+  return '''
+你是番茄/起点的资深签约终审编辑。这本书已完稿，请你像审签约稿一样给出最终总评。
+你看到的是全书结构化摘要（逐章指标）+ 关键样本正文（首章/末章/评分最低章），不是全文——
+请基于这些证据判断，不要臆造没出现的问题。
+
+【书籍信息】
+书名：《$title》｜题材：$genre｜总字数：$totalWords｜章节数：$chapterCount
+
+【逐章指标】
+${rows.trim().isEmpty ? '（无章节数据）' : rows}
+
+【跨章状态清单（最终版）】
+$st
+
+【未收伏笔台账】
+$fs
+
+【样本正文一：第 1 章开头 1200 字】
+$first
+
+【样本正文二：末章开头 1200 字】
+$last
+
+【样本正文三：评分最低的第 $worstIdx 章开头 800 字】
+$worstText
+
+【终审要求】
+从签约编辑视角评估六个维度（各 0-100）：开篇钩子、节奏曲线（是否有中期塌陷）、
+人物弧光（主角动机-成长-代价是否完整）、爽点与期待感（追读动力）、
+伏笔回收（结合台账判断悬空风险）、结局力度（末章样本是否给读者交代与余韵）。
+问题要具体到章（引用逐章指标里的证据），修改建议要可执行（改哪章、怎么改）。
+
+只输出 JSON（不要 Markdown 代码块）：
+{"overall": 0-100总分, "verdict": "高潜可投|可投|需打磨|不建议",
+ "dimensions": {"开篇钩子": n, "节奏曲线": n, "人物弧光": n, "爽点与期待感": n, "伏笔回收": n, "结局力度": n},
+ "top_issues": [{"chapter": n, "issue": "问题", "evidence": "指标证据"}],
+ "fix_priority": ["修改建议1", "修改建议2", "修改建议3"]}''';
+}
+
+/// 终审打回定向重写 prompt：只改被点名的那一章的问题，其余一律不动。
+String chiefRewritePrompt({
+  required String text,
+  required String issue,
+  required String evidence,
+  required String fixes,
+}) {
+  return '''
+你是资深网文编辑。终审通读全书后认为下面这一章存在问题，需要**定向重写**。
+请只针对终审指出的问题改这一章，不要重写全章、不要改动其他章节的情节走向。
+
+【终审指出的问题】
+$issue
+【指标证据】
+${evidence.trim().isEmpty ? '（终审未给证据）' : evidence}
+【终审给的修改优先级】
+${fixes.trim().isEmpty ? '（无额外建议）' : fixes}
+
+【改写要求】
+- 针对上面这个问题做**实质性修改**，不是换词润色；
+- 保留本章既有情节、人物、伏笔与章末钩子；
+- 反AI腔：全篇「仿佛/似乎/宛如」合计不超过 2 次，禁用万能描写；
+- 保持段落结构，总字数与原作相当（只多不少）。
+
+【原章节正文】
+$text
+
+只输出重写后的完整正文，不要任何解释或前缀。''';
+}
+
 /// 伏笔回收验收员的系统提示。
 const String promiseVerifySystemPrompt =
     '你是一位严谨的伏笔回收验收员，只输出 JSON。';

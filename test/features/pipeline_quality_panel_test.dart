@@ -633,6 +633,235 @@ group('模型层派生属性', () {
     });
   });
 
+  group('终审官模型', () {
+    test('hardDimensions 抓出 ≤40 的硬伤维（防总分掩盖）', () {
+      // 「总分 83 但伏笔回收 30」是这类评审最危险的漏报——总分好看，
+      // 作者就不会去看那一维，直到投稿被退才发现。
+      const ChiefReview r = ChiefReview(
+        round: 1,
+        overall: 83,
+        dimensions: <String, int>{
+          '开篇钩子': 90,
+          '节奏曲线': 75,
+          '伏笔回收': 30,
+          '结局力度': 41,
+        },
+      );
+      expect(r.hardDimensions.keys.toList(), <String>['伏笔回收'],
+          reason: '40 是硬伤线，41 不算');
+      expect(r.ok, isTrue);
+    });
+
+    test('无结论（overall=-1）与 0 分严格区分', () {
+      expect(const ChiefReview(round: 1).ok, isFalse);
+      expect(const ChiefReview(round: 1, overall: 0).ok, isTrue,
+          reason: '评了 0 分是结论，没跑出来不是');
+    });
+
+    test('verdictOf 本地判档：同分必同档', () {
+      expect(AiPipelineTask.verdictOf(85), '高潜可投');
+      expect(AiPipelineTask.verdictOf(80), '高潜可投');
+      expect(AiPipelineTask.verdictOf(79), '可投');
+      expect(AiPipelineTask.verdictOf(70), '可投');
+      expect(AiPipelineTask.verdictOf(69), '需打磨');
+      expect(AiPipelineTask.verdictOf(60), '需打磨');
+      expect(AiPipelineTask.verdictOf(59), '不建议');
+      expect(AiPipelineTask.verdictOf(0), '不建议');
+    });
+
+    test('终审记录与打回轨迹往返序列化', () {
+      final AiPipelineTask t = AiPipelineTask(
+        id: 't1',
+        config: const AiPipelineConfig(),
+        createdAt: DateTime(2026, 10, 2),
+        chiefReviews: const <ChiefReview>[
+          ChiefReview(
+            round: 2,
+            overall: 76,
+            dimensions: <String, int>{'节奏曲线': 62},
+            verdict: '可投',
+            topIssues: <ChiefIssue>[
+              ChiefIssue(chapter: 7, issue: '节奏塌陷', evidence: '第7章爽点0'),
+            ],
+            fixPriority: const <String>['补一处打脸'],
+            samples: 3,
+          ),
+        ],
+        chiefRewrites: const <ChiefRewriteRecord>[
+          ChiefRewriteRecord(
+            chapterIdx: 7,
+            reason: '节奏塌陷',
+            oldWords: 3000,
+            newWords: 3100,
+            rescore: 70,
+          ),
+        ],
+      );
+      final AiPipelineTask back = AiPipelineTask.fromJson(t.toJson());
+      expect(back.chiefReviews.length, 1);
+      expect(back.latestChiefReview!.overall, 76);
+      expect(back.latestChiefReview!.round, 2);
+      expect(back.latestChiefReview!.dimensions['节奏曲线'], 62);
+      expect(back.latestChiefReview!.topIssues.first.issue, '节奏塌陷');
+      expect(back.latestChiefReview!.samples, 3);
+      expect(back.chiefRewrote, isTrue);
+      expect(back.chiefRewrites.first.chapterIdx, 7);
+      expect(back.chiefRewrites.first.delta, 100);
+    });
+
+    test('旧任务文件无终审键 → 空列表（= 尚未终审），非 0 分', () {
+      final AiPipelineTask back = AiPipelineTask.fromJson(
+        <String, dynamic>{'id': 'x', 'createdAt': '2026-10-02T00:00:00'},
+      );
+      expect(back.chiefReviews, isEmpty);
+      expect(back.chiefRewrites, isEmpty);
+      expect(back.latestChiefReview, isNull);
+      expect(back.chiefRewrote, isFalse);
+      expect(back.chiefSamples, 3);
+    });
+  });
+
+  group('终审 prompt', () {
+    test('含逐章指标、未收伏笔与三段样本，判据要求具体到章', () {
+      final String p = chiefEditorPrompt(
+        title: '逆鳞焚天',
+        genre: '玄幻',
+        totalWords: 120000,
+        chapterCount: 40,
+        rows: '第1章《开局》3000字｜评审82分｜钩子有｜AI味3%｜问题0处',
+        openForeshadows: '第1章埋：银鱼来历',
+        stateTrack: '主角断左臂',
+        first: '首章开头',
+        last: '末章开头',
+        worstIdx: 7,
+        worstText: '最低分章开头',
+      );
+      expect(p, contains('《逆鳞焚天》'));
+      expect(p, contains('总字数：120000'));
+      expect(p, contains('章节数：40'));
+      expect(p, contains('第1章《开局》3000字'));
+      expect(p, contains('第1章埋：银鱼来历'));
+      expect(p, contains('主角断左臂'));
+      expect(p, contains('评分最低的第 7 章'));
+      expect(p, contains('问题要具体到章'));
+    });
+
+    test('空输入降级为「（无…）」而不是空白让模型自行猜测', () {
+      final String p = chiefEditorPrompt(
+        title: 'x',
+        genre: '玄幻',
+        totalWords: 0,
+        chapterCount: 0,
+        rows: '   ',
+        openForeshadows: '',
+        stateTrack: '',
+        first: '',
+        last: '',
+        worstIdx: 0,
+        worstText: '',
+      );
+      expect(p, contains('（无章节数据）'));
+      expect(p, contains('（无未收伏笔）'));
+      expect(p, contains('（无）'));
+    });
+
+    test('打回 prompt 点名问题、证据与优先级，要求实质性修改', () {
+      final String p = chiefRewritePrompt(
+        text: '原正文',
+        issue: '节奏塌陷，第7章无爽点',
+        evidence: '第7章爽点 0.00/千字',
+        fixes: '补一处当众打脸',
+      );
+      expect(p, contains('节奏塌陷，第7章无爽点'));
+      expect(p, contains('第7章爽点 0.00/千字'));
+      expect(p, contains('补一处当众打脸'));
+      expect(p, contains('实质性修改'));
+      expect(p, contains('不要重写全章'));
+      expect(p, contains('原章节正文'));
+    });
+  });
+
+  group('终审官面板渲染', () {
+    testWidgets('未终审显示空态而非报错', (WidgetTester tester) async {
+      await pumpPanel(tester, taskWith(<PipelineChapter>[chapter(idx: 1)]));
+      expect(find.text('终审官'), findsOneWidget);
+      expect(find.textContaining('尚未终审'), findsOneWidget);
+    });
+
+    testWidgets('终审无结论时不得显示成 0 分', (WidgetTester tester) async {
+      final AiPipelineTask t = taskWith(<PipelineChapter>[chapter(idx: 1)])
+        ..chiefReviews.add(const ChiefReview(round: 1));
+      await pumpPanel(tester, t);
+      expect(find.textContaining('终审本轮无结论'), findsOneWidget);
+      expect(find.textContaining('不等于「0 分」'), findsOneWidget);
+      expect(find.textContaining('综合 0 分'), findsNothing);
+    });
+
+    testWidgets('显示判档、六维、硬伤告警与问题清单',
+        (WidgetTester tester) async {
+      final AiPipelineTask t = taskWith(<PipelineChapter>[chapter(idx: 7)])
+        ..chiefReviews.add(const ChiefReview(
+          round: 2,
+          overall: 76,
+          dimensions: <String, int>{
+            '开篇钩子': 88,
+            '节奏曲线': 62,
+            '伏笔回收': 30,
+          },
+          verdict: '可投',
+          topIssues: <ChiefIssue>[
+            ChiefIssue(
+              chapter: 7,
+              issue: '节奏塌陷',
+              evidence: '第7章爽点 0.00/千字',
+            ),
+          ],
+          samples: 3,
+        ));
+      await pumpPanel(tester, t);
+      expect(find.textContaining('第 2 轮'), findsOneWidget);
+      expect(find.textContaining('二审为准'), findsOneWidget);
+      expect(find.textContaining('综合 76 分'), findsOneWidget);
+      expect(find.text('可投'), findsOneWidget);
+      expect(find.textContaining('3 次采样中位数'), findsOneWidget);
+      // 硬伤维度必须单独告警。
+      expect(find.textContaining('硬伤维度'), findsOneWidget);
+      expect(find.textContaining('伏笔回收'), findsWidgets);
+      expect(find.textContaining('节奏塌陷'), findsOneWidget);
+      expect(find.textContaining('第7章爽点 0.00/千字'), findsOneWidget);
+    });
+
+    testWidgets('打回轨迹逐条展示，含未过闸的记录',
+        (WidgetTester tester) async {
+      final AiPipelineTask t = taskWith(<PipelineChapter>[chapter(idx: 7)])
+        ..chiefReviews.add(const ChiefReview(
+          round: 2,
+          overall: 76,
+          verdict: '可投',
+        ))
+        ..chiefRewrites.addAll(const <ChiefRewriteRecord>[
+          ChiefRewriteRecord(
+            chapterIdx: 7,
+            reason: '节奏塌陷',
+            oldWords: 3000,
+            newWords: 3100,
+          ),
+          ChiefRewriteRecord(
+            chapterIdx: 9,
+            reason: '钩子缺失',
+            oldWords: 2800,
+            newWords: 2800,
+            applied: false,
+          ),
+        ]);
+      await pumpPanel(tester, t);
+      expect(find.textContaining('打回重写轨迹'), findsOneWidget);
+      expect(find.textContaining('✅ 第7章：节奏塌陷｜3000→3100 字'), findsOneWidget);
+      expect(find.textContaining('☠ 第9章：钩子缺失'), findsOneWidget);
+      expect(find.textContaining('未过采纳闸，保留原文'), findsOneWidget);
+    });
+  });
+
   group('运行页：日志与质量分段切换', () {
     testWidgets('默认显示运行日志，切到质量段显示面板',
         (WidgetTester tester) async {

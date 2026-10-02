@@ -151,6 +151,16 @@ class AiPipelineConfig {
   /// 所以正常推进的书几乎不额外花钱——配额紧张也可关。
   final bool usePromiseCheck;
 
+  /// 终审官通读级总评（全书六维 + 签约建议 + 打回重写权）。
+  ///
+  /// **默认开启**：这是唯一能判断「节奏曲线有无中期塌陷 / 人物弧光是否闭合 /
+  /// 结局有没有给读者交代」的环节——这些维度单看任何一章都判断不了，逐章五维
+  /// 里也没有它们。此前 Dart 端只有本地规则分，通读级总评长期无人把守。
+  ///
+  /// 成本较高：默认 [chiefSamples]=3 次采样 × 1~2 轮（打回后有二审），
+  /// 每次都要塞进全书摘要 + 三段样本正文。配额紧张可关。
+  final bool useChiefReview;
+
   /// 各角色配置（未配置的默认启用，模型需用户在配置页填写）。
   final Map<AiRole, AiRoleConfig> roles;
 
@@ -169,6 +179,7 @@ class AiPipelineConfig {
     this.useStateTrack = true,
     this.useFactCheck = true,
     this.usePromiseCheck = true,
+    this.useChiefReview = true,
     this.roles = const <AiRole, AiRoleConfig>{},
   });
 
@@ -197,6 +208,7 @@ class AiPipelineConfig {
         'useStateTrack': useStateTrack,
         'useFactCheck': useFactCheck,
         'usePromiseCheck': usePromiseCheck,
+        'useChiefReview': useChiefReview,
         'roles': roles.values.map((AiRoleConfig e) => e.toJson()).toList(),
       };
 
@@ -223,6 +235,7 @@ class AiPipelineConfig {
       useFactCheck: json['useFactCheck'] as bool? ?? true,
       // 同上：旧任务文件无此键 → 默认开启（能力补齐方向）。
       usePromiseCheck: json['usePromiseCheck'] as bool? ?? true,
+      useChiefReview: json['useChiefReview'] as bool? ?? true,
       roles: roles,
     );
   }
@@ -525,6 +538,189 @@ class ForeshadowEntry {
         recovered: chapterIdx,
         status: 'closed',
         evidence: ev.length > 80 ? ev.substring(0, 80) : ev,
+      );
+}
+
+/// 终审官（六维通读级总评）的一轮结果。
+///
+/// **与逐章评分是两回事**：逐章评分看的是单章五维，终审看的是**全书通读**
+/// 才能判断的维度——节奏曲线（是否有中期塌陷）、人物弧光、伏笔回收的悬空风险、
+/// 结局力度。这些维度单看任何一章都无从判断，此前 Dart 端只有 CLI 有。
+///
+/// [_round] 记录这是第几轮：终审带打回权，会「终审 → 打回重写 → 二审」，
+/// **以二审为准**（重写后模型仍会如实给低分，不放水），故轮次必须可追溯——
+/// 只留最后一轮就看不出「这本书被打回过一次」。
+class ChiefReview {
+  /// 轮次（1 = 初审，2 = 二审…）。
+  final int round;
+
+  /// 综合总分（0~100）；-1 = 本轮没跑成。
+  final int overall;
+
+  /// 六维分（开篇钩子/节奏曲线/人物弧光/爽点与期待感/伏笔回收/结局力度）。
+  final Map<String, int> dimensions;
+
+  /// 签约判档（高潜可投/可投/需打磨/不建议）。
+  final String verdict;
+
+  /// 问题清单（具体到章 + 指标证据）。
+  final List<ChiefIssue> topIssues;
+
+  /// 修改优先级建议（可执行）。
+  final List<String> fixPriority;
+
+  /// 本轮有效采样次数（多采样取中位数时用）。
+  final int samples;
+
+  /// 本轮是否真的跑出结论。
+  bool get ok => overall >= 0;
+
+  /// 硬伤维度（任一维 ≤40）。**这是防漏报的关键**：「总分 83 但伏笔回收 30」
+  /// 这种稿子会被总分掩盖，必须单独拎出来强制人工复核。
+  Map<String, int> get hardDimensions {
+    final Map<String, int> out = <String, int>{};
+    dimensions.forEach((String k, int v) {
+      if (v <= 40) out[k] = v;
+    });
+    return out;
+  }
+
+  /// 构造一轮终审结果。
+  const ChiefReview({
+    required this.round,
+    this.overall = -1,
+    this.dimensions = const <String, int>{},
+    this.verdict = '',
+    this.topIssues = const <ChiefIssue>[],
+    this.fixPriority = const <String>[],
+    this.samples = 1,
+  });
+
+  /// 序列化。
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'round': round,
+        'overall': overall,
+        'dimensions': dimensions,
+        'verdict': verdict,
+        'topIssues': topIssues.map((ChiefIssue e) => e.toJson()).toList(),
+        'fixPriority': fixPriority,
+        'samples': samples,
+      };
+
+  /// 反序列化。
+  factory ChiefReview.fromJson(Map<String, dynamic> json) {
+    final Map<String, int> d = <String, int>{};
+    final Map<String, dynamic>? raw =
+        json['dimensions'] as Map<String, dynamic>?;
+    raw?.forEach((String k, dynamic v) {
+      if (v is num) d[k] = v.toInt();
+    });
+    return ChiefReview(
+      round: (json['round'] as num?)?.toInt() ?? 1,
+      overall: (json['overall'] as num?)?.toInt() ?? -1,
+      dimensions: d,
+      verdict: json['verdict'] as String? ?? '',
+      topIssues: (json['topIssues'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(ChiefIssue.fromJson)
+          .toList(),
+      fixPriority: (json['fixPriority'] as List<dynamic>? ?? const [])
+          .map((dynamic e) => e.toString())
+          .toList(),
+      samples: (json['samples'] as num?)?.toInt() ?? 1,
+    );
+  }
+}
+
+/// 终审问题清单里的一条（具体到章 + 指标证据）。
+class ChiefIssue {
+  /// 章号（0 = 未指明具体章）。
+  final int chapter;
+
+  /// 问题描述。
+  final String issue;
+
+  /// 引用的指标证据。
+  final String evidence;
+
+  /// 构造一条问题。
+  const ChiefIssue({
+    required this.chapter,
+    required this.issue,
+    required this.evidence,
+  });
+
+  /// 序列化。
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'chapter': chapter,
+        'issue': issue,
+        'evidence': evidence,
+      };
+
+  /// 反序列化。
+  factory ChiefIssue.fromJson(Map<String, dynamic> json) => ChiefIssue(
+        chapter: (json['chapter'] as num?)?.toInt() ?? 0,
+        issue: (json['issue'] ?? '').toString(),
+        evidence: (json['evidence'] ?? '').toString(),
+      );
+}
+
+/// 打回重写的一轮记录（终审 → 打回 → 重写 → 二审的轨迹）。
+///
+/// **轨迹本身就是交付物**：作者需要看到「这本书被判回过一次、因为什么、
+/// 改完变成什么样」，而不只是最终分数。没有轨迹，打回权就等于不存在——
+/// 它看起来像一次没发生过的事。
+class ChiefRewriteRecord {
+  /// 章号。
+  final int chapterIdx;
+
+  /// 触发打回的问题描述。
+  final String reason;
+
+  /// 重写前字数。
+  final int oldWords;
+
+  /// 重写后字数。
+  final int newWords;
+
+  /// 重写后复审分（-1 = 未复审）。
+  final int rescore;
+
+  /// 是否真的重写了（false = 重写产出未过采纳闸，保留原文）。
+  final bool applied;
+
+  /// 构造记录。
+  const ChiefRewriteRecord({
+    required this.chapterIdx,
+    required this.reason,
+    required this.oldWords,
+    required this.newWords,
+    this.rescore = -1,
+    this.applied = true,
+  });
+
+  /// 字数变化（负数说明变短了——通常是异常信号）。
+  int get delta => newWords - oldWords;
+
+  /// 序列化。
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'chapterIdx': chapterIdx,
+        'reason': reason,
+        'oldWords': oldWords,
+        'newWords': newWords,
+        'rescore': rescore,
+        'applied': applied,
+      };
+
+  /// 反序列化。
+  factory ChiefRewriteRecord.fromJson(Map<String, dynamic> json) =>
+      ChiefRewriteRecord(
+        chapterIdx: (json['chapterIdx'] as num?)?.toInt() ?? 0,
+        reason: (json['reason'] ?? '').toString(),
+        oldWords: (json['oldWords'] as num?)?.toInt() ?? 0,
+        newWords: (json['newWords'] as num?)?.toInt() ?? 0,
+        rescore: (json['rescore'] as num?)?.toInt() ?? -1,
+        applied: json['applied'] as bool? ?? false,
       );
 }
 
@@ -876,8 +1072,33 @@ class AiPipelineTask {
     this.importedNovelId,
     this.stateTrack = '',
     this.foreshadowLedger = '[]',
+    List<ChiefReview>? chiefReviews,
+    List<ChiefRewriteRecord>? chiefRewrites,
+    this.chiefSamples = 3,
+    this.chiefRewriteThreshold = 70,
+    this.chiefRewriteMax = 2,
   })  : chapters = chapters ?? <PipelineChapter>[],
-        log = log ?? <String>[];
+        log = log ?? <String>[],
+        chiefReviews = chiefReviews ?? <ChiefReview>[],
+        chiefRewrites = chiefRewrites ?? <ChiefRewriteRecord>[];
+
+  /// 最后一轮终审（**以二审为准**）；尚未终审返回 null。
+  ChiefReview? get latestChiefReview =>
+      chiefReviews.isEmpty ? null : chiefReviews.last;
+
+  /// 终审是否曾打回过（作者据此知道「这本书被判回过一次」）。
+  bool get chiefRewrote => chiefRewrites.isNotEmpty;
+
+  /// 综合分本地判档。
+  ///
+  /// **同分必同档**：模型自己写的判词会漂（「可投」和「需打磨」差几分时说
+  /// 一样的话），按分数区间本地判档后判词唯一，模型判词只作参考。
+  static String verdictOf(int overall) {
+    if (overall >= 80) return '高潜可投';
+    if (overall >= 70) return '可投';
+    if (overall >= 60) return '需打磨';
+    return '不建议';
+  }
 
   /// 追加日志（超过 400 条裁剪）。
   void addLog(String line) {
@@ -896,6 +1117,21 @@ class AiPipelineTask {
     if (v is String && v.trim().isNotEmpty) return v.trim();
     return '未命名';
   }
+
+  /// 终审官各轮记录（按轮次升序；空 = 尚未终审）。
+  List<ChiefReview> chiefReviews;
+
+  /// 打回重写轨迹（按发生顺序；空 = 未打回过）。
+  List<ChiefRewriteRecord> chiefRewrites;
+
+  /// 终审官多采样次数（合并中位数，实测单轮评分方差大：同书 83/68/64/71/64）。
+  final int chiefSamples;
+
+  /// 终审打回重写线（低于此分则打回重写问题章）。
+  final int chiefRewriteThreshold;
+
+  /// 终审打回时最多重写几章。
+  final int chiefRewriteMax;
 
   /// 伏笔台账（结构化视图）。
   ///
@@ -963,6 +1199,12 @@ class AiPipelineTask {
         'importedNovelId': importedNovelId,
         'stateTrack': stateTrack,
         'foreshadowLedger': foreshadowLedger,
+        'chiefReviews': chiefReviews.map((ChiefReview e) => e.toJson()).toList(),
+        'chiefRewrites':
+            chiefRewrites.map((ChiefRewriteRecord e) => e.toJson()).toList(),
+        'chiefSamples': chiefSamples,
+        'chiefRewriteThreshold': chiefRewriteThreshold,
+        'chiefRewriteMax': chiefRewriteMax,
       };
 
   /// 反序列化。
@@ -992,6 +1234,18 @@ class AiPipelineTask {
       importedNovelId: json['importedNovelId'] as String?,
       stateTrack: json['stateTrack'] as String? ?? '',
       foreshadowLedger: json['foreshadowLedger'] as String? ?? '[]',
+      // 旧任务文件无这些键 → 空列表（= 尚未终审），不是「终审了 0 分」。
+      chiefReviews: (json['chiefReviews'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(ChiefReview.fromJson)
+          .toList(),
+      chiefRewrites: (json['chiefRewrites'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(ChiefRewriteRecord.fromJson)
+          .toList(),
+      chiefSamples: json['chiefSamples'] as int? ?? 3,
+      chiefRewriteThreshold: json['chiefRewriteThreshold'] as int? ?? 70,
+      chiefRewriteMax: json['chiefRewriteMax'] as int? ?? 2,
     );
   }
 }

@@ -75,6 +75,231 @@ class AiPipelineService {
     return content;
   }
 
+  /// 拼逐章指标行（终审 prompt 的摘要输入）。
+  ///
+  /// 口径与 Python `chief_editor_prompt` 逐字一致：章号/标题/字数/评审分/
+  /// 钩子有无/AI 味%/问题数。**只拼指标不拼正文**——终审的上下文预算要留给
+  /// 三段样本正文。
+  static String _chiefChapterRows(AiPipelineTask task) {
+    final List<PipelineChapter> chapters = List<PipelineChapter>.from(
+      task.chapters,
+    )..sort((PipelineChapter a, PipelineChapter b) => a.idx.compareTo(b.idx));
+    final StringBuffer b = StringBuffer();
+    for (final PipelineChapter c in chapters) {
+      final ChapterQualityReview? r = c.review;
+      final double echo = PipelineQa.aiEchoPct(c.content);
+      b.writeln('第${c.idx}章《${c.title}》${c.words}字｜'
+          '评审${r != null && r.scored ? r.overall : '-'}分｜'
+          '钩子${PipelineQa.hasEndingHook(c.content) ? '有' : '无'}｜'
+          'AI味${echo.toStringAsFixed(0)}%｜问题${c.issues.length}处');
+    }
+    return b.toString().trim();
+  }
+
+  /// 拼未收伏笔行（终审判「伏笔回收」维度的直接依据）。
+  static String _chiefOpenForeshadows(ForeshadowLedger ledger) {
+    final StringBuffer b = StringBuffer();
+    for (final ForeshadowEntry e in ledger.open.take(12)) {
+      final String d = e.desc.length > 40 ? e.desc.substring(0, 40) : e.desc;
+      b.writeln('第${e.planted}章埋：$d');
+    }
+    return b.toString().trim();
+  }
+
+  /// 取评分最低的章（终审样本三）；无评分时退回第 1 章。
+  static PipelineChapter? _worstScoredChapter(AiPipelineTask task) {
+    PipelineChapter? worst;
+    int worstScore = 101;
+    for (final PipelineChapter c in task.chapters) {
+      final ChapterQualityReview? r = c.review;
+      if (r == null || !r.scored) continue;
+      if (r.overall < worstScore) {
+        worstScore = r.overall;
+        worst = c;
+      }
+    }
+    return worst ??
+        (task.chapters.isEmpty ? null : task.chapters.first);
+  }
+
+  /// 解析六维分（只收数值项，非数值一律跳过而非强转）。
+  static Map<String, int> _chiefDimensions(Map<String, dynamic> parsed) {
+    final Map<String, int> out = <String, int>{};
+    final Map<String, dynamic>? raw =
+        parsed['dimensions'] as Map<String, dynamic>?;
+    raw?.forEach((String k, dynamic v) {
+      if (v is num) out[k] = v.toInt();
+    });
+    return out;
+  }
+
+  /// 解析问题清单。
+  static List<ChiefIssue> _chiefIssues(Map<String, dynamic> parsed) {
+    return (parsed['top_issues'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(ChiefIssue.fromJson)
+        .where((ChiefIssue e) => e.issue.trim().isNotEmpty)
+        .toList();
+  }
+
+  /// 合并多采样：六维逐项取中位数 + 综合取中位数。
+  ///
+  /// 逐项中位而非「先合并总分再各维取样」——后者在样本数少时会把不同轮次的
+  /// 维度混在一起，凭空造出一个从未被任何一轮打出过的组合。
+  static ChiefReview _mergeChiefSamples(
+    List<ChiefReview> samples,
+    int round,
+  ) {
+    int median(List<int> xs) {
+      final List<int> s = List<int>.from(xs)..sort();
+      return s[s.length ~/ 2];
+    }
+
+    final Set<String> keys = <String>{};
+    for (final ChiefReview r in samples) {
+      keys.addAll(r.dimensions.keys);
+    }
+    final Map<String, int> dims = <String, int>{};
+    keys.forEach((String k) {
+      final List<int> vs = samples
+          .map((ChiefReview r) => r.dimensions[k])
+          .where((int? v) => v != null && v >= 0)
+          .map((int? v) => v!)
+          .toList();
+      if (vs.isNotEmpty) dims[k] = median(vs);
+    });
+
+    // 问题清单按「多轮共识」优先：多轮都点名的排前面。
+    final Map<String, int> seen = <String, int>{};
+    for (final ChiefReview r in samples) {
+      for (final ChiefIssue e in r.topIssues) {
+        final String k = '${e.chapter}|${e.issue}';
+        seen[k] = (seen[k] ?? 0) + 1;
+      }
+    }
+    final List<ChiefIssue> issues = <ChiefIssue>[];
+    final List<ChiefReview> ordered = List<ChiefReview>.from(samples)
+      ..sort((ChiefReview a, ChiefReview b) =>
+          b.topIssues.length.compareTo(a.topIssues.length));
+    for (final ChiefReview r in ordered) {
+      for (final ChiefIssue e in r.topIssues) {
+        final bool dup = issues.any((ChiefIssue x) =>
+            x.chapter == e.chapter && x.issue == e.issue);
+        if (!dup) issues.add(e);
+      }
+    }
+    final List<String> fixes = <String>[];
+    for (final ChiefReview r in samples) {
+      for (final String f in r.fixPriority) {
+        if (!fixes.contains(f)) fixes.add(f);
+      }
+    }
+    final int overall =
+        median(samples.map((ChiefReview r) => r.overall).toList());
+    return ChiefReview(
+      round: round,
+      overall: overall,
+      dimensions: dims,
+      // 判档**本地按分数区间**判，模型判词只作参考——同分必同档。
+      verdict: AiPipelineTask.verdictOf(overall),
+      topIssues: issues.take(5).toList(),
+      fixPriority: fixes.take(3).toList(),
+      samples: samples.length,
+    );
+  }
+
+  /// 跑一轮终审（多采样取中位数）。
+  ///
+  /// **多采样是必需的不是优化**：实测同一本书跨轮终审 83/68/64/71/64，单次采样
+  /// 的噪声比章间真实差距还大，「70 分打回线」在这种方差下毫无意义。
+  ///
+  /// 返回 `overall = -1` 表示本轮没跑出结论（端点全败/解析失败），调用方须
+  /// 据此记「无结论」，**不得当成「0 分」**——那会让打回重写对着一个从未存在
+  /// 的低分去改稿。
+  Future<ChiefReview> _runChiefPass(
+    AiPipelineTask task,
+    int round, {
+    required bool Function() isCancelled,
+  }) async {
+    final AiRoleConfig cfg = task.config.roleOf(AiRole.editor);
+    if (!_chainConfigured(cfg)) return ChiefReview(round: round, overall: -1);
+    final List<PipelineChapter> chapters = List<PipelineChapter>.from(
+      task.chapters,
+    )..sort((PipelineChapter a, PipelineChapter b) => a.idx.compareTo(b.idx));
+    if (chapters.isEmpty) return ChiefReview(round: round, overall: -1);
+
+    final PipelineChapter? worst = _worstScoredChapter(task);
+    final String prompt = chiefEditorPrompt(
+      title: task.title,
+      genre: task.config.genre,
+      totalWords: task.totalWords,
+      chapterCount: chapters.length,
+      rows: _chiefChapterRows(task),
+      openForeshadows: _chiefOpenForeshadows(task.ledger),
+      stateTrack: task.stateTrack,
+      first: chapters.first.content.length > 1200
+          ? chapters.first.content.substring(0, 1200)
+          : chapters.first.content,
+      last: chapters.last.content.length > 1200
+          ? chapters.last.content.substring(0, 1200)
+          : chapters.last.content,
+      worstIdx: worst?.idx ?? 0,
+      worstText: worst == null
+          ? '（无）'
+          : worst.content.length > 800
+              ? worst.content.substring(0, 800)
+              : worst.content,
+    );
+
+    final int target = task.chiefSamples < 1 ? 1 : task.chiefSamples;
+    final List<ChiefReview> samples = <ChiefReview>[];
+    // 最多打 2×目标次数补解析失败（对齐 Python `max_attempts = target * 2`）。
+    for (int attempt = 0;
+        attempt < target * 2 && samples.length < target;
+        attempt++) {
+      if (isCancelled()) break;
+      final String raw = await _call(
+        task,
+        AiRole.editor,
+        chiefEditorSystemPrompt,
+        prompt,
+        isCancelled: isCancelled,
+      );
+      final Map<String, dynamic>? parsed = _parseJsonObject(raw);
+      final int overall = (parsed?['overall'] as num?)?.toInt() ?? -1;
+      if (parsed != null && overall >= 0) {
+        samples.add(ChiefReview(
+          round: round,
+          overall: overall,
+          dimensions: _chiefDimensions(parsed),
+          verdict: AiPipelineTask.verdictOf(overall),
+          topIssues: _chiefIssues(parsed),
+          fixPriority: (parsed?['fix_priority'] as List<dynamic>? ?? const [])
+              .map((dynamic e) => e.toString())
+              .toList(),
+        ));
+        task.addLog('  [终审·第$round轮·采样 ${samples.length}/$target] 综合 $overall 分');
+      } else {
+        task.addLog('  [终审·第$round轮·尝试 ${attempt + 1}] 解析失败');
+      }
+    }
+    if (samples.isEmpty) {
+      task.addLog('  [终审·第$round轮] 全部采样解析失败，本轮无结论');
+      return ChiefReview(round: round, overall: -1);
+    }
+    final ChiefReview merged = _mergeChiefSamples(samples, round);
+    task.addLog('  [终审·第$round轮] 合并综合 ${merged.overall} 分｜${merged.verdict}'
+        '（有效采样 ${merged.samples} 次）');
+    final Map<String, int> hard = merged.hardDimensions;
+    if (hard.isNotEmpty) {
+      // 硬伤维度告警：任一维 ≤40 时即使总分达标也要强制人工复核
+      // （防「总分 83 但伏笔回收 30」被总分掩盖）。
+      task.addLog('  [终审·第$round轮] ☠ 硬伤维度（≤40）：'
+          '${hard.keys.join('、')}——即使总分达标也建议人工复核');
+    }
+    return merged;
+  }
+
   /// 回收清单打勾结果里兑现的条数（用于「复检是否变好」的比较）。
   static int _fulfilledCount(List<PromiseCheck> checks) =>
       checks.where((PromiseCheck r) => r.fulfilled && !r.failed).length;
@@ -1093,6 +1318,131 @@ class AiPipelineService {
       task.addLog('  [完成] 第 $idx 章：${chapter.words} 字 | 累计 ${task.totalWords} 字');
       await _storage.saveTask(task);
       onProgress();
+    }
+
+    // ===== Phase 3.5：终审官通读级总评 + 打回重写权 =====
+    //
+    // 【为什么放在完成之后】终审看的是**全书**——节奏曲线是否有中期塌陷、
+    // 人物弧光是否闭合、伏笔回收有无悬空、末章有没有给读者交代。这些维度
+    // 单看任何一章都判断不了，而逐章评分看不到它们（逐章五维里没有它们）。
+    // 此前 Dart 端只有本地规则分与逐章五分，通读级总评长期无人把守。
+    //
+    // 流程与 Python `Phase 3.5` 同构：终审 → 总分低于打回线则定向重写被点名的
+    // 章（最多 chiefRewriteMax 章）→ 二审一轮 → **以二审为准**（重写后模型仍
+    // 会如实给低分，不放水）。
+    if (task.config.useChiefReview && task.chapters.isNotEmpty) {
+      task.addLog('[终审] 通读级总评（六维 + 签约建议）…');
+      ChiefReview chief = await _runChiefPass(
+        task,
+        task.chiefReviews.length + 1,
+        isCancelled: isCancelled,
+      );
+      task.chiefReviews.add(chief);
+
+      // 打回重写权：仅在终审真出结论（ok）且低于打回线时才动。
+      // ok=false 时**绝不打回**——对着一个从未存在的低分改稿是纯破坏。
+      if (chief.ok &&
+          chief.overall < task.chiefRewriteThreshold &&
+          chief.topIssues.isNotEmpty) {
+        final String fixes = chief.fixPriority.take(3).join('；');
+        final List<int> cited = <int>[];
+        for (final ChiefIssue it in chief.topIssues) {
+          if (it.chapter > 0 &&
+              !cited.contains(it.chapter) &&
+              task.chapters.any((PipelineChapter c) => c.idx == it.chapter)) {
+            cited.add(it.chapter);
+          }
+          if (cited.length >= task.chiefRewriteMax) break;
+        }
+        if (cited.isNotEmpty) {
+          task.addLog('  [打回] ${chief.overall} 分 < 打回线 '
+              '${task.chiefRewriteThreshold}，打回重写第 ${cited.join("、")} 章');
+          for (final int n in cited) {
+            final int i = task.chapters
+                .indexWhere((PipelineChapter c) => c.idx == n);
+            final PipelineChapter target = task.chapters[i];
+            final ChiefIssue issue = chief.topIssues.firstWhere(
+              (ChiefIssue e) => e.chapter == n,
+              orElse: () => const ChiefIssue(
+                chapter: 0,
+                issue: '',
+                evidence: '',
+              ),
+            );
+            final int oldWords = _countWords(target.content);
+            final String rw = await call(
+              AiRole.editor,
+              editorSystemPrompt,
+              chiefRewritePrompt(
+                text: target.content,
+                issue: issue.issue,
+                evidence: issue.evidence,
+                fixes: fixes,
+              ),
+            );
+            // 采纳守卫：重写产出过不了闸就保留原文（过审/长度/补丁卫生），
+            // 并**照记轨迹**——「打回过但没改成」比「没打回」更需要被看见。
+            final String? why = rw.trim().isEmpty
+                ? '空产出'
+                : FanqieGateChecker.patchReject(
+                    rw,
+                    baseText: target.content,
+                    genre: task.config.genre,
+                    maxWords: (oldWords * 2).ceil(),
+                  );
+            final int newWords = _countWords(rw.trim());
+            if (why == null && newWords >= oldWords * 0.85) {
+              task.chapters[i] = PipelineChapter(
+                idx: target.idx,
+                title: target.title,
+                content: rw.trim(),
+                rawWords: oldWords,
+                words: newWords,
+                issues: <String>[
+                  ...target.issues,
+                  '终审打回重写：${issue.issue}',
+                ],
+                scenesPlanned: target.scenesPlanned,
+                scenesWritten: target.scenesWritten,
+                protagonistMentions: target.protagonistMentions,
+                review: target.review,
+                factCheck: target.factCheck,
+                promiseChecks: target.promiseChecks,
+              );
+              task.totalWords += newWords - oldWords;
+              task.chiefRewrites.add(ChiefRewriteRecord(
+                chapterIdx: n,
+                reason: issue.issue,
+                oldWords: oldWords,
+                newWords: newWords,
+                applied: true,
+              ));
+              task.addLog('  [重写] 第 $n 章 $oldWords -> $newWords 字（已采纳）');
+            } else {
+              task.chiefRewrites.add(ChiefRewriteRecord(
+                chapterIdx: n,
+                reason: issue.issue,
+                oldWords: oldWords,
+                newWords: oldWords,
+                applied: false,
+              ));
+              task.addLog('  [重写] 第 $n 章未过采纳闸'
+                  '（${why ?? "压缩至 $newWords 字（<85%）"}），保留原文照记打回');
+            }
+          }
+          await _storage.saveTask(task);
+          // 二审：以重写后的书再终审一轮，重写后的结论才是最终结论。
+          chief = await _runChiefPass(
+            task,
+            task.chiefReviews.length + 1,
+            isCancelled: isCancelled,
+          );
+          task.chiefReviews.add(chief);
+          task.addLog('  [打回] 二审完成，以第 ${chief.round} 轮为准'
+              '（${chief.ok ? "${chief.overall} 分" : "无结论"}）');
+        }
+      }
+      await _storage.saveTask(task);
     }
 
     // ===== Phase 3：完成 =====

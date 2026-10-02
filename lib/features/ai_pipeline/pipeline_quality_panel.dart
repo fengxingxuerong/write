@@ -48,6 +48,8 @@ class PipelineQualityPanel extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(AppTokens.s3),
       children: <Widget>[
+        _ChiefCard(task: task),
+        const SizedBox(height: AppTokens.s3),
         _SummaryBar(summary: s),
         const SizedBox(height: AppTokens.s3),
         for (final PipelineChapter c in chapters)
@@ -507,6 +509,186 @@ class _PromiseSection extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// 终审官卡片：签约判档 + 六维 + 问题清单 + 打回轨迹。
+///
+/// **打回轨迹必须展示**：作者需要看到「这本书被判回过一次、因为什么、改没改成」，
+/// 而不只是最终分数。没有轨迹，打回权看起来像一次没发生过的事。
+class _ChiefCard extends StatelessWidget {
+  /// 构造终审卡。
+  const _ChiefCard({required this.task});
+
+  /// 流水线任务。
+  final AiPipelineTask task;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppInk ink = AppInk.of(context);
+    final ChiefReview? chief = task.latestChiefReview;
+    if (task.chiefReviews.isEmpty) {
+      return AppCard(
+        title: '终审官',
+        child: const _HintLine(
+          text: '尚未终审（生成完成后自动跑通读级总评）',
+          icon: Icons.gavel_outlined,
+          kind: _HintKind.muted,
+        ),
+      );
+    }
+    if (chief == null || !chief.ok) {
+      return AppCard(
+        title: '终审官',
+        child: const _HintLine(
+          text: '⚠ 终审本轮无结论（调用失败或解析失败）——不等于「0 分」',
+          icon: Icons.error_outline,
+          kind: _HintKind.warn,
+        ),
+      );
+    }
+    final Map<String, int> hard = chief.hardDimensions;
+    final Color vc = chief.overall >= 80
+        ? ink.success
+        : chief.overall >= 60
+            ? ink.warn
+            : ink.danger;
+    return AppCard(
+      title: '终审官 · 第 ${chief.round} 轮${chief.round > 1 ? '（二审为准）' : ''}',
+      subtitle: task.chiefRewrote ? '曾打回重写 ${task.chiefRewrites.length} 章' : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Text(
+                '综合 ${chief.overall} 分',
+                style: AppFonts.text(vc,
+                    size: 17, weight: FontWeight.w600),
+              ),
+              const SizedBox(width: AppTokens.s2),
+              Text(
+                chief.verdict,
+                style: AppFonts.text(vc, size: 13.5),
+              ),
+              const SizedBox(width: AppTokens.s2),
+              Text(
+                '（${chief.samples} 次采样中位数）',
+                style: AppFonts.text(ink.inkFaint, size: 11.5),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          for (final MapEntry<String, int> e in chief.dimensions.entries)
+            _ChiefDimBar(label: e.key, value: e.value),
+          if (hard.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 6),
+            _HintLine(
+              text: '☠ 硬伤维度（≤40）：${hard.keys.join('、')}——'
+                  '即使总分达标也必须人工复核',
+              icon: Icons.report_outlined,
+              kind: _HintKind.warn,
+            ),
+          ],
+          if (chief.topIssues.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 8),
+            Text(
+              '问题清单',
+              style: AppFonts.text(ink.inkSoft,
+                  size: 13, weight: FontWeight.w600),
+            ),
+            const SizedBox(height: 4),
+            for (final ChiefIssue i in chief.topIssues)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 3),
+                child: Text(
+                  '⚠ ${i.chapter > 0 ? "第${i.chapter}章" : "全书"}：${i.issue}'
+                  '${i.evidence.isEmpty ? "" : "（${i.evidence}）"}',
+                  style: AppFonts.text(ink.inkFaint, size: 12, height: 1.5),
+                ),
+              ),
+          ],
+          if (task.chiefRewrites.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 8),
+            Text(
+              '打回重写轨迹',
+              style: AppFonts.text(ink.inkSoft,
+                  size: 13, weight: FontWeight.w600),
+            ),
+            const SizedBox(height: 4),
+            for (final ChiefRewriteRecord r in task.chiefRewrites)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 3),
+                child: Text(
+                  '${r.applied ? "✅" : "☠"} 第${r.chapterIdx}章：${r.reason}｜'
+                  '${r.oldWords}→${r.newWords} 字'
+                  '${r.applied ? "" : "（未过采纳闸，保留原文）"}',
+                  style: AppFonts.text(
+                    r.applied ? ink.success : ink.danger,
+                    size: 12,
+                    height: 1.5,
+                  ),
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 终审单维度横条。
+class _ChiefDimBar extends StatelessWidget {
+  /// 构造维度条。
+  const _ChiefDimBar({required this.label, required this.value});
+
+  /// 维度中文名。
+  final String label;
+
+  /// 分数（0~100）。
+  final int value;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppInk ink = AppInk.of(context);
+    // ≤40 是硬伤线（与 ChiefReview.hardDimensions 同口径）。
+    final Color c = value >= 78
+        ? ink.success
+        : value > 40
+            ? ink.warn
+            : ink.danger;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 3),
+      child: Row(
+        children: <Widget>[
+          SizedBox(
+            width: 76,
+            child: Text(label, style: AppFonts.text(ink.inkFaint, size: 12)),
+          ),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(AppTokens.r1),
+              child: LinearProgressIndicator(
+                value: (value / 100).clamp(0.0, 1.0),
+                minHeight: 5,
+                backgroundColor: c.withValues(alpha: 0.15),
+                valueColor: AlwaysStoppedAnimation<Color>(c),
+              ),
+            ),
+          ),
+          const SizedBox(width: AppTokens.s2),
+          SizedBox(
+            width: 26,
+            child: Text(
+              '$value',
+              textAlign: TextAlign.right,
+              style: AppFonts.text(c, size: 12, monoFace: true),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

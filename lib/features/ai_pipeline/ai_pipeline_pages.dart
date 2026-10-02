@@ -346,6 +346,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
   bool _useVerifier = true;
   bool _useFactCheck = true;
   bool _usePromiseCheck = true;
+  bool _useChiefReview = true;
 
   /// 是否把未实测的候选端点（NVIDIA / OpenRouter）也纳入备用链。
   bool _useUnverified = false;
@@ -380,6 +381,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
       _useVerifier = cfg.useVerifier;
     _useFactCheck = cfg.useFactCheck;
     _usePromiseCheck = cfg.usePromiseCheck;
+    _useChiefReview = cfg.useChiefReview;
       _roles = <AiRole, AiRoleConfig>{
         for (final AiRole r in AiRole.values) r: cfg.roleOf(r),
       };
@@ -407,6 +409,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
       useVerifier: _useVerifier,
       useFactCheck: _useFactCheck,
       usePromiseCheck: _usePromiseCheck,
+      useChiefReview: _useChiefReview,
       roles: _roles,
     );
     final List<AiRole> missing = AiPipelineService.missingRoles(config);
@@ -584,6 +587,13 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
                 '仅在有伏笔埋设超 5 章时才产生调用'),
             value: _usePromiseCheck,
             onChanged: (bool v) => setState(() => _usePromiseCheck = v),
+          ),
+          SwitchListTile(
+            title: const Text('启用终审官（通读级总评 + 打回权）'),
+            subtitle: const Text('全书收官后跑六维通读总评（节奏曲线/人物弧光/结局力度），'
+                '低于打回线自动重写问题章并二审。默认 3 次采样，成本较高'),
+            value: _useChiefReview,
+            onChanged: (bool v) => setState(() => _useChiefReview = v),
           ),
           const SizedBox(height: 8),
           _section('固定角色分工'),
