@@ -326,6 +326,96 @@ $ev
 $text''';
 }
 
+/// 伏笔回收验收员的系统提示。
+const String promiseVerifySystemPrompt =
+    '你是一位严谨的伏笔回收验收员，只输出 JSON。';
+
+/// 回收清单打勾校验：逐条核验本章正文是否**真的兑现**了必兑现清单。
+///
+/// 判据与 Python `verify_promises_prompt` 逐字一致：**只暗示 / 留白 / 远景
+/// 铺陈不算兑现**，答案必须落到纸面（人物对话点破、实物证据呈现、内心揭示）。
+///
+/// 这条判据不是苛刻，而是防「指令执行衰减」——真书验证中规划官下令回收伏笔，
+/// 写手却写成了开脉突破的悬念，事后看「有伏笔相关描写」，验收就通过了。
+/// 要求「答案落到纸面」才拦得住这种衰减。
+String promiseVerifyPrompt(String text, List<ForeshadowLine> lines, int idx) {
+  final String block = lines
+      .asMap()
+      .entries
+      .map((MapEntry<int, ForeshadowLine> e) =>
+          '${e.key + 1}. ${e.value.desc}')
+      .join('\n');
+  return '''
+你是伏笔回收验收员。下面是第 $idx 章正文和「必兑现清单」，
+请逐条核验正文是否真的兑现了清单要求（答案是否落到纸面；只暗示/留白/远景铺陈不算兑现）。
+
+【必兑现清单】
+$block
+
+【章节正文】
+$text
+
+只输出 JSON（不要 Markdown 代码块）：
+{"results": [{"id": 序号, "fulfilled": true或false, "evidence": "正文证据句，不超过20字（未兑现则填缺失原因，不超过20字）"}]}''';
+}
+
+/// 回收清单未兑现条目的定向补写 prompt。
+///
+/// 只加不改：不动其他情节、不改已发生事件，只把缺失的答案补到纸面上。
+/// [minWords] 是字数下限（沿用 [factFixMinRatio] 的意图）——补写若无视下限，
+/// 模型会顺手把整章压掉，产出被采纳守卫拒绝、白跑一轮。
+String promiseRepairPrompt(
+  String text,
+  List<UnfulfilledPromise> items,
+  int idx, {
+  required int minWords,
+}) {
+  final String lines = items
+      .asMap()
+      .entries
+      .map((MapEntry<int, UnfulfilledPromise> e) =>
+          '${e.key + 1}. 必兑现条目「${e.value.desc}」（验收反馈：${e.value.reason}）')
+      .join('\n');
+  final int words = _hanCount(text);
+  final String floorLine = minWords > 0
+      ? '\n【字数硬约束·先看这条】改写后正文不得少于 $minWords 字（原文 $words 字）：'
+            '只增补不删减，禁止整段重写凑字数差。'
+      : '';
+  return '''
+终审要求第 $idx 章兑现以下条目，但验收发现未兑现。请在**不动其他情节、不改已发生事件**的前提下，
+把缺失的答案补写进正文——答案必须落到纸面（人物对话点破 / 实物证据呈现 / 内心揭示皆可），
+不得用「似乎 / 也许 / 据说 / 留待后文」这类暗示代替兑现。
+
+【未兑现清单】
+$lines
+$floorLine
+【第 $idx 章正文】
+$text
+
+只输出补写后的完整正文，不要任何解释或前缀。''';
+}
+
+/// 必兑现清单里的一条（供 prompt 层使用，与模型层解耦）。
+class ForeshadowLine {
+  /// 伏笔描述。
+  final String desc;
+
+  /// 构造一条。
+  const ForeshadowLine(this.desc);
+}
+
+/// 一条未兑现条目（含验收反馈的缺失原因）。
+class UnfulfilledPromise {
+  /// 伏笔描述。
+  final String desc;
+
+  /// 缺失原因（验收官给的反馈）。
+  final String reason;
+
+  /// 构造一条。
+  const UnfulfilledPromise({required this.desc, required this.reason});
+}
+
 /// 独立事实核查员的系统提示（关卡5）。
 ///
 /// 与 Python `novel_pipeline.FACT_CHECK_SYS` 逐字一致：「只输出 JSON，不要解释」。

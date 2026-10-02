@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
+import 'package:novel_writer/ai_pipeline/prompts/pipeline_prompts.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
 import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/core/theme/app_theme.dart';
@@ -28,6 +29,7 @@ void main() {
     int idx = 1,
     ChapterQualityReview? review,
     ChapterFactCheck? factCheck,
+    List<PromiseCheck>? promiseChecks,
     List<String> issues = const <String>[],
   }) =>
       PipelineChapter(
@@ -39,6 +41,7 @@ void main() {
         issues: issues,
         review: review,
         factCheck: factCheck,
+        promiseChecks: promiseChecks,
       );
 
   Future<void> pumpPanel(WidgetTester tester, AiPipelineTask task) async {
@@ -350,6 +353,283 @@ group('模型层派生属性', () {
       expect(find.text('残留编造'), findsOneWidget);
       expect(find.text('2'), findsOneWidget);
       expect(find.text('1'), findsNWidgets(3));
+    });
+  });
+
+  group('伏笔台账模型', () {
+    const ForeshadowEntry a = ForeshadowEntry(desc: '银鱼来历', planted: 1);
+    const ForeshadowEntry b = ForeshadowEntry(desc: '断剑秘密', planted: 3);
+
+    test('解析：丢弃 desc 为空的条目与坏 JSON', () {
+      final ForeshadowLedger l = ForeshadowLedger.parse(
+        '{"foreshadows":[{"desc":"银鱼来历","planted":1,"status":"open"},'
+        '{"desc":"  ","planted":2},{"desc":"断剑","planted":3,"status":"closed"}]}',
+      );
+      expect(l.items.length, 2, reason: 'desc 为空的条目无法验收，必须丢弃');
+      expect(l.open.length, 1);
+      expect(l.closed.length, 1);
+      expect(ForeshadowLedger.parse('not json').items, isEmpty);
+      expect(ForeshadowLedger.parse('').items, isEmpty);
+      expect(ForeshadowLedger.parse('[]').items, isEmpty);
+    });
+
+    test('非法 status 按 open 处理（不虚报已回收）', () {
+      final ForeshadowEntry e = ForeshadowEntry.fromJson(
+        <String, dynamic>{'desc': 'x', 'status': 'CLOSED'},
+      );
+      expect(e.closed, isFalse, reason: '大写 CLOSED 不是合法值，不得当已回收');
+    });
+
+    test('isStale：埋设满 5 章仍 open 才算超时', () {
+      expect(a.isStale(5), isFalse, reason: '1→5 恰 4 章，未到阈值');
+      expect(a.isStale(6), isTrue, reason: '1→6 恰 5 章，超时');
+      expect(b.isStale(20), isTrue);
+      expect(
+        a.markClosed(6, '他终于认了').isStale(20),
+        isFalse,
+        reason: '已回收不参与超时判定',
+      );
+      // 脏台账：埋设章号大于当前章号 → 不告警（宁可漏报不误伤）。
+      expect(
+        const ForeshadowEntry(desc: 'x', planted: 99).isStale(10),
+        isFalse,
+      );
+      expect(const ForeshadowEntry(desc: 'x', planted: 0).isStale(10), isFalse);
+    });
+
+    test('promiseBlock：普通章只取超时条目，收尾章取全部 open', () {
+      final ForeshadowLedger l = ForeshadowLedger(const <ForeshadowEntry>[a, b]);
+      // 普通章（staleAfter=5）：到第 10 章，a（埋于 1）已过 9 章、b（埋于 3）
+      // 已过 7 章，**两条都超时**——这里用第 6 章才能只命中 a（1→6 恰 5 章）。
+      expect(l.promiseBlock(6, staleAfter: 5).length, 1);
+      expect(l.promiseBlock(6, staleAfter: 5).first.desc, '银鱼来历');
+      // 超时阈值内（3→6 恰 3 章）一条都不该进清单。
+      expect(l.promiseBlock(3, staleAfter: 5).isEmpty, isTrue);
+      // 收尾章（staleAfter=0）：全部 open。
+      expect(l.promiseBlock(10, staleAfter: 0).length, 2);
+    });
+
+    test('打勾联动：✅ 标记 closed 并记证据句', () {
+      final ForeshadowLedger l = ForeshadowLedger(const <ForeshadowEntry>[a, b]);
+      final List<ForeshadowEntry> block = l.promiseBlock(10, staleAfter: 0);
+      final (ForeshadowLedger next, int n) = l.applyClosures(
+        block,
+        const <PromiseCheck>[
+          PromiseCheck(id: 1, fulfilled: true, evidence: '他终于认了'),
+          PromiseCheck(id: 2, fulfilled: false, evidence: '只留了悬念'),
+        ],
+        10,
+      );
+      expect(n, 1);
+      expect(next.items[0].closed, isTrue);
+      expect(next.items[0].recovered, 10);
+      expect(next.items[0].evidence, '他终于认了');
+      expect(next.items[1].closed, isFalse, reason: '❌ 未兑现必须留在 open');
+      // 原台账不可变（失败可回滚）。
+      expect(l.items[0].closed, isFalse);
+    });
+
+    test('打勾联动：验收环节失败时一条都不联动（核心语义护栏）', () {
+      // 这是最容易骗过作者的一种状态：验收调用挂了，若照样联动台账，
+      // 一次静默失效会被记成 N 条伏笔已回收，终审再也看不出真相。
+      final ForeshadowLedger l = ForeshadowLedger(const <ForeshadowEntry>[a, b]);
+      final List<ForeshadowEntry> block = l.promiseBlock(10, staleAfter: 0);
+      final (ForeshadowLedger next, int n) = l.applyClosures(
+        block,
+        const <PromiseCheck>[PromiseCheck.failure],
+        10,
+      );
+      expect(n, 0);
+      expect(next.open.length, 2, reason: '验收失败不得关闭任何条目');
+    });
+
+    test('打勾联动：序号越界不联动（不误伤别的条目）', () {
+      final ForeshadowLedger l = ForeshadowLedger(const <ForeshadowEntry>[a]);
+      final (ForeshadowLedger next, int n) = l.applyClosures(
+        l.open,
+        const <PromiseCheck>[
+          PromiseCheck(id: 9, fulfilled: true, evidence: 'x'),
+          PromiseCheck(id: 0, fulfilled: true, evidence: 'y'),
+        ],
+        10,
+      );
+      expect(n, 0);
+      expect(next.open.length, 1);
+    });
+
+    test('打勾联动：空清单/空结果原样返回', () {
+      final ForeshadowLedger l = ForeshadowLedger(const <ForeshadowEntry>[a]);
+      expect(l.applyClosures(<ForeshadowEntry>[], const <PromiseCheck>[], 10).$2, 0);
+      expect(l.applyClosures(l.open, const <PromiseCheck>[], 10).$2, 0);
+    });
+  });
+
+  group('打勾结果序列化与面板渲染', () {
+    test('promiseChecks 往返：null 与空列表严格区分', () {
+      // null = 没打勾；[] = 打过勾但清单为空。两者在 UI 上结论完全不同。
+      final PipelineChapter none = PipelineChapter(
+        idx: 1,
+        title: 'a',
+        content: 'x',
+        rawWords: 1,
+        words: 1,
+      );
+      expect(PipelineChapter.fromJson(none.toJson()).promiseChecks, isNull);
+
+      final PipelineChapter empty = PipelineChapter(
+        idx: 1,
+        title: 'a',
+        content: 'x',
+        rawWords: 1,
+        words: 1,
+        promiseChecks: const <PromiseCheck>[],
+      );
+      expect(PipelineChapter.fromJson(empty.toJson()).promiseChecks, isEmpty);
+    });
+
+    test('打勾结果往返保留 ✅/❌/☠ 与证据句', () {
+      final PipelineChapter c = PipelineChapter(
+        idx: 1,
+        title: 'a',
+        content: 'x',
+        rawWords: 1,
+        words: 1,
+        promiseChecks: const <PromiseCheck>[
+          PromiseCheck(id: 1, fulfilled: true, evidence: '他终于认了'),
+          PromiseCheck(id: 2, fulfilled: false, evidence: '只留了悬念'),
+          PromiseCheck.failure,
+        ],
+      );
+      final List<PromiseCheck>? back =
+          PipelineChapter.fromJson(c.toJson()).promiseChecks;
+      expect(back, isNotNull);
+      expect(back!.length, 3);
+      expect(back[0].mark, '✅');
+      expect(back[1].mark, '❌');
+      expect(back[2].mark, '☠');
+      expect(back[2].failed, isTrue);
+      expect(back[0].evidence, '他终于认了');
+    });
+
+    testWidgets('面板显示打勾明细与证据句', (WidgetTester tester) async {
+      await pumpPanel(
+        tester,
+        taskWith(<PipelineChapter>[
+          chapter(
+            idx: 1,
+            promiseChecks: const <PromiseCheck>[
+              PromiseCheck(id: 1, fulfilled: true, evidence: '他把银鱼递了回来'),
+              PromiseCheck(id: 2, fulfilled: false, evidence: '只留了悬念没交代'),
+            ],
+          ),
+        ]),
+      );
+      expect(find.textContaining('回收清单打勾'), findsOneWidget);
+      expect(find.textContaining('1/2 条兑现'), findsOneWidget);
+      expect(find.textContaining('他把银鱼递了回来'), findsOneWidget);
+      expect(find.textContaining('只留了悬念没交代'), findsOneWidget);
+    });
+
+    testWidgets('打勾失败显示「未执行」而非「0 条兑现」',
+        (WidgetTester tester) async {
+      await pumpPanel(
+        tester,
+        taskWith(<PipelineChapter>[
+          chapter(
+            idx: 1,
+            promiseChecks: const <PromiseCheck>[PromiseCheck.failure],
+          ),
+        ]),
+      );
+      // 提示行与逐条明细都会出现「未执行」字样，故断言精确文案而非子串。
+      expect(find.textContaining('回收清单打勾未执行（验收调用失败）'),
+          findsOneWidget);
+      expect(find.textContaining('请人工复核'), findsOneWidget);
+      // 关键断言：不得显示成「0/1 条兑现」——那会被读成「验过了，都没兑现」。
+      expect(find.textContaining('条兑现'), findsNothing);
+    });
+
+    test('汇总区分兑现/未兑现/打勾失败三者', () {
+      final QualitySummary s = summarize(<PipelineChapter>[
+        chapter(
+          idx: 1,
+          promiseChecks: const <PromiseCheck>[
+            PromiseCheck(id: 1, fulfilled: true, evidence: 'a'),
+          ],
+        ),
+        chapter(
+          idx: 2,
+          promiseChecks: const <PromiseCheck>[
+            PromiseCheck(id: 1, fulfilled: false, evidence: 'b'),
+          ],
+        ),
+        chapter(
+          idx: 3,
+          promiseChecks: const <PromiseCheck>[PromiseCheck.failure],
+        ),
+      ]);
+      expect(s.promiseFulfilled, 1);
+      expect(s.promiseUnfulfilled, 1);
+      expect(
+        s.promiseCheckFailed,
+        1,
+        reason: '打勾失败必须单独计数，不能混进未兑现',
+      );
+    });
+
+    test('汇总统计伏笔未收与超时（传入台账与当前章号）', () {
+      final QualitySummary s = summarize(
+        <PipelineChapter>[chapter(idx: 10)],
+        ledger: const ForeshadowLedger(<ForeshadowEntry>[
+          ForeshadowEntry(desc: '银鱼来历', planted: 1),
+          ForeshadowEntry(desc: '断剑', planted: 3),
+          ForeshadowEntry(
+            desc: '旧约',
+            planted: 2,
+            recovered: 4,
+            status: 'closed',
+          ),
+        ]),
+        lastIdx: 10,
+      );
+      expect(s.openForeshadows, 2, reason: '已回收的不计入未收');
+      // 到第 10 章：planted=1 已 9 章、planted=3 已 7 章，两条都超 5 章阈值。
+      expect(s.staleForeshadows, 2);
+    });
+  });
+
+  group('打勾 prompt', () {
+    test('验收 prompt 含清单编号与「只暗示不算兑现」判据', () {
+      final String p = promiseVerifyPrompt(
+        '正文内容',
+        const <ForeshadowLine>[
+          ForeshadowLine('银鱼来历'),
+          ForeshadowLine('断剑'),
+        ],
+        7,
+      );
+      expect(p, contains('1. 银鱼来历'));
+      expect(p, contains('2. 断剑'));
+      expect(p, contains('第 7 章'));
+      expect(p, contains('只暗示/留白/远景铺陈不算兑现'));
+      expect(p, contains('evidence'));
+    });
+
+    test('补写 prompt 点名未兑现条目、给字数下限、禁止暗示代替', () {
+      final String p = promiseRepairPrompt(
+        '原正文内容',
+        const <UnfulfilledPromise>[
+          UnfulfilledPromise(desc: '银鱼来历', reason: '只留悬念'),
+        ],
+        3,
+        minWords: 1800,
+      );
+      expect(p, contains('银鱼来历'));
+      expect(p, contains('只留悬念'));
+      expect(p, contains('第 3 章'));
+      expect(p, contains('不得少于 1800 字'));
+      expect(p, contains('只增补不删减'));
+      expect(p, contains('不得用「似乎 / 也许 / 据说 / 留待后文」'));
     });
   });
 

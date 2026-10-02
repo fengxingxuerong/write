@@ -75,29 +75,71 @@ class AiPipelineService {
     return content;
   }
 
-  /// 检查超时未回收伏笔：埋设超过 staleAfter 章仍未回收的伏笔，返回告警列表。
-  List<String> _checkOpenForeshadows(String ledgerJson, int curIdx, {int staleAfter = 5}) {
-    if (ledgerJson.trim().isEmpty || ledgerJson.trim() == '[]') return <String>[];
-    try {
-      final dynamic decoded = jsonDecode(ledgerJson);
-      final List<dynamic> items = decoded is Map<String, dynamic>
-          ? (decoded['foreshadows'] as List<dynamic>? ?? <dynamic>[])
-          : (decoded is List<dynamic> ? decoded : <dynamic>[]);
-      final List<String> warns = <String>[];
-      for (final dynamic it in items) {
-        if (it is! Map<String, dynamic>) continue;
-        if (it['status'] == 'open' && it['recovered'] == null) {
-          final int planted = (it['planted'] as num?)?.toInt() ?? curIdx;
-          final int age = curIdx - planted;
-          if (age >= staleAfter) {
-            warns.add('⚠ 伏笔超时未收（已$age章）：${it['desc'] ?? '?'}（埋于第$planted章）');
-          }
-        }
+  /// 回收清单打勾结果里兑现的条数（用于「复检是否变好」的比较）。
+  static int _fulfilledCount(List<PromiseCheck> checks) =>
+      checks.where((PromiseCheck r) => r.fulfilled && !r.failed).length;
+
+  /// 取清单第 [id] 条（1 起）的描述；越界返回空串。
+  ///
+  /// 补写 prompt 要点名「哪一条没兑现」，而验收结果里只有序号 + 反馈，
+  /// 没有描述——这里按 [promiseBlock] 的同序映射回查（与
+  /// `applyClosures` 的映射规则一致）。查不到就返回空串让调用方过滤掉，
+  /// 宁可少补一条，也不能把错误的描述塞进 prompt 让模型改错地方。
+  static String _promiseDescAt(List<ForeshadowEntry> block, int id) {
+    final int n = id - 1;
+    if (n < 0 || n >= block.length) return '';
+    return block[n].desc;
+  }
+
+  /// 跑一轮回收清单验收，返回 `(打勾结果, 是否跑成)`。
+  ///
+  /// **[ok=false 绝不等于「全部未兑现」]**——与 [ChannelFactCheck] 的 `ok`
+  /// 同构的纪律：端点全失败 / 两次解析失败 / 不合 schema，都说明「验收没跑成」，
+  /// 此时若当成「都没兑现」，会触发一次针对不存在问题的补写，白烧一次调用并
+  /// 可能把好正文改坏。最多重试一次（对齐 Python `_verify` 的两次尝试）。
+  ///
+  /// 校验走编辑链（与写手异家族），理由同 Python：单点端点在思考链风暴期
+  /// 会原地连败，链式 failover 让健康池自动换端点。
+  Future<({List<PromiseCheck> checks, bool ok})> _verifyPromises(
+    AiPipelineTask task,
+    String text,
+    int idx,
+    List<ForeshadowEntry> block,
+  ) async {
+    final AiRoleConfig cfg = task.config.roleOf(AiRole.editor);
+    if (!_chainConfigured(cfg)) return (checks: const <PromiseCheck>[], ok: false);
+    final String prompt = promiseVerifyPrompt(
+      text,
+      block
+          .map((ForeshadowEntry e) => ForeshadowLine(e.desc))
+          .toList(),
+      idx,
+    );
+    for (int attempt = 0; attempt < 2; attempt++) {
+      final String raw = await _call(
+        task,
+        AiRole.editor,
+        promiseVerifySystemPrompt,
+        prompt,
+        isCancelled: () => false,
+      );
+      final Map<String, dynamic>? parsed = _parseJsonObject(raw);
+      final List<dynamic>? list = parsed?['results'] as List<dynamic>?;
+      if (list != null && list.isNotEmpty) {
+        return (
+          checks: list
+              .whereType<Map<String, dynamic>>()
+              .map(PromiseCheck.fromJson)
+              .where((PromiseCheck r) => r.id > 0 && !r.failed)
+              .toList(),
+          ok: true,
+        );
       }
-      return warns;
-    } catch (_) {
-      return <String>[];
+      if (attempt == 0) {
+        task.addLog('  [打勾] 校验输出为空/解析失败，重试一次…');
+      }
     }
+    return (checks: const <PromiseCheck>[], ok: false);
   }
 
   /// 关卡5 跑一轮编造核查，返回 `(命中列表, 是否跑成)`。
@@ -876,22 +918,6 @@ class AiPipelineService {
             '${scenes.length - lostScenes.length}/${scenes.length}，已记入本章问题');
       }
 
-      final PipelineChapter chapter = PipelineChapter(
-        idx: idx,
-        title: title,
-        content: fullText,
-        rawWords: rawWords,
-        words: _countWords(fullText),
-        issues: issues,
-        scenesPlanned: scenes.length,
-        scenesWritten: scenes.length - lostScenes.length,
-        protagonistMentions: heroMentions,
-        review: qualityReview,
-        factCheck: factCheck,
-      );
-      task.chapters.add(chapter);
-      task.chapters.sort((a, b) => a.idx.compareTo(b.idx));
-      task.totalWords += chapter.words;
 
       // 8) 跨章状态提取：维护状态清单供下一章写作遵守（失败保留旧状态）
       if (task.config.useStateTrack) {
@@ -909,6 +935,111 @@ class AiPipelineService {
         }
       }
 
+      // 8.5) 回收清单打勾：必兑现清单逐条验收 → 未兑现定向补写 → ✅ 联动台账
+      //
+      // 【为什么补】Python 端闭环是「清单注入 → 写手 → 打勾 → 补写 → 台账联动」，
+      // Dart 端此前**只有「台账注入」**（8.5 段），没有打勾与联动：
+      // ① 写手是否真的兑现了伏笔，无人验收；② 台账 closed 完全依赖伏笔官
+      // 二次提取，限流/截断下易失败——正文明明回收了伏笔、台账却仍 open，
+      // 终审官会误判「伏笔悬空」。打勾 ✅ 直接联动 closed（证据句作回收凭证），
+      // 台账不再依赖二次提取。
+      //
+      // 顺序上放在 8.5 段**之前**：打勾读的是「本章写作前的台账」，
+      // 若先用伏笔官更新了台账，清单与本章的对应关系就乱了。
+      List<PromiseCheck>? promiseChecks;
+      final List<ForeshadowEntry> promiseBlock =
+          task.ledger.promiseBlock(idx, maxPromises: 6, staleAfter: 5);
+      if (task.config.usePromiseCheck && promiseBlock.isNotEmpty) {
+        task.addLog('  [打勾] 本章必兑现清单 ${promiseBlock.length} 条：');
+        for (int k = 0; k < promiseBlock.length; k++) {
+          task.addLog('    ${k + 1}. ${promiseBlock[k].desc}');
+        }
+        final ({List<PromiseCheck> checks, bool ok}) vr = await _verifyPromises(
+          task,
+          fullText,
+          idx,
+          promiseBlock,
+        );
+        if (!vr.ok) {
+          // 验收环节失败：正文可能没问题，是验收坏了。不触发补写、不联动台账，
+          // 但必须留痕——否则这次失败对作者完全不可见。
+          promiseChecks = <PromiseCheck>[PromiseCheck.failure];
+          task.addLog('  [打勾] ☠ 校验调用失败，打勾未执行——请人工复核伏笔兑现');
+          issues.add('第 $idx 章回收清单打勾未执行（验收调用失败），'
+              '本章伏笔兑现情况需人工复核');
+        } else {
+          promiseChecks = vr.checks;
+          for (final PromiseCheck r in vr.checks) {
+            task.addLog('  [打勾] ${r.mark} 清单${r.id}：'
+                '${r.evidence.length > 50 ? r.evidence.substring(0, 50) : r.evidence}');
+          }
+          final List<PromiseCheck> unfulfilled = vr.checks
+              .where((PromiseCheck r) => !r.fulfilled)
+              .toList();
+          if (unfulfilled.isNotEmpty) {
+            task.addLog('  [打勾] ${unfulfilled.length} 条未兑现，编辑链定向补写…');
+            final String fix = await call(
+              AiRole.editor,
+              editorSystemPrompt,
+              promiseRepairPrompt(
+                fullText,
+                unfulfilled
+                    .map((PromiseCheck r) => UnfulfilledPromise(
+                          desc: _promiseDescAt(promiseBlock, r.id),
+                          reason: r.evidence,
+                        ))
+                    .where((UnfulfilledPromise e) => e.desc.isNotEmpty)
+                    .toList(),
+                idx,
+                minWords: (_countWords(fullText) * factFixMinRatio).ceil(),
+              ),
+            );
+            // 补写稿同样要过采纳闸：过不了就保留原文照记未兑现，
+            // 否则「补了但被整份丢弃」会被记成「已兑现」。
+            final String? why = fix.trim().isEmpty
+                ? '空产出'
+                : FanqieGateChecker.patchReject(
+                    fix,
+                    baseText: fullText,
+                    genre: task.config.genre,
+                    maxWords: (_countWords(fullText) * 2).ceil(),
+                  );
+            if (why != null) {
+              task.addLog('  [打勾] 补写稿未过采纳闸（$why），保留原文照记未兑现');
+              for (final PromiseCheck r in unfulfilled.take(3)) {
+                issues.add('第 $idx 章伏笔未兑现（清单${r.id}）：${r.evidence}');
+              }
+            } else {
+              final String repaired = '${fullText.trimRight()}\n\n${fix.trim()}';
+              final ({List<PromiseCheck> checks, bool ok}) vr2 =
+                  await _verifyPromises(task, repaired, idx, promiseBlock);
+              if (vr2.ok && _fulfilledCount(vr2.checks) > _fulfilledCount(vr.checks)) {
+                fullText = repaired;
+                promiseChecks = vr2.checks;
+                task.addLog('  [打勾] 复检兑现 '
+                    '${_fulfilledCount(vr.checks)} → ${_fulfilledCount(vr2.checks)} 条，'
+                    '采纳补写稿（${_countWords(repaired)} 字）');
+              } else {
+                task.addLog('  [打勾] 复检未改善'
+                    '${vr2.ok ? '（仍 ${_fulfilledCount(vr2.checks)} 条）' : '（复检未跑成）'}、'
+                    '回滚保留原文');
+                for (final PromiseCheck r in unfulfilled.take(3)) {
+                  issues.add('第 $idx 章伏笔未兑现（清单${r.id}，补写未改善）：'
+                      '${r.evidence}');
+                }
+              }
+            }
+          }
+          // 打勾 ✅ 联动台账（未兑现的条目不动，仍 open）。
+          final (ForeshadowLedger next, int nClosed) =
+              task.ledger.applyClosures(promiseBlock, promiseChecks, idx);
+          if (nClosed > 0) {
+            task.setLedger(next);
+            task.addLog('  [打勾] $nClosed 条已联动标记 closed（证据句作回收凭证）');
+          }
+        }
+      }
+
       // 8.5) 伏笔台账提取：记录新埋伏笔/标记回收（失败保留旧台账，不阻断）
       final String fs = await call(
         AiRole.verifier,
@@ -919,25 +1050,45 @@ class AiPipelineService {
       final List<dynamic>? fsList = fsData?['foreshadows'] as List<dynamic>?;
       if (fsData != null && fsList != null && fsList.isNotEmpty) {
         task.foreshadowLedger = jsonEncode(fsData);
-        final int nOpen = fsList.whereType<Map<String, dynamic>>().where((dynamic e) => e['status'] == 'open').length;
-        final int nClosed = fsList.whereType<Map<String, dynamic>>().where((dynamic e) => e['status'] == 'closed').length;
-        task.addLog('  [伏笔] 台账已更新（open $nOpen / closed $nClosed）');
+        final ForeshadowLedger l = task.ledger;
+        task.addLog('  [伏笔] 台账已更新'
+            '（open ${l.open.length} / closed ${l.closed.length}）');
       } else {
         task.addLog('  [伏笔] 提取失败，保留旧台账');
       }
 
       // 8.6) 每 5 章检查超时未收伏笔（防长篇丢伏笔/改设定）
       if (idx % 5 == 0) {
-        final List<String> fsWarns = _checkOpenForeshadows(task.foreshadowLedger, idx, staleAfter: 5);
-        if (fsWarns.isNotEmpty) {
+        final List<ForeshadowEntry> stale =
+            task.ledger.stale(idx, staleAfter: 5);
+        if (stale.isNotEmpty) {
           task.addLog('  [伏笔] 超时未收告警：');
-          for (final String w in fsWarns) {
-            task.addLog('    $w');
+          for (final ForeshadowEntry e in stale) {
+            task.addLog('    ⚠ 伏笔超时未收（已${e.age(idx)}章）：'
+                '${e.desc}（埋于第${e.planted}章）');
           }
         } else {
           task.addLog('  [伏笔] 无超时未收伏笔 ✅');
         }
       }
+
+      final PipelineChapter chapter = PipelineChapter(
+        idx: idx,
+        title: title,
+        content: fullText,
+        rawWords: rawWords,
+        words: _countWords(fullText),
+        issues: issues,
+        scenesPlanned: scenes.length,
+        scenesWritten: scenes.length - lostScenes.length,
+        protagonistMentions: heroMentions,
+        review: qualityReview,
+        factCheck: factCheck,
+        promiseChecks: promiseChecks,
+      );
+      task.chapters.add(chapter);
+      task.chapters.sort((a, b) => a.idx.compareTo(b.idx));
+      task.totalWords += chapter.words;
 
       task.addLog('  [完成] 第 $idx 章：${chapter.words} 字 | 累计 ${task.totalWords} 字');
       await _storage.saveTask(task);

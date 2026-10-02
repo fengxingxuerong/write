@@ -345,6 +345,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
   bool _useEditor = true;
   bool _useVerifier = true;
   bool _useFactCheck = true;
+  bool _usePromiseCheck = true;
 
   /// 是否把未实测的候选端点（NVIDIA / OpenRouter）也纳入备用链。
   bool _useUnverified = false;
@@ -378,6 +379,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
       _useEditor = cfg.useEditor;
       _useVerifier = cfg.useVerifier;
     _useFactCheck = cfg.useFactCheck;
+    _usePromiseCheck = cfg.usePromiseCheck;
       _roles = <AiRole, AiRoleConfig>{
         for (final AiRole r in AiRole.values) r: cfg.roleOf(r),
       };
@@ -404,6 +406,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
       useEditor: _useEditor,
       useVerifier: _useVerifier,
       useFactCheck: _useFactCheck,
+      usePromiseCheck: _usePromiseCheck,
       roles: _roles,
     );
     final List<AiRole> missing = AiPipelineService.missingRoles(config);
@@ -574,6 +577,13 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
                 '每章多一次模型调用，配额紧张可关'),
             value: _useFactCheck,
             onChanged: (bool v) => setState(() => _useFactCheck = v),
+          ),
+          SwitchListTile(
+            title: const Text('启用回收清单打勾'),
+            subtitle: const Text('必兑现清单逐条验收，未兑现定向补写，通过即联动台账。'
+                '仅在有伏笔埋设超 5 章时才产生调用'),
+            value: _usePromiseCheck,
+            onChanged: (bool v) => setState(() => _usePromiseCheck = v),
           ),
           const SizedBox(height: 8),
           _section('固定角色分工'),

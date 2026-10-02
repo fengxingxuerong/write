@@ -37,7 +37,14 @@ class PipelineQualityPanel extends StatelessWidget {
         hint: '流水线跑出第一章后，这里会显示逐章的五维评分、编造核查与阻断项。',
       );
     }
-    final QualitySummary s = summarize(chapters);
+    final QualitySummary s = summarize(
+      chapters,
+      ledger: task.ledger,
+      lastIdx: chapters.map((PipelineChapter c) => c.idx).fold<int>(
+            0,
+            (int a, int b) => a > b ? a : b,
+          ),
+    );
     return ListView(
       padding: const EdgeInsets.all(AppTokens.s3),
       children: <Widget>[
@@ -58,6 +65,11 @@ class QualitySummary {
     required this.passCount,
     required this.notChecked,
     required this.residualFabrications,
+    this.openForeshadows = 0,
+    this.staleForeshadows = 0,
+    this.promiseFulfilled = 0,
+    this.promiseUnfulfilled = 0,
+    this.promiseCheckFailed = 0,
   });
 
   /// 实际评过分的章数。
@@ -71,10 +83,33 @@ class QualitySummary {
 
   /// 残留编造命中总数（定点修复检后仍存在的）。
   final int residualFabrications;
+
+  /// 未回收伏笔数（台账 open）。
+  final int openForeshadows;
+
+  /// 超时不收伏笔数（埋设 N 章以上仍 open，终审会判「伏笔悬空」硬伤）。
+  final int staleForeshadows;
+
+  /// 已兑现的伏笔打勾总数（全书记账）。
+  final int promiseFulfilled;
+
+  /// 未兑现的打勾总数（需人工处理）。
+  final int promiseUnfulfilled;
+
+  /// 打勾环节失败次数（验收没跑成——**不等于**「都没兑现」）。
+  final int promiseCheckFailed;
 }
 
 /// 汇总全书质量口径（供面板与测试共用）。
-QualitySummary summarize(List<PipelineChapter> chapters) {
+///
+/// [ledger] 是结构化伏笔台账；超时不收的判定需要「截至第几章」，
+/// 故由调用方传入 [lastIdx]（通常取最大章号）而不是在函数里猜——
+/// 空书没有章号可猜，猜错会让「超时不收」静默恒为 0。
+QualitySummary summarize(
+  List<PipelineChapter> chapters, {
+  ForeshadowLedger ledger = ForeshadowLedger.empty,
+  int lastIdx = 0,
+}) {
   final List<ChapterQualityReview> scored = chapters
       .map((PipelineChapter c) => c.review)
       .whereType<ChapterQualityReview>()
@@ -86,20 +121,39 @@ QualitySummary summarize(List<PipelineChapter> chapters) {
   }
   int notChecked = 0;
   int residual = 0;
+  int fulfilled = 0;
+  int unfulfilled = 0;
+  int checkFailed = 0;
   for (final PipelineChapter c in chapters) {
     final ChapterFactCheck? f = c.factCheck;
     // 未核查与核查未跑成都归入「未核查」——两者都不构成「无编造」的证据。
     if (f == null || !f.ok) {
       notChecked++;
-      continue;
+    } else {
+      residual += f.count;
     }
-    residual += f.count;
+    // 打勾：failed 单独计——「验收没跑成」与「都没兑现」是相反的结论，
+    // 混进 unfulfilled 会让作者误以为正文有问题。
+    for (final PromiseCheck r in c.promiseChecks ?? const <PromiseCheck>[]) {
+      if (r.failed) {
+        checkFailed++;
+      } else if (r.fulfilled) {
+        fulfilled++;
+      } else {
+        unfulfilled++;
+      }
+    }
   }
   return QualitySummary(
     scoredCount: scored.length,
     passCount: pass,
     notChecked: notChecked,
     residualFabrications: residual,
+    openForeshadows: ledger.open.length,
+    staleForeshadows: ledger.stale(lastIdx, staleAfter: 5).length,
+    promiseFulfilled: fulfilled,
+    promiseUnfulfilled: unfulfilled,
+    promiseCheckFailed: checkFailed,
   );
 }
 
@@ -145,6 +199,36 @@ class _SummaryBar extends StatelessWidget {
             value: '${summary.residualFabrications}',
             hint: '定点修复检后仍存在的无据断言',
             color: summary.residualFabrications > 0 ? ink.danger : ink.success,
+          ),
+          _Stat(
+            label: '打勾兑现',
+            value: '${summary.promiseFulfilled}',
+            hint: '回收清单验收通过（✅ 联动台账 closed）条数',
+            color: summary.promiseFulfilled > 0 ? ink.success : ink.inkFaint,
+          ),
+          _Stat(
+            label: '打勾未兑现',
+            value: '${summary.promiseUnfulfilled}',
+            hint: '验收发现未兑现（❌，需人工或补写）条数',
+            color: summary.promiseUnfulfilled > 0 ? ink.warn : ink.success,
+          ),
+          _Stat(
+            label: '打勾失败',
+            value: '${summary.promiseCheckFailed}',
+            hint: '验收环节没跑成——不等于「都没兑现」，需人工复核',
+            color: summary.promiseCheckFailed > 0 ? ink.danger : ink.success,
+          ),
+          _Stat(
+            label: '伏笔未收',
+            value: '${summary.openForeshadows}',
+            hint: '台账 open 条目（已埋设未回收）',
+            color: summary.openForeshadows > 0 ? ink.ink : ink.success,
+          ),
+          _Stat(
+            label: '伏笔超时',
+            value: '${summary.staleForeshadows}',
+            hint: '埋设超 5 章仍未回收——终审会判「伏笔悬空」硬伤',
+            color: summary.staleForeshadows > 0 ? ink.danger : ink.success,
           ),
         ],
       ),
@@ -223,6 +307,10 @@ class _ChapterQualityCard extends StatelessWidget {
             _ReviewSection(review: chapter.review),
             const SizedBox(height: AppTokens.s2),
             _FactCheckSection(factCheck: chapter.factCheck),
+            if (chapter.promiseChecks != null) ...<Widget>[
+              const SizedBox(height: AppTokens.s2),
+              _PromiseSection(checks: chapter.promiseChecks!),
+            ],
             if (chapter.issues.isNotEmpty) ...<Widget>[
               const SizedBox(height: AppTokens.s2),
               Text(
@@ -363,6 +451,62 @@ class _DimBar extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 回收清单打勾区：逐条 ✅/❌ + 证据句。
+///
+/// **证据句必须展示**——它是回收凭证。「已回收 ✅」配一句「是的我写了」，
+/// 作者无从复核；配上正文原句才能判断验收官是不是在敷衍。
+class _PromiseSection extends StatelessWidget {
+  /// 构造打勾区。
+  const _PromiseSection({required this.checks});
+
+  /// 打勾结果。
+  final List<PromiseCheck> checks;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppInk ink = AppInk.of(context);
+    if (checks.isEmpty) {
+      return const _HintLine(
+        text: '本章无必兑现清单（没有埋设超时的伏笔）',
+        icon: Icons.check_circle_outline,
+        kind: _HintKind.muted,
+      );
+    }
+    final bool failed = checks.any((PromiseCheck r) => r.failed);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        _HintLine(
+          text: failed
+              ? '☠ 回收清单打勾未执行（验收调用失败）——请人工复核伏笔兑现'
+              : '回收清单打勾：${checks.where((PromiseCheck r) => r.fulfilled).length}'
+                  '/${checks.length} 条兑现',
+          icon: failed ? Icons.error_outline : Icons.checklist_rtl,
+          kind: failed ? _HintKind.warn : _HintKind.muted,
+        ),
+        const SizedBox(height: 4),
+        for (final PromiseCheck r in checks)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 3),
+            child: Text(
+              '${r.mark} 清单${r.id > 0 ? r.id : '-'}：${r.evidence}',
+              style: AppFonts.text(
+                r.failed
+                    ? ink.danger
+                    : r.fulfilled
+                        ? ink.success
+                        : ink.warn,
+                size: 12,
+                height: 1.5,
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

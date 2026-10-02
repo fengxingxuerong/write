@@ -795,7 +795,29 @@ void main() {
       expect(joined(t), contains('[流水线] 完成：1 章'));
     });
 
-    test('每 5 章审校官介入：一致性问题入库 + 伏笔超时告警', () async {
+    test('伏笔埋设超时才告警（脏章号不刷屏）', () async {
+      // planted=1：到第 5 章已 4 章，未到 5 章阈值 → 不告警。
+      // 旧实现把缺失的 planted 当 curIdx（=0），于是每个缺章号的条目恒
+      // 「已5章」必告警——告警一旦刷屏就等于没有告警。
+      final _FakeRouter quiet = _FakeRouter(
+        baseRespond(foreshadow: '{"foreshadows":[{"desc":"追杀令","status":"open","planted":1}]}'),
+      );
+      final AiPipelineTask notYet0 = task(config(useVerifier: false))
+        ..outline = outlineOf(<int>[5]);
+      final AiPipelineTask notYet = await runTask(notYet0, quiet);
+      expect(joined(notYet), isNot(contains('伏笔超时未收')));
+
+      // planted=0（章号缺失，脏数据）：一律不告警。
+      final _FakeRouter dirty = _FakeRouter(
+        baseRespond(foreshadow: '{"foreshadows":[{"desc":"旧约","status":"open","planted":0}]}'),
+      );
+      final AiPipelineTask bad0 = task(config(useVerifier: false))
+        ..outline = outlineOf(<int>[5]);
+      final AiPipelineTask bad = await runTask(bad0, dirty);
+      expect(joined(bad), isNot(contains('伏笔超时未收')));
+    });
+
+    test('每 5 章审校官介入：一致性问题入库 + 伏笔台账更新', () async {
       final AiPipelineTask t0 = task(config(useVerifier: true))
         ..outline = outlineOf(<int>[5])
         ..chapters.add(
@@ -813,15 +835,22 @@ void main() {
           verifierIssues:
               '{"issues":[{"chapter":5,"type":"设定矛盾","desc":"境界忽高忽低"}]}',
           foreshadow:
-              '{"foreshadows":[{"desc":"血煞盟的追杀令","status":"open","planted":0}]}',
+              '{"foreshadows":[{"desc":"血煞盟的追杀令","status":"open","planted":1}]}',
         ),
       );
       final AiPipelineTask t = await runTask(t0, router);
 
       expect(t.status, PipelineTaskStatus.done);
       expect(joined(t), contains('[审校] ⚠ 第5章 设定矛盾: 境界忽高忽低'));
-      expect(joined(t), contains('伏笔超时未收（已5章）')); // planted=0 → 第 5 章时已超期
-      expect(joined(t), contains('血煞盟的追杀令'));
+      // planted=1 → 到第 5 章已 4 章，未到 staleAfter=5 阈值，故不告警。
+      // （旧实现把 planted 缺失当 curIdx、即 planted=0 → 恒「已5章」必告警，
+      //   等于让每个缺章号的条目都刷屏；新实现按 ForeshadowEntry.isStale
+      //   的脏数据守卫处理，planted<=0 一律不告警。）
+      expect(joined(t), isNot(contains('伏笔超时未收')));
+      // 台账内容查结构化字段（[伏笔] 日志只打印 open/closed 计数）。
+      expect(t.ledger.items.map((ForeshadowEntry e) => e.desc),
+          contains('血煞盟的追杀令'));
+      expect(t.ledger.open.length, 1);
       expect(
         t.chapters.last.issues.any((String e) => e.contains('第5章 设定矛盾')),
         isTrue,

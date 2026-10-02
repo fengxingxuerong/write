@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:novel_writer/models/llm_config.dart';
 
 /// 多模型协作流水线 —— 角色枚举。
@@ -138,6 +140,17 @@ class AiPipelineConfig {
   /// 每次核查多一次 LLM 调用（命中时再加修复 + 复检两次），配额紧张可关。
   final bool useFactCheck;
 
+  /// 回收清单打勾（必兑现清单逐条验收，未兑现定向补写，✅ 联动台账 closed）。
+  ///
+  /// **默认开启**：这是「伏笔台账闭环」的最后一环。此前 Dart 端只有「台账注入
+  /// 写手」，没有验收——写手是否真的兑现了伏笔无人核对，台账 closed 完全依赖
+  /// 伏笔官二次提取，限流下易失败，于是正文明明回收了伏笔、台账却仍 open，
+  /// 终审官会误判「伏笔悬空」。
+  ///
+  /// 仅在有「埋设超时未收」的伏笔时才产生调用（`promiseBlock` 为空则完全跳过），
+  /// 所以正常推进的书几乎不额外花钱——配额紧张也可关。
+  final bool usePromiseCheck;
+
   /// 各角色配置（未配置的默认启用，模型需用户在配置页填写）。
   final Map<AiRole, AiRoleConfig> roles;
 
@@ -155,6 +168,7 @@ class AiPipelineConfig {
     this.rewriteThreshold = 55,
     this.useStateTrack = true,
     this.useFactCheck = true,
+    this.usePromiseCheck = true,
     this.roles = const <AiRole, AiRoleConfig>{},
   });
 
@@ -182,6 +196,7 @@ class AiPipelineConfig {
         'rewriteThreshold': rewriteThreshold,
         'useStateTrack': useStateTrack,
         'useFactCheck': useFactCheck,
+        'usePromiseCheck': usePromiseCheck,
         'roles': roles.values.map((AiRoleConfig e) => e.toJson()).toList(),
       };
 
@@ -206,6 +221,8 @@ class AiPipelineConfig {
       useStateTrack: json['useStateTrack'] as bool? ?? true,
       // 旧任务文件无此键 → 默认开启（能力补齐方向），不是默认关闭。
       useFactCheck: json['useFactCheck'] as bool? ?? true,
+      // 同上：旧任务文件无此键 → 默认开启（能力补齐方向）。
+      usePromiseCheck: json['usePromiseCheck'] as bool? ?? true,
       roles: roles,
     );
   }
@@ -423,6 +440,255 @@ class ChapterFactCheck {
       );
 }
 
+/// 一条伏笔台账条目。
+///
+/// 字段与 Python 端 `foreshadow_extract` / `apply_promise_closures` 逐字对齐
+/// （`desc` / `planted` / `recovered` / `status`），双端同一本书的台账才能
+/// 横向比较。`evidence` 是 Dart 侧新增：打勾通过时的正文证据句作**回收凭证**
+/// ——没有凭证的 closed 只是一句断言，作者无法复核。
+///
+/// **超时不收**（[isStale]）是本模型最重要的一条派生属性：终审官会把
+/// 「悬空伏笔」判为硬伤，但它单看台账发现不了——需要拿当前章号与埋设章号
+/// 一减才知道。做成模型属性而非 UI 临时算，是为了让告警在任何展示入口一致。
+class ForeshadowEntry {
+  /// 伏笔描述（一句话）。
+  final String desc;
+
+  /// 埋设章号。
+  final int planted;
+
+  /// 回收章号；未回收为 null。
+  final int? recovered;
+
+  /// 状态：`open` 未回收 / `closed` 已回收。
+  final String status;
+
+  /// 回收证据句（打勾通过时由验收官给出；无则为空）。
+  final String evidence;
+
+  /// 构造条目。
+  const ForeshadowEntry({
+    required this.desc,
+    required this.planted,
+    this.recovered,
+    this.status = 'open',
+    this.evidence = '',
+  });
+
+  /// 是否已回收。
+  ///
+  /// 只看 `status`、不看 `recovered`：两者可能不同步（模型只更新了章号
+  /// 没改状态），以 status 为唯一事实源，避免出现「显示 closed 却查不到
+  /// 回收章号」的自相矛盾。
+  bool get closed => status == 'closed';
+
+  /// 截至 [currentIdx] 仍未回收，且已埋设 [staleAfter] 章以上（超时不收）。
+  ///
+  /// [staleAfter] <= 0 时关闭判定（收尾章模式不按超时筛）；埋设章号缺省
+  /// 或大于当前章号（脏台账）一律不告警——宁可漏报也不误伤。
+  bool isStale(int currentIdx, {int staleAfter = 5}) {
+    if (closed || staleAfter <= 0) return false;
+    if (planted <= 0 || currentIdx - planted < staleAfter) return false;
+    return true;
+  }
+
+  /// 截至 [currentIdx] 的存续章数（已回收返回 0）。
+  int age(int currentIdx) => closed ? 0 : (currentIdx - planted).clamp(0, 1 << 30);
+
+  /// 序列化。
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'desc': desc,
+        'planted': planted,
+        'recovered': recovered,
+        'status': status,
+        'evidence': evidence,
+      };
+
+  /// 反序列化。
+  ///
+  /// `status` 非法值按 open 处理——fail-open 优于把脏数据当已回收
+  /// （虚报「已回收」会让终审漏掉真正的悬空伏笔）。
+  factory ForeshadowEntry.fromJson(Map<String, dynamic> json) {
+    return ForeshadowEntry(
+      desc: (json['desc'] ?? '').toString().trim(),
+      planted: (json['planted'] as num?)?.toInt() ?? 0,
+      recovered: (json['recovered'] as num?)?.toInt(),
+      status: json['status'] == 'closed' ? 'closed' : 'open',
+      evidence: (json['evidence'] ?? '').toString(),
+    );
+  }
+
+  /// 打勾通过后的新条目（标记 closed + 记回收章号与证据句）。
+  ForeshadowEntry markClosed(int chapterIdx, String ev) => ForeshadowEntry(
+        desc: desc,
+        planted: planted,
+        recovered: chapterIdx,
+        status: 'closed',
+        evidence: ev.length > 80 ? ev.substring(0, 80) : ev,
+      );
+}
+
+/// 一条回收清单的验收结果（打勾 ✅/❌）。
+///
+/// [failed] 表示**验收环节本身没跑成**（端点全失败 / 两次解析失败），与
+/// 「验收了但没兑现」（[fulfilled]=false）是相反的结论：前者不该触发补写
+/// （正文没问题，是验收坏了），更不该联动台账（否则一次静默失效会被记成
+/// N 条伏笔已回收）。
+class PromiseCheck {
+  /// 清单序号（从 1 开始）。
+  final int id;
+
+  /// 是否兑现（答案落到纸面；只暗示 / 留白 / 远景铺陈不算）。
+  final bool fulfilled;
+
+  /// 正文证据句（未兑现则填缺失原因）。
+  final String evidence;
+
+  /// 验收环节是否失败（true 时本条无实质结论）。
+  final bool failed;
+
+  /// 构造验收结果。
+  const PromiseCheck({
+    required this.id,
+    required this.fulfilled,
+    required this.evidence,
+    this.failed = false,
+  });
+
+  /// 验收环节失败时的占位结果（`id` 用 -1，与真实序号区分）。
+  static const PromiseCheck failure = PromiseCheck(
+    id: -1,
+    fulfilled: false,
+    evidence: '校验调用失败，打勾未执行（非正文问题，是验收环节失败）',
+    failed: true,
+  );
+
+  /// 打勾标记（✅ / ❌ / ☠）。
+  String get mark => failed ? '☠' : (fulfilled ? '✅' : '❌');
+
+  /// 序列化。
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'id': id,
+        'fulfilled': fulfilled,
+        'evidence': evidence,
+        'failed': failed,
+      };
+
+  /// 反序列化。
+  factory PromiseCheck.fromJson(Map<String, dynamic> json) => PromiseCheck(
+        id: (json['id'] as num?)?.toInt() ?? -1,
+        fulfilled: json['fulfilled'] == true,
+        evidence: (json['evidence'] ?? '').toString(),
+        failed: json['failed'] == true,
+      );
+}
+
+/// 伏笔台账（有序列表，保持埋设顺序）。
+class ForeshadowLedger {
+  /// 构造台账。
+  const ForeshadowLedger(this.items);
+
+  /// 全部条目（按埋设顺序）。
+  final List<ForeshadowEntry> items;
+
+  /// 空台账。
+  static const ForeshadowLedger empty =
+      ForeshadowLedger(<ForeshadowEntry>[]);
+
+  /// 未回收条目。
+  List<ForeshadowEntry> get open =>
+      items.where((ForeshadowEntry e) => !e.closed).toList();
+
+  /// 已回收条目。
+  List<ForeshadowEntry> get closed =>
+      items.where((ForeshadowEntry e) => e.closed).toList();
+
+  /// 超时不收的条目（截至 [currentIdx]）。
+  List<ForeshadowEntry> stale(int currentIdx, {int staleAfter = 5}) =>
+      items
+          .where((ForeshadowEntry e) =>
+              e.isStale(currentIdx, staleAfter: staleAfter))
+          .toList();
+
+  /// 反序列化（坏数据一律退化为空台账，绝不让整本任务打不开）。
+  factory ForeshadowLedger.parse(String raw) {
+    if (raw.trim().isEmpty) return empty;
+    try {
+      final dynamic decoded = jsonDecode(raw);
+      if (decoded is! Map) return empty;
+      final List<dynamic> list =
+          decoded['foreshadows'] as List<dynamic>? ?? const [];
+      return ForeshadowLedger(
+        list
+            .whereType<Map<String, dynamic>>()
+            .map(ForeshadowEntry.fromJson)
+            // desc 为空的条目无法验收也不可展示，直接丢弃。
+            .where((ForeshadowEntry e) => e.desc.isNotEmpty)
+            .toList(),
+      );
+    } catch (_) {
+      return empty;
+    }
+  }
+
+  /// 序列化（供导出与下游复用）。
+  String encode() => jsonEncode(<String, dynamic>{
+        'foreshadows': items.map((ForeshadowEntry e) => e.toJson()).toList(),
+      });
+
+  /// 返回「本章必兑现清单」条目（最多 [maxPromises] 条）。
+  ///
+  /// 与 Python `build_promise_block` 同口径：`staleAfter > 0` 时只取
+  /// 「埋设已超时」的条目——普通章不该背全部回收负担，只在伏笔快烂时上
+  /// 硬约束；`staleAfter <= 0`（收尾章）取全部 open 前 N 条。
+  List<ForeshadowEntry> promiseBlock(
+    int currentIdx, {
+    int maxPromises = 6,
+    int staleAfter = 5,
+  }) {
+    final List<ForeshadowEntry> pool =
+        staleAfter > 0 ? stale(currentIdx, staleAfter: staleAfter) : open;
+    return pool.take(maxPromises).toList();
+  }
+
+  /// 打勾 ✅ 联动台账：把 [results] 里校验通过的条目标记 closed。
+  ///
+  /// **映射关系**：清单第 n 条 ↔ [promise] 列表第 n 个（与
+  /// `build_promise_block` 同序产出，见 Python `apply_promise_closures`）。
+  /// 序号越界、或存在验收环节失败（[PromiseCheck.failed]）的条目一律不联动——
+  /// **「验收没跑成」绝不等于「已回收」**。
+  ///
+  /// 返回打勾后的**新台账**与关闭数量（原台账不可变，便于失败回滚）。
+  (ForeshadowLedger, int) applyClosures(
+    List<ForeshadowEntry> promise,
+    List<PromiseCheck> results,
+    int chapterIdx,
+  ) {
+    if (promise.isEmpty || results.isEmpty) return (this, 0);
+    // 验收环节失败时整体不联动：宁可台账停在 open，也不能把一次静默失效
+    // 记成 N 条伏笔已回收。
+    if (results.any((PromiseCheck r) => r.failed)) return (this, 0);
+    final List<ForeshadowEntry> next = List<ForeshadowEntry>.from(items);
+    int closed = 0;
+    for (final PromiseCheck r in results) {
+      if (!r.fulfilled) continue;
+      final int n = r.id - 1;
+      if (n < 0 || n >= promise.length) continue;
+      final ForeshadowEntry target = promise[n];
+      final int idx = next.indexWhere(
+        (ForeshadowEntry e) =>
+            e.desc == target.desc &&
+            e.planted == target.planted &&
+            !e.closed,
+      );
+      if (idx < 0) continue;
+      next[idx] = next[idx].markClosed(chapterIdx, r.evidence);
+      closed++;
+    }
+    return (ForeshadowLedger(next), closed);
+  }
+}
+
 /// 单章生成记录。
 class PipelineChapter {
   /// 章节序号。
@@ -479,6 +745,13 @@ class PipelineChapter {
   /// 本章编造核查结果（未核查为 null，与「核查通过 0 命中」严格区分）。
   final ChapterFactCheck? factCheck;
 
+  /// 本章回收清单打勾结果（未打勾为 null）。
+  ///
+  /// 每条含 ✅/❌ 与正文证据句——**证据句是回收凭证**，没有它，
+  /// 「已回收」只是一句无法复核的断言（Python 端 `verify_promises_prompt`
+  /// 同样强制要求 evidence）。
+  final List<PromiseCheck>? promiseChecks;
+
   /// 构造记录。
   const PipelineChapter({
     required this.idx,
@@ -492,6 +765,7 @@ class PipelineChapter {
     this.protagonistMentions = -1,
     this.review,
     this.factCheck,
+    this.promiseChecks,
   });
 
   /// 序列化。
@@ -507,6 +781,7 @@ class PipelineChapter {
         'protagonistMentions': protagonistMentions,
         'review': review?.toJson(),
         'factCheck': factCheck?.toJson(),
+        'promiseChecks': promiseChecks?.map((PromiseCheck e) => e.toJson()).toList(),
       };
 
   /// 反序列化。
@@ -534,6 +809,13 @@ class PipelineChapter {
           : ChapterFactCheck.fromJson(
               Map<String, dynamic>.from(json['factCheck'] as Map),
             ),
+      // null = 本章没打勾；空列表 = 打过勾但清单为空（合法，区别于未打勾）。
+      promiseChecks: json['promiseChecks'] == null
+          ? null
+          : (json['promiseChecks'] as List<dynamic>)
+              .whereType<Map<String, dynamic>>()
+              .map(PromiseCheck.fromJson)
+              .toList(),
     );
   }
 }
@@ -614,6 +896,17 @@ class AiPipelineTask {
     if (v is String && v.trim().isNotEmpty) return v.trim();
     return '未命名';
   }
+
+  /// 伏笔台账（结构化视图）。
+  ///
+  /// [foreshadowLedger] 是原始 JSON 串（模型每次整份重写），本 getter 负责
+  /// 解析成 [ForeshadowLedger]。旧代码在三处各写一遍 `jsonDecode` + 逐字段
+  /// 取值，且**各自 try/catch 各自兜底**，一处漏判就会静默返回空清单——
+  /// 集中到这里后，「解析失败 = 空台账」只有一个地方决定。
+  ForeshadowLedger get ledger => ForeshadowLedger.parse(foreshadowLedger);
+
+  /// 把结构化台账写回原始字段。
+  void setLedger(ForeshadowLedger l) => foreshadowLedger = l.encode();
 
   /// 供关卡5 编造核查使用的「已确立事实」摘要（世界观设定 + 主角档案）。
   ///
