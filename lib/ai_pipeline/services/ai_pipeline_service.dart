@@ -160,14 +160,14 @@ class AiPipelineService {
       keys.addAll(r.dimensions.keys);
     }
     final Map<String, int> dims = <String, int>{};
-    keys.forEach((String k) {
+    for (final String k in keys) {
       final List<int> vs = samples
           .map((ChiefReview r) => r.dimensions[k])
           .where((int? v) => v != null && v >= 0)
           .map((int? v) => v!)
           .toList();
       if (vs.isNotEmpty) dims[k] = median(vs);
-    });
+    }
 
     // 问题清单按「多轮共识」优先：多轮都点名的排前面。
     final Map<String, int> seen = <String, int>{};
@@ -274,9 +274,11 @@ class AiPipelineService {
           dimensions: _chiefDimensions(parsed),
           verdict: AiPipelineTask.verdictOf(overall),
           topIssues: _chiefIssues(parsed),
-          fixPriority: (parsed?['fix_priority'] as List<dynamic>? ?? const [])
-              .map((dynamic e) => e.toString())
-              .toList(),
+          // parsed 已在上方判过非空，这里不必再用 ?[]。
+          fixPriority:
+              ((parsed['fix_priority'] ?? const <dynamic>[]) as List<dynamic>)
+                  .map((dynamic e) => e.toString())
+                  .toList(),
         ));
         task.addLog('  [终审·第$round轮·采样 ${samples.length}/$target] 综合 $overall 分');
       } else {

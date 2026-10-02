@@ -398,7 +398,7 @@ group('模型层派生属性', () {
     });
 
     test('promiseBlock：普通章只取超时条目，收尾章取全部 open', () {
-      final ForeshadowLedger l = ForeshadowLedger(const <ForeshadowEntry>[a, b]);
+      const ForeshadowLedger l = ForeshadowLedger(<ForeshadowEntry>[a, b]);
       // 普通章（staleAfter=5）：到第 10 章，a（埋于 1）已过 9 章、b（埋于 3）
       // 已过 7 章，**两条都超时**——这里用第 6 章才能只命中 a（1→6 恰 5 章）。
       expect(l.promiseBlock(6, staleAfter: 5).length, 1);
@@ -410,7 +410,7 @@ group('模型层派生属性', () {
     });
 
     test('打勾联动：✅ 标记 closed 并记证据句', () {
-      final ForeshadowLedger l = ForeshadowLedger(const <ForeshadowEntry>[a, b]);
+      const ForeshadowLedger l = ForeshadowLedger(<ForeshadowEntry>[a, b]);
       final List<ForeshadowEntry> block = l.promiseBlock(10, staleAfter: 0);
       final (ForeshadowLedger next, int n) = l.applyClosures(
         block,
@@ -432,7 +432,7 @@ group('模型层派生属性', () {
     test('打勾联动：验收环节失败时一条都不联动（核心语义护栏）', () {
       // 这是最容易骗过作者的一种状态：验收调用挂了，若照样联动台账，
       // 一次静默失效会被记成 N 条伏笔已回收，终审再也看不出真相。
-      final ForeshadowLedger l = ForeshadowLedger(const <ForeshadowEntry>[a, b]);
+      const ForeshadowLedger l = ForeshadowLedger(<ForeshadowEntry>[a, b]);
       final List<ForeshadowEntry> block = l.promiseBlock(10, staleAfter: 0);
       final (ForeshadowLedger next, int n) = l.applyClosures(
         block,
@@ -444,7 +444,7 @@ group('模型层派生属性', () {
     });
 
     test('打勾联动：序号越界不联动（不误伤别的条目）', () {
-      final ForeshadowLedger l = ForeshadowLedger(const <ForeshadowEntry>[a]);
+      const ForeshadowLedger l = ForeshadowLedger(<ForeshadowEntry>[a]);
       final (ForeshadowLedger next, int n) = l.applyClosures(
         l.open,
         const <PromiseCheck>[
@@ -458,7 +458,7 @@ group('模型层派生属性', () {
     });
 
     test('打勾联动：空清单/空结果原样返回', () {
-      final ForeshadowLedger l = ForeshadowLedger(const <ForeshadowEntry>[a]);
+      const ForeshadowLedger l = ForeshadowLedger(<ForeshadowEntry>[a]);
       expect(l.applyClosures(<ForeshadowEntry>[], const <PromiseCheck>[], 10).$2, 0);
       expect(l.applyClosures(l.open, const <PromiseCheck>[], 10).$2, 0);
     });
@@ -467,7 +467,7 @@ group('模型层派生属性', () {
   group('打勾结果序列化与面板渲染', () {
     test('promiseChecks 往返：null 与空列表严格区分', () {
       // null = 没打勾；[] = 打过勾但清单为空。两者在 UI 上结论完全不同。
-      final PipelineChapter none = PipelineChapter(
+      const PipelineChapter none = PipelineChapter(
         idx: 1,
         title: 'a',
         content: 'x',
@@ -476,25 +476,25 @@ group('模型层派生属性', () {
       );
       expect(PipelineChapter.fromJson(none.toJson()).promiseChecks, isNull);
 
-      final PipelineChapter empty = PipelineChapter(
+      const PipelineChapter empty = PipelineChapter(
         idx: 1,
         title: 'a',
         content: 'x',
         rawWords: 1,
         words: 1,
-        promiseChecks: const <PromiseCheck>[],
+        promiseChecks: <PromiseCheck>[],
       );
       expect(PipelineChapter.fromJson(empty.toJson()).promiseChecks, isEmpty);
     });
 
     test('打勾结果往返保留 ✅/❌/☠ 与证据句', () {
-      final PipelineChapter c = PipelineChapter(
+      const PipelineChapter c = PipelineChapter(
         idx: 1,
         title: 'a',
         content: 'x',
         rawWords: 1,
         words: 1,
-        promiseChecks: const <PromiseCheck>[
+        promiseChecks: <PromiseCheck>[
           PromiseCheck(id: 1, fulfilled: true, evidence: '他终于认了'),
           PromiseCheck(id: 2, fulfilled: false, evidence: '只留了悬念'),
           PromiseCheck.failure,
@@ -683,7 +683,7 @@ group('模型层派生属性', () {
             topIssues: <ChiefIssue>[
               ChiefIssue(chapter: 7, issue: '节奏塌陷', evidence: '第7章爽点0'),
             ],
-            fixPriority: const <String>['补一处打脸'],
+            fixPriority: <String>['补一处打脸'],
             samples: 3,
           ),
         ],
@@ -880,7 +880,7 @@ group('模型层派生属性', () {
           ],
           child: MaterialApp(
             theme: AppTheme.light,
-            home: AiPipelineRunPage(taskId: 't1'),
+            home: const AiPipelineRunPage(taskId: 't1'),
           ),
         ),
       );

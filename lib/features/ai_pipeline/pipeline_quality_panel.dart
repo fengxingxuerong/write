@@ -529,9 +529,9 @@ class _ChiefCard extends StatelessWidget {
     final AppInk ink = AppInk.of(context);
     final ChiefReview? chief = task.latestChiefReview;
     if (task.chiefReviews.isEmpty) {
-      return AppCard(
+      return const AppCard(
         title: '终审官',
-        child: const _HintLine(
+        child: _HintLine(
           text: '尚未终审（生成完成后自动跑通读级总评）',
           icon: Icons.gavel_outlined,
           kind: _HintKind.muted,
@@ -539,9 +539,9 @@ class _ChiefCard extends StatelessWidget {
       );
     }
     if (chief == null || !chief.ok) {
-      return AppCard(
+      return const AppCard(
         title: '终审官',
-        child: const _HintLine(
+        child: _HintLine(
           text: '⚠ 终审本轮无结论（调用失败或解析失败）——不等于「0 分」',
           icon: Icons.error_outline,
           kind: _HintKind.warn,
