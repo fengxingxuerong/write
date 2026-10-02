@@ -326,6 +326,135 @@ $ev
 $text''';
 }
 
+/// 独立事实核查员的系统提示（关卡5）。
+///
+/// 与 Python `novel_pipeline.FACT_CHECK_SYS` 逐字一致：「只输出 JSON，不要解释」。
+const String factCheckSystemPrompt = '你是独立事实核查员，只输出 JSON，不要任何解释。';
+
+/// 编造核查 prompt（关卡5）：对照已确立事实核查本章正文的编造/篡改。
+///
+/// 四类判据与 Python `fabrication_check_prompt` 完全一致——身份矛盾 / 数字漂移 /
+/// 状态矛盾 / 无中生有，**新事项首次出现的数字不算问题**（否则第一章必被误判满屏
+/// 编造）。[registry] 是配角户籍表，[facts] 是数字台账，[stateTrack] 是跨章状态清单。
+String fabricationCheckPrompt(
+  String text,
+  int idx, {
+  String registry = '',
+  String facts = '',
+  String stateTrack = '',
+}) {
+  final String reg = registry.trim().isEmpty ? '（空）' : registry;
+  final String fact = facts.trim().isEmpty ? '（无已确立数字）' : facts;
+  final String st = stateTrack.trim().isEmpty ? '（无）' : stateTrack;
+  return '''
+对照下列已确立事实，核查第 $idx 章正文是否编造/篡改了事实：
+1. 身份矛盾：给户籍表内姓名安排了不同身份/职业/立场
+2. 数字漂移：同一事项的金额/期限/数量与数字台账不一致（新事项首次出现的数字不算问题）
+3. 状态矛盾：与跨章状态清单冲突的伤势/修为/物品得失
+4. 无中生有：把前文从未确立的细节当前文既定事实引用（凭空师门/恩怨/旧约）
+
+只输出 JSON：
+{"fabrications":[{"claim":"正文问题断言原句节选（30字内）","evidence":"对照依据","type":"identity|number|state|fabricated"}]}
+没有问题就输出 {"fabrications":[]}。
+
+【配角户籍表】
+$reg
+
+【数字台账】
+$fact
+
+【跨章状态清单】
+$st
+
+【第 $idx 章正文】
+$text''';
+}
+
+/// 编造定点修 prompt：只处置核查命中的断言，其余段落一字不动。
+///
+/// 三条处置路径（优先删/弱化）：无据断言要么删，要么改成非断言（传闻/未证实），
+/// 要么在本章内补出「谁、何时、为何、在哪」变成本章首次确立的设定。
+/// [minWords] 是字数硬下限（对齐 Python `FIX_MIN_RATIO=0.92` 的意图）——
+/// 删掉的断言必须用等量铺陈补回，**禁止「以删代修」**（Python 端实测：定点修
+/// 若无字数下限，模型会把整章压掉 30%~75%，产出被 0.85 守卫整份拒绝、白跑一轮）。
+String factFixPrompt(
+  String text,
+  List<FabricationSpec> fabrications,
+  int idx, {
+  required int minWords,
+}) {
+  final StringBuffer items = StringBuffer();
+  int n = 0;
+  for (final FabricationSpec fb in fabrications) {
+    if (n >= 8) break;
+    final String claim = fb.claim.trim();
+    if (claim.isEmpty) continue;
+    items.writeln(
+      '- [${fb.typeLabel}] 断言「$claim」｜核查依据：'
+      '${fb.evidence.trim().isEmpty ? '台账/前文无据' : fb.evidence.trim()}',
+    );
+    n++;
+  }
+  final String listing = n == 0 ? '- （无明细，按「无据断言」类型自行定位）' : '$items';
+  final int words = _hanCount(text);
+  final String floorLine = minWords > 0
+      ? '【字数硬约束·先看这条】改写后正文不得少于 $minWords 字（原文 $words 字）：'
+            '删掉的断言要用等量的铺陈/对白补回，禁止整段删除凑字数差。\n'
+      : '';
+  return '''
+第 $idx 章被独立事实核查员判出 ${fabrications.length} 处与户籍表/数字台账/跨章状态无据的断言。
+
+【待处置清单】
+$listing
+
+【处置要求】
+- 逐条处置，每条三选一：① 删掉该断言；② 改写成非断言（传闻/未证实/疑似）；
+  ③ 在本章内补出「谁、何时、为何、在哪」，使它变成本章首次确立的设定。
+- **只处置上述命中**，其余段落一字不动，不要重写全章、不要改变已成立的情节走向。
+- 不要用「以删代修」：字数下限让位于评审的压缩诉求。
+$floorLine
+【第 $idx 章正文】
+$text''';
+}
+
+/// 定点修提示词用的一条编造命中（与模型层 [Fabrication] 解耦，
+/// 免得 prompt 层反向依赖 `ai_pipeline_models.dart`）。
+class FabricationSpec {
+  /// 断言原句节选。
+  final String claim;
+
+  /// 对照依据。
+  final String evidence;
+
+  /// 原始类型标识（identity/number/state/fabricated）。
+  final String type;
+
+  /// 构造一条命中。
+  const FabricationSpec({
+    required this.claim,
+    required this.evidence,
+    required this.type,
+  });
+
+  /// 类型中文名（未知类型原样返回）。
+  String get typeLabel => switch (type) {
+        'identity' => '身份矛盾',
+        'number' => '数字漂移',
+        'state' => '状态矛盾',
+        'fabricated' => '无中生有',
+        _ => type,
+      };
+}
+
+/// 统计文本中的汉字数（与流水线正文字数口径一致：只数汉字，不数标点空白）。
+int _hanCount(String s) {
+  int n = 0;
+  for (final int c in s.codeUnits) {
+    if (c >= 0x4E00 && c <= 0x9FFF) n++;
+  }
+  return n;
+}
+
 /// 低分章节定向重写（针对薄弱维度提升质量，保留情节与钩子）。
 String rewritePrompt({
   required String text,

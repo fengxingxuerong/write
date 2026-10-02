@@ -11,6 +11,7 @@ import 'package:novel_writer/ai_pipeline/services/ai_pipeline_service.dart';
 import 'package:novel_writer/ai_pipeline/services/novel_importer.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
+import 'package:novel_writer/features/ai_pipeline/pipeline_quality_panel.dart';
 import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/core/security/secret_store.dart';
@@ -755,6 +756,10 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
   AiPipelineTask? _task;
   bool _running = false;
   bool _cancelRequested = false;
+  // 0 = 运行日志（时间序流水），1 = 质量面板（书级横切面）。
+  // 两者并列成视图而不是混在一起：日志是「刚才发生了什么」，质量是
+  // 「这本书哪一章有问题」，混排会让作者永远找不到后者。
+  int _view = 0;
   final ScrollController _scrollCtrl = ScrollController();
 
   @override
@@ -942,23 +947,54 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
             ),
           ),
           const Divider(height: 1),
-          Expanded(
-            child: ListView.builder(
-              controller: _scrollCtrl,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              itemCount: task.log.length,
-              itemBuilder: (BuildContext context, int index) => Padding(
-                padding: const EdgeInsets.symmetric(vertical: 1),
-                child: Text(
-                  task.log[index],
-                  style: AppFonts.text(
-                    AppInk.of(context).inkSoft,
-                    size: 12,
-                    monoFace: true,
-                  ),
-                ),
-              ),
+          // 分段切换：日志 ↔ 质量。质量视图与日志平级，不是日志的一部分。
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppTokens.s3,
+              AppTokens.s2,
+              AppTokens.s3,
+              0,
             ),
+            child: SegmentedButton<int>(
+              segments: const <ButtonSegment<int>>[
+                ButtonSegment<int>(
+                  value: 0,
+                  icon: Icon(Icons.terminal, size: 15),
+                  label: Text('运行日志'),
+                ),
+                ButtonSegment<int>(
+                  value: 1,
+                  icon: Icon(Icons.fact_check_outlined, size: 15),
+                  label: Text('质量'),
+                ),
+              ],
+              selected: <int>{_view},
+              showSelectedIcon: false,
+              onSelectionChanged: (Set<int> s) => setState(() => _view = s.first),
+            ),
+          ),
+          Expanded(
+            child: _view == 0
+                ? ListView.builder(
+                    controller: _scrollCtrl,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    itemCount: task.log.length,
+                    itemBuilder: (BuildContext context, int index) => Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 1),
+                      child: Text(
+                        task.log[index],
+                        style: AppFonts.text(
+                          AppInk.of(context).inkSoft,
+                          size: 12,
+                          monoFace: true,
+                        ),
+                      ),
+                    ),
+                  )
+                : PipelineQualityPanel(task: task),
           ),
           SafeArea(
             child: Padding(

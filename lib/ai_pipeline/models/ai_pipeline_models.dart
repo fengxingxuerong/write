@@ -131,6 +131,13 @@ class AiPipelineConfig {
   /// 是否启用跨章状态追踪（每章提取状态清单，注入下一章防穿帮）。
   final bool useStateTrack;
 
+  /// 关卡5 编造核查（对照已确立事实独立核查本章正文，命中即定点修 + 复检）。
+  ///
+  /// **默认开启**：这是 Python 端冒烟门禁第 16 项的对应能力，Dart 生成路径此前
+  /// 完全缺失——写手凭空补的细节会原样留在成书里，作者在 GUI 上还看不到提示。
+  /// 每次核查多一次 LLM 调用（命中时再加修复 + 复检两次），配额紧张可关。
+  final bool useFactCheck;
+
   /// 各角色配置（未配置的默认启用，模型需用户在配置页填写）。
   final Map<AiRole, AiRoleConfig> roles;
 
@@ -147,6 +154,7 @@ class AiPipelineConfig {
     this.autoRewriteLowScore = true,
     this.rewriteThreshold = 55,
     this.useStateTrack = true,
+    this.useFactCheck = true,
     this.roles = const <AiRole, AiRoleConfig>{},
   });
 
@@ -173,6 +181,7 @@ class AiPipelineConfig {
         'autoRewriteLowScore': autoRewriteLowScore,
         'rewriteThreshold': rewriteThreshold,
         'useStateTrack': useStateTrack,
+        'useFactCheck': useFactCheck,
         'roles': roles.values.map((AiRoleConfig e) => e.toJson()).toList(),
       };
 
@@ -195,6 +204,8 @@ class AiPipelineConfig {
       autoRewriteLowScore: json['autoRewriteLowScore'] as bool? ?? true,
       rewriteThreshold: json['rewriteThreshold'] as int? ?? 55,
       useStateTrack: json['useStateTrack'] as bool? ?? true,
+      // 旧任务文件无此键 → 默认开启（能力补齐方向），不是默认关闭。
+      useFactCheck: json['useFactCheck'] as bool? ?? true,
       roles: roles,
     );
   }
@@ -216,6 +227,200 @@ enum PipelineTaskStatus {
 
   /// 用户取消。
   cancelled,
+}
+
+/// 单章语义级质量评分（审校官五维打分，结构化）。
+///
+/// **为什么必须结构化落库**：审校官的五维分原本只拼进 `task.addLog` 的日志文本
+/// （「[评分] 第 3 章 综合 78 分（开篇85/爽点60/钩子90…）」），日志一滚动到
+/// 400 条之外就被裁掉，且 UI 无法按维度渲染——等于评分**只存在于运行当时的
+/// 屏幕上**。Python 端把同一份数据落在 jsonl `type=review`，作者随时能回看
+/// 「第 7 章当年被判多少分、卡在哪一维」，这是打回权的数据基础。
+///
+/// 缺字段一律按「未评分」处理（[scored] 为 false），绝不用 0 冒充真实低分：
+/// 0 分是「评了但很差」，null 是「压根没评」，两者在 UI 上必须区分。
+class ChapterQualityReview {
+  /// 章序。
+  final int idx;
+
+  /// 综合分（0~100）；未评分为 -1。
+  final int overall;
+
+  /// 五维分（开篇/爽点/钩子/动机/节奏）；未拿到该维度的键会被略过。
+  final Map<String, int> dims;
+
+  /// 一句话点评。
+  final String comment;
+
+  /// 本地质检证据串（与打分同批注入，供人工复核「机器判的」与「模型评的」是否一致）。
+  final String evidence;
+
+  /// 是否真的评出了分（区分「未评分」与「评了 0 分」）。
+  bool get scored => overall >= 0;
+
+  /// 构造评分记录。
+  const ChapterQualityReview({
+    required this.idx,
+    this.overall = -1,
+    this.dims = const <String, int>{},
+    this.comment = '',
+    this.evidence = '',
+  });
+
+  /// 达线（对齐 Python `--review-pass 78` 与 [BookQaService.passThreshold]）。
+  bool get pass => overall >= 78;
+
+  /// 分数最薄弱的维度名（用于 UI 一句话点出短板）；无有效维度返回空串。
+  String get weakestDim {
+    if (dims.isEmpty) return '';
+    String worst = '';
+    int worstVal = 101;
+    dims.forEach((String k, int v) {
+      if (v < worstVal) {
+        worstVal = v;
+        worst = k;
+      }
+    });
+    return worst;
+  }
+
+  /// 五维中文名（未知键原样返回，避免新增维度时静默显示英文）。
+  static String dimLabel(String key) => switch (key) {
+        'opening' => '开篇',
+        'thrill' => '爽点',
+        'hook' => '钩子',
+        'motivation' => '动机',
+        'rhythm' => '节奏',
+        _ => key,
+      };
+
+  /// 序列化。
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'idx': idx,
+        'overall': overall,
+        'dims': dims,
+        'comment': comment,
+        'evidence': evidence,
+      };
+
+  /// 反序列化；`overall` 缺失或非数值按未评分处理。
+  factory ChapterQualityReview.fromJson(Map<String, dynamic> json) {
+    final Map<String, int> d = <String, int>{};
+    final Map<String, dynamic>? raw = json['dims'] as Map<String, dynamic>?;
+    raw?.forEach((String k, dynamic v) {
+      if (v is num) d[k] = v.toInt();
+    });
+    return ChapterQualityReview(
+      idx: json['idx'] as int? ?? 0,
+      overall: (json['overall'] as num?)?.toInt() ?? -1,
+      dims: d,
+      comment: json['comment'] as String? ?? '',
+      evidence: json['evidence'] as String? ?? '',
+    );
+  }
+}
+
+/// 一处编造核查命中（关卡5）。
+///
+/// 与 Python `fabrication_check_prompt` 的返回结构逐字对齐
+/// （`claim` / `evidence` / `type`），双端同一本书扫出来的命中才能横向比较。
+class Fabrication {
+  /// 问题断言原句节选。
+  final String claim;
+
+  /// 对照依据（来自户籍表/数字台账/跨章状态）。
+  final String evidence;
+
+  /// 类型：`identity` 身份矛盾 / `number` 数字漂移 / `state` 状态矛盾 /
+  /// `fabricated` 无中生有。
+  final String type;
+
+  /// 构造命中记录。
+  const Fabrication({
+    required this.claim,
+    required this.evidence,
+    required this.type,
+  });
+
+  /// 类型中文名（未知类型原样返回，不吞掉信息）。
+  String get typeLabel => switch (type) {
+        'identity' => '身份矛盾',
+        'number' => '数字漂移',
+        'state' => '状态矛盾',
+        'fabricated' => '无中生有',
+        _ => type,
+      };
+
+  /// 序列化。
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'claim': claim,
+        'evidence': evidence,
+        'type': type,
+      };
+
+  /// 反序列化；缺字段按空串处理，坏数据不得让整章记录崩掉。
+  factory Fabrication.fromJson(Map<String, dynamic> json) => Fabrication(
+        claim: json['claim'] as String? ?? '',
+        evidence: json['evidence'] as String? ?? '',
+        type: json['type'] as String? ?? 'fabricated',
+      );
+}
+
+/// 单章编造核查结果（关卡5，核查 → 修 → 复检的完整轨迹）。
+///
+/// **error 与「0 命中」必须区分**：核查没跑成（端点全失败/解析失败）与「跑成了
+/// 但一处编造都没有」在门禁里是相反的结论——前者判 FAIL，后者判 PASS。
+/// Python 端 `fact_check_stage` 返回 `error=True` 让门禁第 16 项拦截，
+/// Dart 端此前**完全没有关卡5**，此处把该语义补齐，不让 UI 把「没跑」显示成「干净」。
+class ChapterFactCheck {
+  /// 章序。
+  final int idx;
+
+  /// 命中明细（复检采纳后的最终状态）。
+  final List<Fabrication> fabrications;
+
+  /// 核查是否**跑成了**（false = 没跑成，不得当作通过凭据）。
+  final bool ok;
+
+  /// 定点修是否被采纳（命中后修过且复检确实变好）。
+  final bool repaired;
+
+  /// 首轮命中数（修复前后对比用；未修时等于 [fabrications] 长度）。
+  final int firstRoundCount;
+
+  /// 构造核查记录。
+  const ChapterFactCheck({
+    required this.idx,
+    this.fabrications = const <Fabrication>[],
+    this.ok = true,
+    this.repaired = false,
+    this.firstRoundCount = 0,
+  });
+
+  /// 最终命中数。
+  int get count => fabrications.length;
+
+  /// 序列化。
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'idx': idx,
+        'fabrications': fabrications.map((Fabrication e) => e.toJson()).toList(),
+        'ok': ok,
+        'repaired': repaired,
+        'firstRoundCount': firstRoundCount,
+      };
+
+  /// 反序列化：缺 `ok` 视为**未跑成**（宁可显示「未核查」也不谎称「已核查通过」）。
+  factory ChapterFactCheck.fromJson(Map<String, dynamic> json) =>
+      ChapterFactCheck(
+        idx: json['idx'] as int? ?? 0,
+        fabrications: (json['fabrications'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(Fabrication.fromJson)
+            .toList(),
+        ok: json['ok'] as bool? ?? false,
+        repaired: json['repaired'] as bool? ?? false,
+        firstRoundCount: (json['firstRoundCount'] as num?)?.toInt() ?? 0,
+      );
 }
 
 /// 单章生成记录。
@@ -268,6 +473,12 @@ class PipelineChapter {
   /// [NovelConsistencyChecker.protagonistContinuity] 判「连续多章消失」。
   final int protagonistMentions;
 
+  /// 本章语义级质量评分（未评分为 null；见 [ChapterQualityReview.scored]）。
+  final ChapterQualityReview? review;
+
+  /// 本章编造核查结果（未核查为 null，与「核查通过 0 命中」严格区分）。
+  final ChapterFactCheck? factCheck;
+
   /// 构造记录。
   const PipelineChapter({
     required this.idx,
@@ -279,6 +490,8 @@ class PipelineChapter {
     this.scenesPlanned = 0,
     this.scenesWritten = 0,
     this.protagonistMentions = -1,
+    this.review,
+    this.factCheck,
   });
 
   /// 序列化。
@@ -292,6 +505,8 @@ class PipelineChapter {
         'scenesPlanned': scenesPlanned,
         'scenesWritten': scenesWritten,
         'protagonistMentions': protagonistMentions,
+        'review': review?.toJson(),
+        'factCheck': factCheck?.toJson(),
       };
 
   /// 反序列化。
@@ -308,6 +523,17 @@ class PipelineChapter {
       scenesPlanned: json['scenesPlanned'] as int? ?? 0,
       scenesWritten: json['scenesWritten'] as int? ?? 0,
       protagonistMentions: json['protagonistMentions'] as int? ?? -1,
+      // 旧任务文件没有这两个键 → null（未评分/未核查），不是「评了 0 分」。
+      review: json['review'] == null
+          ? null
+          : ChapterQualityReview.fromJson(
+              Map<String, dynamic>.from(json['review'] as Map),
+            ),
+      factCheck: json['factCheck'] == null
+          ? null
+          : ChapterFactCheck.fromJson(
+              Map<String, dynamic>.from(json['factCheck'] as Map),
+            ),
     );
   }
 }
@@ -387,6 +613,41 @@ class AiPipelineTask {
     final dynamic v = outline['title'];
     if (v is String && v.trim().isNotEmpty) return v.trim();
     return '未命名';
+  }
+
+  /// 供关卡5 编造核查使用的「已确立事实」摘要（世界观设定 + 主角档案）。
+  ///
+  /// Python 端有独立的配角户籍表（`registry`）与数字台账（`facts`）两份结构化
+  /// 账本；Dart 侧只有 `stateTrack` 一份，故此处把大纲里的世界观与主角档案
+  /// 拍平成文本一并喂进去。**覆盖面窄于 Python 端是已知差距**：台账越薄，
+  /// 「数字漂移」「状态矛盾」两类命中就越查不出来——但「身份矛盾」「无中生有」
+  /// （对照世界观硬设定与主角身份）仍能拦住，本关卡仍有实打实的价值。
+  String get worldTermsForCheck {
+    final StringBuffer b = StringBuffer();
+    final dynamic world = outline['world'];
+    if (world is Map) {
+      world.forEach((dynamic k, dynamic v) {
+        final String s = v.toString().trim();
+        // 分隔符切分：faction 常写成「青冥宗／玄水宗／烬火阁」，整体塞进去
+        // 等于让核查员对着一个不存在的专名做判断（Python 端同名缺陷已修）。
+        if (s.isEmpty) return;
+        for (final String part in s.split(RegExp(r'[／/|、,，]'))) {
+          final String p = part.trim();
+          if (p.length >= 2) b.writeln('- $k：$p');
+        }
+      });
+    }
+    final dynamic pro = outline['protagonist'];
+    if (pro is Map) {
+      final String name = (pro['name'] ?? '').toString().trim();
+      final String trait = (pro['trait'] ?? '').toString().trim();
+      final String origin = (pro['origin'] ?? '').toString().trim();
+      if (name.isNotEmpty) {
+        b.writeln('- 主角：$name${trait.isEmpty ? '' : '（$trait）'}'
+            '${origin.isEmpty ? '' : '；出身：$origin'}');
+      }
+    }
+    return b.toString().trim();
   }
 
   /// 是否可续跑（有进度且未完成）。

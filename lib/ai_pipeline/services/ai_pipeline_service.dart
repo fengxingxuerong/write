@@ -11,12 +11,20 @@ import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/quality/fanqie_gate_checker.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
+/// 关卡5 定点修的字数下限比例（对齐 Python `FIX_MIN_RATIO = 0.92`）。
+///
+/// 提示词下限必须**严于**代码采纳守卫（0.85）：模型是照着数字办事的，若提示词
+/// 说「压缩到 85%」而守卫也只要 85%，两者卡在同一根线上毫无余量；提示词给 0.92
+/// 留出的 7% 空间让模型先自查，守卫只兜「模型完全不听指令」的情况。
+const double factFixMinRatio = 0.92;
+
 /// 多模型协作长篇小说流水线（Dart 原生编排）。
 ///
 /// 流程：
 /// 1. 总规划官规划全书大纲（JSON）；
 /// 2. 逐章：规划官拆场景 → 写手逐场景生成 → 编辑去AI味润色 →
-///    标题官提炼章名 → 每 5 章审校官一致性校验 → 本地质检；
+///    标题官提炼章名 → 每 5 章审校官一致性校验 → 本地质检 →
+///    **关卡5 编造核查（对照已确立事实独立核查，命中即修 + 复检）**；
 /// 3. 断点续传：每章完成后原子落盘，中断后可从下一章继续。
 ///
 /// 网络层复用 [LlmChatClient]（OpenAI 兼容非流式，支持 enable_thinking），
@@ -90,6 +98,56 @@ class AiPipelineService {
     } catch (_) {
       return <String>[];
     }
+  }
+
+  /// 关卡5 跑一轮编造核查，返回 `(命中列表, 是否跑成)`。
+  ///
+  /// **[ok=false 绝不等于「0 命中」]**——这是 Python 端门禁第 16 项的核心语义：
+  /// 端点全链失败 / 返回不是 JSON / `fabrications` 不是数组，三种情况都说明
+  /// 「核查没跑成」，此时若当成干净结果，等于把一次静默失效伪装成一次通过。
+  /// 调用方据此单独记账，UI 也必须区分显示（见 [ChapterFactCheck.ok]）。
+  ///
+  /// 用规划官链（与写手异家族）做核查，理由同 Python 端：同模型自我核查容易
+  /// 把自己写过的细节当成「台账里的既有事实」，异家族才有真正的对照价值。
+  Future<({List<Fabrication> hits, bool ok})> _runFactCheck(
+    AiPipelineTask task,
+    String text,
+    int idx,
+  ) async {
+    final AiRoleConfig cfg = task.config.roleOf(AiRole.planner);
+    if (!_chainConfigured(cfg)) {
+      return (hits: const <Fabrication>[], ok: false);
+    }
+    // 户籍表取大纲的世界观 + 主角设定，数字/状态台账取跨章状态清单
+    // （Dart 侧目前只有 stateTrack 一份台账，Python 侧的 registry/facts
+    //  拆分更细——核查覆盖面因此窄于 Python 端，属已知差距，见交付文档）。
+    final String raw = await _call(
+      task,
+      AiRole.planner,
+      factCheckSystemPrompt,
+      fabricationCheckPrompt(
+        text,
+        idx,
+        registry: task.worldTermsForCheck,
+        facts: '',
+        stateTrack: task.stateTrack,
+      ),
+      isCancelled: () => false,
+    );
+    final Map<String, dynamic>? parsed = _parseJsonObject(raw);
+    final List<dynamic>? list = parsed?['fabrications'] as List<dynamic>?;
+    if (list == null) {
+      // 合 schema 守卫：必须真的拿到数组才认「跑成了」。
+      return (hits: const <Fabrication>[], ok: false);
+    }
+    return (
+      hits: list
+          .whereType<Map<String, dynamic>>()
+          .map(Fabrication.fromJson)
+          .where((Fabrication fb) => fb.claim.trim().isNotEmpty)
+          .toList(),
+      ok: true,
+    );
   }
 
   /// 从 LLM 文本提取首个 JSON 对象（失败返回 null）。
@@ -540,6 +598,11 @@ class AiPipelineService {
 
       // 5) 每 5 章一致性审校（审校官，只记录）
       final List<String> issues = <String>[];
+      // 结构化质量记录：随章节一并落库，供 UI「质量」面板与导出报告使用。
+      // 旧实现只把分数拼进日志文本，日志滚出 400 条即丢——评分等于只存在于
+      // 运行当时的屏幕上，作者事后无法回看「第 7 章当年被判多少、卡在哪一维」。
+      ChapterQualityReview? qualityReview;
+      ChapterFactCheck? factCheck;
       if (task.config.useVerifier && idx % 5 == 0 && task.chapters.isNotEmpty) {
         final String chapList = task.chapters
             .where((PipelineChapter c) => c.idx >= idx - 4)
@@ -618,6 +681,23 @@ class AiPipelineService {
         final int overall = (parsed?['overall'] as num?)?.toInt() ?? -1;
         if (overall >= 0) {
           final String comment = outlineText(parsed?['comment']);
+          // 结构化落库：五维分原样存下，UI 才能按维度渲染、排序、定位短板。
+          qualityReview = ChapterQualityReview(
+            idx: idx,
+            overall: overall,
+            dims: <String, int>{
+              for (final String k in const <String>[
+                'opening',
+                'thrill',
+                'hook',
+                'motivation',
+                'rhythm',
+              ])
+                if (scores?[k] is num) k: (scores![k] as num).toInt(),
+            },
+            comment: comment,
+            evidence: qaEv,
+          );
           task.addLog('  [评分] 第 $idx 章 综合 $overall 分'
               '（开篇${scores?['opening'] ?? '-'}/爽点${scores?['thrill'] ?? '-'}'
               '/钩子${scores?['hook'] ?? '-'}/动机${scores?['motivation'] ?? '-'}'
@@ -657,6 +737,111 @@ class AiPipelineService {
           }
         } else {
           task.addLog('  [评分] 第 $idx 章 评分解析失败，跳过（不影响生成）');
+        }
+      }
+
+      // 7.5) 关卡5 编造核查：对照已确立事实独立核查本章正文（Dart 端此前完全缺失）
+      //
+      // 【为什么补】Python 端有完整关卡5（核查→修→复检），Dart 生成路径只有
+      // 番茄闸门与语义关——写手凭空补出的「老周欠债三年」「命火令凹槽」这类
+      // 细节会原样留在成书里，**再跑一百遍也不会好**，而作者在 GUI 上看不到
+      // 任何提示。语义关卡抓的是「人称/称谓/题材/关系」，抓不到「凭空编」。
+      //
+      // 三条与 Python 端同构的纪律：
+      // ① 没跑成 ≠ 没问题（ok=false 单独标记，绝不冒充 0 命中的干净结果）；
+      // ② 命中即定点修，但**只有复检命中数确实下降才采纳**，否则回滚原文——
+      //    「换了段文字」不等于「问题解决了」；
+      // ③ 字数下限随 prompt 下发（fixMinRatio 口径），禁止「以删代修」把整章压没。
+      if (task.config.useFactCheck) {
+        final ({List<Fabrication> hits, bool ok}) first = await _runFactCheck(
+          task,
+          fullText,
+          idx,
+        );
+        if (!first.ok) {
+          factCheck = ChapterFactCheck(idx: idx, ok: false);
+          issues.add('第 $idx 章编造核查未跑成（端点全链失败或返回不合 schema）'
+              '——不能据此认为本章无编造，建议人工核对本章与前章设定');
+          task.addLog('  [核查] ⚠ 核查未跑成（不计入「无编造」结论）');
+        } else if (first.hits.isEmpty) {
+          factCheck = ChapterFactCheck(idx: idx, ok: true);
+          task.addLog('  [核查] 编造核查通过 ✅（0 处编造）');
+        } else {
+          for (final Fabrication fb in first.hits.take(8)) {
+            task.addLog('  [核查] ⚠ ${fb.typeLabel}: '
+                '${fb.claim.length > 60 ? fb.claim.substring(0, 60) : fb.claim}');
+          }
+          task.addLog('  [核查] ${first.hits.length} 处编造 → 定点修并复检…');
+          final String rawFix = await call(
+            AiRole.editor,
+            editorSystemPrompt,
+            factFixPrompt(
+              fullText,
+              first.hits
+                  .map(
+                    (Fabrication fb) => FabricationSpec(
+                      claim: fb.claim,
+                      evidence: fb.evidence,
+                      type: fb.type,
+                    ),
+                  )
+                  .toList(),
+              idx,
+              minWords: (_countWords(fullText) * factFixMinRatio).ceil(),
+            ),
+          );
+          final String? rejectWhy = rawFix.trim().isEmpty
+              ? '空产出'
+              : FanqieGateChecker.patchReject(
+                  rawFix,
+                  baseText: fullText,
+                  genre: task.config.genre,
+                  maxWords: (_countWords(fullText) * 2).ceil(),
+                );
+          if (rejectWhy != null) {
+            factCheck = ChapterFactCheck(
+              idx: idx,
+              fabrications: first.hits,
+              ok: true,
+              firstRoundCount: first.hits.length,
+            );
+            task.addLog('  [核查] 修复稿未过采纳闸（$rejectWhy），保留原文照记命中');
+            for (final Fabrication fb in first.hits.take(3)) {
+              issues.add('第 $idx 章编造（${fb.typeLabel}，未修）：${fb.claim}');
+            }
+          } else {
+            final String repaired = '${fullText.trimRight()}\n\n${rawFix.trim()}';
+            final ({List<Fabrication> hits, bool ok}) second =
+                await _runFactCheck(task, repaired, idx);
+            final bool improved = second.ok && second.hits.length < first.hits.length;
+            if (improved) {
+              fullText = repaired;
+              factCheck = ChapterFactCheck(
+                idx: idx,
+                fabrications: second.hits,
+                ok: true,
+                repaired: true,
+                firstRoundCount: first.hits.length,
+              );
+              task.addLog('  [核查] 复检 ${first.hits.length} → ${second.hits.length} 处，'
+                  '采纳修复稿（${_countWords(repaired)} 字）');
+              for (final Fabrication fb in second.hits.take(3)) {
+                issues.add('第 $idx 章编造残留（${fb.typeLabel}，修复未清零）：${fb.claim}');
+              }
+            } else {
+              factCheck = ChapterFactCheck(
+                idx: idx,
+                fabrications: first.hits,
+                ok: true,
+                firstRoundCount: first.hits.length,
+              );
+              task.addLog('  [核查] ${second.ok ? '复检仍 ${second.hits.length} 处' : '复检未跑成'}、'
+                  '未优于首轮，回滚保留原文（首轮命中照记）');
+              for (final Fabrication fb in first.hits.take(3)) {
+                issues.add('第 $idx 章编造（${fb.typeLabel}，复检未改善）：${fb.claim}');
+              }
+            }
+          }
         }
       }
 
@@ -701,6 +886,8 @@ class AiPipelineService {
         scenesPlanned: scenes.length,
         scenesWritten: scenes.length - lostScenes.length,
         protagonistMentions: heroMentions,
+        review: qualityReview,
+        factCheck: factCheck,
       );
       task.chapters.add(chapter);
       task.chapters.sort((a, b) => a.idx.compareTo(b.idx));
