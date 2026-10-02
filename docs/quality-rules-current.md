@@ -49,7 +49,8 @@
 | `droughtThrillPerK` / `DROUGHT_THRILL_PER_K` | 0.5 | 爽点断供判定的 💥 密度线（每千字命中数，低于即视为该章无外显兑现）。 |
 | `droughtSidePerK` / `DROUGHT_SIDE_PER_K` | 0.3 | 断供逃生通道的侧面反响密度线：💥 低但侧面反响 ≥ 此值 = 兑现已送达读者，不判断供（防误伤不写套话的好稿）。 |
 | `droughtMinRun` / `DROUGHT_MIN_RUN` | 3 | 连续多少章双低才算「断供带」（1~2 章连低属正常节奏起伏）。 |
-| `fixMinRatio` / `FIX_MIN_RATIO` | 0.92 | 定点修提示词里的字数硬下限（改写后不得低于原文的该比例）。必须比采纳守卫（Python EDITOR_MIN_RATIO=0.85）更严一档，否则模型会照「删水段」整章压缩、产出被守卫整份拒绝、定点修白跑。 |
+| `fixMinRatio` / `FIX_MIN_RATIO` | 0.92 | 定点修提示词里的字数硬下限（改写后不得低于原文的该比例）。必须比采纳守卫（editorMinRatio=0.85）更严一档，否则模型会照「删水段」整章压缩、产出被守卫整份拒绝、定点修白跑。 |
+| `editorMinRatio` / `EDITOR_MIN_RATIO` | 0.85 | 编辑类产出（润色/定点修/重写）的采纳下限：低于原文该比例即视为无效产出、保留原文并告警。比 fixMinRatio 松一档是设计意图（提示词从严，守卫兜底）。Python EDITOR_MIN_RATIO 与 Dart ai_pipeline_service 的压缩守卫共用本值。 |
 | `intraRepeatMinBlock` / `INTRA_REPEAT_MIN_BLOCK` | 120 | 章内重复检测的最短重复块字数（超过此长度的重复块判「凑字」，rewrite 级）。Dart FanqieGateChecker.intraRepeatMinBlock 与本值同口径。 |
 | `intraRepeatGram` / `INTRA_REPEAT_GRAM` | 12 | 章内重复检测的滑动指纹长度（n-gram）。Dart FanqieGateChecker._intraGram 同口径。 |
 
@@ -57,7 +58,6 @@
 
 | 项 | Dart 侧 | Python 侧 | 原因 |
 |---|---|---|---|
-| `editorMinRatio` | 尚未实现该守卫 | 0.85 | novel_pipeline.apply_text_patch 的整章级补丁采纳下限。比 FIX_MIN_RATIO 松一档是设计意图（提示词从严，守卫兜底）；Dart 端补齐前不要把两者合并。 |
 | `genreThrillExtras` | 只用基础 thrillWords / powerSurgeWords | GENRE_THRILL_EXTRA / GENRE_SURGE_EXTRA 题材加成词 | 题材加成词仅 Python 侧存在（2026-09-10 题材感知质检）。因此断供判定（payoff_drought_*）在 Python 侧显式只用基础词表，否则双端不同口径。 |
 | `countWords` | AppConstants.countWords | fanqie_review.count_words | 已知既有差异：Python 侧把「字母->数字」转换算新词、Dart 算同一个词，且 Python 缺 CJK 扩展 A 区。密度类指标因此允许极小的数值差异，**不要**为此改动字数口径（那是影响界面显示的产品级决定，见 docs/quality-enhancement-log.md 第 31 节）。 |
 | `clicheTables` | gateClichePhrases（19 条，短词偏多） | reviewClicheSentences（34 条，长句偏多） | 同质化指标公式与阈值两端一致（distinct 命中 ×1000/字 > 1.2），但词表内容不同：Dart 独有「从这一刻起/命运的车轮/像有什么东西醒」等短词，Python 独有「莫欺少年穷/三十年河东三十年河西/命运的车轮开始转动」等长句。**待产品裁决**：统一成一张表会同时改变两端分数与定点修触发率，必须先用真机成书复验（A/B 分数变化）再落地——2026-10-01 只做收编与记录，不改语义。 |
@@ -65,7 +65,7 @@
 | `conflictWords` | _conflict（31 词） | CONFLICT_WORDS（40 词） | **同用途**（首屏「有无冲突信号」检查，Dart firstScreenCheck ↔ Python first_screen_check），但 Dart 表是 Python 的真子集，Python 多 9 词（今天必须/不交/递/按在/推到/盯上 等）→ 同一段文字两端可能一处判「首屏无冲突」、另一处判「有」。收编前需真机 A/B 定哪一侧更准。 |
 | `driveWords` | _drive（44 词） | DRIVE_WORDS（45 词，多「一个亿」） | **同用途**（水段判定的「该段是否在推进」条件，Dart fillerStats ↔ Python filler_ratio）。Python 多一个「一个亿」→ 该段落一端算推进、另一端算水段，直接影响**水段率与评分**。收编前需真机 A/B。 |
 | `aiClicheWords` | aiClicheWords（21 词） | AI_CLICHE（18 词） | 同用途（AI 味密度 aiEchoPct ↔ AI_CLICHE 命中数）。Dart 是 Python 的超集（多 空气凝固/嘴角勾起/眼底闪过）→ 同一章两端 AI 味数值不同、「AI 腔」告警阈值判定不同。收编前需真机 A/B。 |
-| `instructionMarks` | _instructionMark（21 词，含「招募」） | INSTRUCTION_MARKERS（25 词，含错别字「招摹」、且「代办」重复两次） | Python 侧的「招摹」是错别字，**永远匹配不到**「招募」；实测 124 份真实成书里「招募」出现 2 次、「招摹」0 次 → Python 在这两处会漏判指令痕迹。是否补「招募」需评估误伤（阻断级判定），故本轮只记录不改。 |
+| `instructionMarks` | _instructionMark（21 词） | INSTRUCTION_MARKERS（24 词：错别字「招摹」已修正为「招募」、重复的第二个「代办」已删除） | 同用途（教唆/推广语境标记，命中则情节类红线由「提示」升级为「否决」）。原 Python 侧「招摹」是错别字、永远匹配不到「招募」，且「代办」重复登记；2026-10-03 已按真实语料实测后修正（scripts/probe/probe_instruction_marker.py，174 份成书/样本：「招募」出现 2 次且均在 jsonl 大纲 goal 字段、修正前后否决升级条数差值 +0，即零新增否决面）。仍未统一的是词表长度：Dart 21 词无「代办/起办/群」，Python 多这 3 词（沿用历史 Python 口径，收编需真机 A/B）。另注：两侧均以 any() 语义使用，重复词条不产生重复计数。 |
 | `narrativeOkCategories` | _narrativeOkCategories（4 个分类键） | NARRATIVE_OK_CATEGORIES（3 个分类键，多「教唆与违法细节」） | 「叙事成立的分类」白名单（例：教唆类词出现在叙述里不算违规）。两侧键集合不同（Dart 有 违法违规/广告引流，Python 有 教唆与违法细节）→ 白名单豁免范围不一致。 |
 
 ## 四、改判据的正确流程

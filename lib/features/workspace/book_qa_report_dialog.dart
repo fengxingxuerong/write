@@ -1,9 +1,12 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:novel_writer/ai_pipeline/services/book_qa_service.dart';
 import 'package:novel_writer/core/theme/app_tokens.dart';
+import 'package:novel_writer/engine/quality/quality_validation.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/widgets/app_feedback.dart';
 import 'package:novel_writer/widgets/page_shell.dart';
@@ -41,11 +44,36 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
   bool _exporting = false;
   final Set<int> _expanded = <int>{};
 
+  /// 外部效度状态。桌面端读不到标注文件时保持 [QualityValidation.unknown]，
+  /// 即「未验证」——**绝不因为读不到数据就当作可信**。
+  QualityValidation _validation = QualityValidation.unknown;
+
   @override
   void initState() {
     super.initState();
+    _loadValidation();
     if (widget.novel.chapters.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _run());
+    }
+  }
+
+  /// 读取人评标注以判定外部效度状态。
+  ///
+  /// 标注文件是**仓库开发资产**（`docs/human-eval/annotations.jsonl`），不在
+  /// 随应用分发的支持目录里，因此桌面端通常读不到——这没关系：读不到就保持
+  /// [QualityValidation.unknown]（= 未验证），UI 会照常显示限定语。
+  /// 换句话说，**这条限定的默认值是「保守」而非「信任」**，不会因为路径
+  /// 差异在某些平台上悄悄消失。
+  Future<void> _loadValidation() async {
+    try {
+      final File f = File('docs/human-eval/annotations.jsonl');
+      if (!f.existsSync()) return;
+      final QualityValidation v =
+          QualityValidation.parse(await f.readAsString());
+      if (!mounted) return;
+      setState(() => _validation = v);
+    } catch (_) {
+      // 读不到就保持 unknown（未验证），不静默当成可信。
     }
   }
 
@@ -196,6 +224,13 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
           '共 ${r.totalChapters} 章 · ${r.totalWords} 字 · 纯本地规则质检（零 API 成本）',
           style: Theme.of(context).textTheme.bodySmall,
         ),
+        // 外部效度限定：「达线」不等于「好看」。
+        // 指标全是表层统计量的代理，可被刷分；在真实人评补上之前（当前 0 条），
+        // 上面的分数只证明规则自洽。不写这一行，作者很容易把 78 分当投稿质量证据。
+        if (_validation.needsCaveat) ...<Widget>[
+          const SizedBox(height: 6),
+          _CaveatBanner(validation: _validation, ink: ink),
+        ],
         const Divider(height: 24),
 
         // ---- 章节列表 ----
@@ -348,5 +383,65 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
     if (score >= 80) return ink.success;
     if (score >= 60) return ink.warn;
     return ink.danger;
+  }
+}
+
+/// 外部效度限定横幅：「达线」不等于「好看」。
+///
+/// 刻意做成**可见的横幅**而非脚注：本项目的质检指标全是表层统计量的代理，
+/// 模型多堆词、切碎段落、凑对白就能把分数刷上去。在真实人评补上之前，
+/// 「78 分达线」只证明规则自洽。若把它做成灰色小字，作者在导出投稿前
+/// 极易忽略——而那正是这个缺陷会造成实际损失的地方。
+class _CaveatBanner extends StatelessWidget {
+  /// 构造横幅。
+  const _CaveatBanner({required this.validation, required this.ink});
+
+  /// 外部效度状态。
+  final QualityValidation validation;
+
+  /// 主题语义色。
+  final AppInk ink;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppTokens.s3,
+        vertical: AppTokens.s2,
+      ),
+      decoration: BoxDecoration(
+        color: ink.warn.withValues(alpha: 0.10),
+        border: Border.all(color: ink.warn.withValues(alpha: 0.45)),
+        borderRadius: BorderRadius.circular(AppTokens.r2),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Icon(Icons.info_outline, size: 16, color: ink.warn),
+          const SizedBox(width: AppTokens.s2),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  validation.caveatLabel,
+                  style: AppFonts.text(
+                    ink.warn,
+                    size: 12,
+                    weight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  validation.detail,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

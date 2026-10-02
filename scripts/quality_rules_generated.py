@@ -939,8 +939,11 @@ DROUGHT_SIDE_PER_K = 0.3
 # 连续多少章双低才算「断供带」（1~2 章连低属正常节奏起伏）。
 DROUGHT_MIN_RUN = 3
 
-# 定点修提示词里的字数硬下限（改写后不得低于原文的该比例）。必须比采纳守卫（Python EDITOR_MIN_RATIO=0.85）更严一档，否则模型会照「删水段」整章压缩、产出被守卫整份拒绝、定点修白跑。
+# 定点修提示词里的字数硬下限（改写后不得低于原文的该比例）。必须比采纳守卫（editorMinRatio=0.85）更严一档，否则模型会照「删水段」整章压缩、产出被守卫整份拒绝、定点修白跑。
 FIX_MIN_RATIO = 0.92
+
+# 编辑类产出（润色/定点修/重写）的采纳下限：低于原文该比例即视为无效产出、保留原文并告警。比 fixMinRatio 松一档是设计意图（提示词从严，守卫兜底）。Python EDITOR_MIN_RATIO 与 Dart ai_pipeline_service 的压缩守卫共用本值。
+EDITOR_MIN_RATIO = 0.85
 
 # 章内重复检测的最短重复块字数（超过此长度的重复块判「凑字」，rewrite 级）。Dart FanqieGateChecker.intraRepeatMinBlock 与本值同口径。
 INTRA_REPEAT_MIN_BLOCK = 120
@@ -985,6 +988,7 @@ __all__ = [
     "DROUGHT_SIDE_PER_K",
     "DROUGHT_MIN_RUN",
     "FIX_MIN_RATIO",
+    "EDITOR_MIN_RATIO",
     "INTRA_REPEAT_MIN_BLOCK",
     "INTRA_REPEAT_GRAM",
 ]

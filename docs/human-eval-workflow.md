@@ -73,6 +73,27 @@
    >
    > 但**真实标注仍是 0 条**。在补上人工评分之前，`80 分达线` 依旧只是自洽
    > 而非有效——这是本项目唯一无法靠代码消除的缺口，只能由人读章节来填。
+   >
+   > **这个状态现在是机器可读的**（2026-10-03 起），不要再靠文档口头提醒：
+   >
+   > ```bash
+   > python scripts/quality_validation.py     # 打印当前效度状态
+   > ```
+   >
+   > 单一事实源 `rules/quality_validation.json`，计算逻辑 `scripts/quality_validation.py`
+   > （Dart 对应 `lib/engine/quality/quality_validation.dart`）。状态**从
+   > `annotations.jsonl` 里 `human` 为数值的行数推导**，不是写死的常量——人评补上后
+   > 会自动升级，想让状态变成 `validated` 必须真的有人读过章节：
+   >
+   > | 状态 | 条件 | 含义 |
+   > |---|---|---|
+   > | `none` | 真实标注 0 条 | 达线结论仅为自洽，**不具外部效度** |
+   > | `insufficient` | 有标注但 < 10 条 | 只能作方向性参考，不得作为门禁依据 |
+   > | `provisional` | ≥ 10 条但无报告 | 结论尚未产出 |
+   > | `validated` | ≥ 10 条且有 `report-*.md` | 跑过实验（**不代表指标都好**，结论可能是降权/下线） |
+   >
+   > 消费方：`run_smoke_gate.py` 在 `SMOKE GATE: PASS` 正下方打印限定块；
+   > Dart 全书体检弹窗在「达线章节」卡片下显示醒目横幅。**两侧都无法绕过**。
 
 4. 跑实验并留档：
 

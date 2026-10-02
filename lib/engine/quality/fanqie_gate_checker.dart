@@ -4,10 +4,11 @@ import 'package:novel_writer/core/utils/text_index.dart';
 import 'package:novel_writer/services/sensitive_words.dart';
 import 'package:novel_writer/engine/quality/quality_rules.g.dart';
 
-/// 定点修字数下限（与 Python 侧 `fanqie_review.FIX_MIN_RATIO` 同口径）。
+/// 定点修字数下限（与 Python 侧 `fanqie_review.FIX_MIN_RATIO` 同值同源）。
 ///
-/// 低于此比例整份产出会被采纳守卫拒绝（Python 侧 `apply_text_patch` 默认 0.85）——
-/// 提示词必须比守卫更严一档，并写明「评审的压缩诉求让位于本下限」，否则模型会照
+/// 低于此比例整份产出会被采纳守卫拒绝（守卫阈值为 `QualityRules.editorMinRatio`
+/// =0.85，Python 侧 apply_text_patch 同值）——提示词必须比守卫更严一档，并写明
+/// 「评审的压缩诉求让位于本下限」，否则模型会照
 /// 【改写要求】的「删水段/短句」把整章压掉三成，产出全被拒、定点修白跑
 /// （门禁 v7 实测 4 次：4087→2847 / 3465→2718 / 4176→2707 / 5983→1517）。
 const double fixMinRatio = QualityRules.fixMinRatio;

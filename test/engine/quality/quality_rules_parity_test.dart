@@ -72,6 +72,7 @@ final Map<String, num> _dartScalars = <String, num>{
   'droughtSidePerK': QualityRules.droughtSidePerK,
   'droughtMinRun': QualityRules.droughtMinRun,
   'fixMinRatio': QualityRules.fixMinRatio,
+  'editorMinRatio': QualityRules.editorMinRatio,
   'intraRepeatMinBlock': QualityRules.intraRepeatMinBlock,
   'intraRepeatGram': QualityRules.intraRepeatGram,
 };

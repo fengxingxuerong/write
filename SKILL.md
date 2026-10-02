@@ -54,9 +54,14 @@ python -m scripts.novel_pipeline --total-words 100000 --max-chapters 40 \
 python -m scripts.run_smoke_gate --check-only            # 端到端门禁 17 项（只验收已有产物）
 python -m scripts.qa_scan_existing data/generated/*.txt  # 成书扫描（单文件路径）
 python -m scripts.qa_semantic_check <文件> --genre 玄幻   # 人称/称谓/题材/关系 四关
+python -m scripts.quality_validation                    # 质量指标的「外部效度」状态
 ```
 
 > 后两个是**纯规则、零 LLM 成本**，不需要 API key——没有密钥时用它们。
+>
+> ⚠️ `run_smoke_gate` 打出 `PASS` 时会紧跟一段**效度限定**。当前真实人评标注是 0 条，
+> 所以那段话必然在说：「本次分数只证明规则自洽，不代表读者认可」。这不是客套——
+> 本项目的指标可以被刷分（多堆词/切碎段落/凑对白）。**别把 PASS 当投稿质量证据。**
 
 ### 端点省配额
 

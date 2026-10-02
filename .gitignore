@@ -14,6 +14,12 @@ build-*.log
 test-*.log
 build_run.log
 
+# 命令行重定向残留（如 `python -m unittest > .tmp_py.txt`）。
+# 这类文件内容是终端输出、无参考价值，且会污染工作区与提交候选；
+# 但历史上确实漏进过工作区，故显式忽略而不是靠自觉。
+.tmp_*.txt
+*.tmp
+
 # Windows 保留设备名误创建文件
 nul
 con

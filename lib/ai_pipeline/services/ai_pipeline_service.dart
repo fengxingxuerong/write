@@ -9,14 +9,19 @@ import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/quality/fanqie_gate_checker.dart';
+import 'package:novel_writer/engine/quality/quality_rules.g.dart';
 import 'package:novel_writer/models/llm_config.dart';
 
-/// 关卡5 定点修的字数下限比例（对齐 Python `FIX_MIN_RATIO = 0.92`）。
+/// 关卡5 定点修的字数下限比例。
 ///
-/// 提示词下限必须**严于**代码采纳守卫（0.85）：模型是照着数字办事的，若提示词
-/// 说「压缩到 85%」而守卫也只要 85%，两者卡在同一根线上毫无余量；提示词给 0.92
-/// 留出的 7% 空间让模型先自查，守卫只兜「模型完全不听指令」的情况。
-const double factFixMinRatio = 0.92;
+/// 值取自单一数据源 `QualityRules.fixMinRatio`（rules/quality_rules.json），
+/// 与 Python `FIX_MIN_RATIO` 同值同源——2026-10-03 此前这里是独立硬编码 0.92，
+/// 与生成常量构成又一处「需要手工同步的第二份」。
+///
+/// 提示词下限必须**严于**代码采纳守卫（editorMinRatio=0.85）：模型是照着数字办事的，
+/// 若提示词说「压缩到 85%」而守卫也只要 85%，两者卡在同一根线上毫无余量；
+/// 提示词给 0.92 留出的空间让模型先自查，守卫只兜「模型完全不听指令」的情况。
+const double factFixMinRatio = QualityRules.fixMinRatio;
 
 /// 多模型协作长篇小说流水线（Dart 原生编排）。
 ///
@@ -767,8 +772,11 @@ class AiPipelineService {
       }
 
       // 3) 去AI味润色（编辑）
-      // 字数下限守卫（与 Python 端 EDITOR_MIN_RATIO=0.85 同步）：fulltest 实测编辑链
-      // 曾把 3805 字章润色成 1921 字砍半，过度压缩视为无效产出，保留原文并告警
+      // 字数下限守卫：fulltest 实测编辑链曾把 3805 字章润色成 1921 字砍半，
+      // 过度压缩视为无效产出，保留原文并告警。
+      // 阈值取自单一数据源 QualityRules.editorMinRatio（rules/quality_rules.json），
+      // 与 Python EDITOR_MIN_RATIO 同值同源——此前两端各自硬编码 0.85，
+      // 是唯一一条不受 rules_codegen 保护的阈值。
       int rawWords = w;
       if (task.config.useEditor) {
         final String edited = await call(
@@ -778,11 +786,13 @@ class AiPipelineService {
         );
         if (edited.isNotEmpty) {
           final int wEdited = _countWords(edited);
-          if (wEdited >= w * 0.85) {
+          final int minWords = (w * QualityRules.editorMinRatio).ceil();
+          if (wEdited >= minWords) {
             task.addLog('  [编辑] 润色完成 $w -> $wEdited 字');
             fullText = edited;
           } else {
-            task.addLog('  [编辑] ⚠ 润色产出 $w -> $wEdited 字，过度压缩（<85%），拒绝采纳保留原文');
+            task.addLog('  [编辑] ⚠ 润色产出 $w -> $wEdited 字，过度压缩'
+                '（<${(QualityRules.editorMinRatio * 100).round()}%），拒绝采纳保留原文');
           }
         } else {
           task.addLog('  [编辑] 润色失败，保留原文');
@@ -1393,7 +1403,8 @@ class AiPipelineService {
                     maxWords: (oldWords * 2).ceil(),
                   );
             final int newWords = _countWords(rw.trim());
-            if (why == null && newWords >= oldWords * 0.85) {
+            final int minWords = (oldWords * QualityRules.editorMinRatio).ceil();
+            if (why == null && newWords >= minWords) {
               task.chapters[i] = PipelineChapter(
                 idx: target.idx,
                 title: target.title,

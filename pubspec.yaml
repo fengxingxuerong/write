@@ -34,8 +34,22 @@ dev_dependencies:
   # 注：不引入 package:test —— flutter_test 已内建等价 API，
   # 避免与 flutter_test 的 test_api 版本约束产生解析冲突。
 
-# 注意：本工程刻意不引入任何网络库（http / dio 等），
-# 从依赖层面保证「完全离线、零 API、零网络请求」。
+# 网络能力说明（2026-10-03 更正措辞）：
+# 本工程**不引入 pub 网络库**（http / dio 等）——LLM 调用一律用 SDK 自带的
+# `dart:io` HttpClient，避免为「发几个请求」引入一整套依赖与传递依赖。
+#
+# ⚠️ 但这**不等于「完全离线、零网络请求」**，旧注释的表述具有误导性。
+# 实测 lib/ 下 7 个文件含真实 HttpClient 调用：
+#   lib/engine/llm_engine.dart              流式生成
+#   lib/engine/llm_chat_client.dart         标题/记忆/校对等非流式对话
+#   lib/ai_pipeline/services/llm_router.dart 多角色流水线路由
+#   lib/features/editor/continue_write_dialog.dart  编辑器「续写」
+#   lib/features/editor/rewrite_dialog.dart        编辑器「修改」
+#   lib/features/workspace/llm_settings_dialog.dart 本地模型探测
+#   lib/core/crash_reporter.dart                   崩溃日志上报
+# 它们均对应**用户主动开启**的能力（云端/本地 LLM、崩溃上报），默认不发请求。
+# 准确的说法是「默认离线、联网须用户主动启用」，详见 README 首段与
+# lib/features/workspace/privacy_page.dart。
 flutter:
   uses-material-design: true
   assets:

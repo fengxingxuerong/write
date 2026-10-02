@@ -45,6 +45,8 @@ from fanqie_review import (blocking_reasons, genre_drift, intra_repeat,  # noqa:
                            meta_talk, prompt_leak)
 from qa_semantic_check import (detect_pov_drift, detect_name_drift,  # noqa: E402
                                detect_content_drift, detect_relation_drift)
+# 外部效度状态：在 PASS 正下方披露「达线仅为自洽」，见 docs/human-eval-workflow.md
+from quality_validation import caveat_lines  # noqa: E402
 
 
 def step_compile():
@@ -405,6 +407,11 @@ def check(output, max_chapters, review_pass=78.0, genre="玄幻"):
 
     n_pass = sum(1 for _, ok, _ in results if ok)
     print(f"\nSMOKE GATE: {'PASS' if n_pass == len(results) else 'FAIL'}（{n_pass}/{len(results)}）")
+    # 外部效度限定：门禁 PASS 只说明「规则自洽」，不等于「读者认可」。
+    # 这一段不是免责声明客套——docs/human-eval-workflow.md 已写明本项目的机器指标
+    # 全是表层统计量的代理、可被刷分，与「人读了觉得好」无已验证关系。把它印在
+    # PASS 正下方，是为了防止「PASS + 80 分」被当成投稿可用的质量证据。
+    print("\n".join(caveat_lines()))
     return n_pass == len(results)
 
 def main():

@@ -47,6 +47,8 @@ from fanqie_review import (review_chapter, fix_prompt, patch_gate, local_hook_fa
                            ending_ev_fragment,
                            FIX_MIN_RATIO)  # noqa: E402
 from fanqie_prompts import first_screen_rewrite_prompt, pack_prompt  # noqa: E402
+# 质检阈值单一数据源（rules/quality_rules.json 的生成物，无项目内依赖）。
+import quality_rules_generated as _gen  # noqa: E402
 
 # ============================================================
 # 模型配置（密钥经环境变量注入，不硬编码）
@@ -254,8 +256,10 @@ COOLDOWN_SECONDS = 300  # 连续失败 N 次后冷却 5 分钟
 
 # 编辑类产出采纳下限（2026-09-13 fulltest 实测：编辑链曾把 3805 字章润色成 1921 字
 # 砍半后被无条件采纳，违反"字数只多不少"约定）。润色/定点修/重写类采纳统一要求
-# ≥ 原文 85%，不达标视为无效产出、保留原文并告警。Dart 端 lib/ai_pipeline/ 同步待办。
-EDITOR_MIN_RATIO = 0.85
+# ≥ 原文 85%，不达标视为无效产出、保留原文并告警。
+# 2026-10-03：值改由 rules/quality_rules.json 的 editorMinRatio 单一数据源下发
+# （此前本文件与 Dart 侧各自硬编码 0.85，是唯一一条未受 codegen 保护的阈值）。
+EDITOR_MIN_RATIO = _gen.EDITOR_MIN_RATIO
 
 
 def _health_key(provider):

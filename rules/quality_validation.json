@@ -1,0 +1,15 @@
+{
+  "note": "质量主张的『外部效度』状态。docs/human-eval-workflow.md 第一节的结论：本项目的机器指标（爽点密度/钩子/对白占比/AI 味…）全是表层统计量的代理，可被刷分，与『人读了觉得好』之间没有任何已验证关系。本文件把该结论做成机器可读，供 run_smoke_gate 与 Dart UI 在输出『达线/PASS』时同时披露——避免把『自洽』当成『有效』。",
+  "minSamplesForConclusion": 10,
+  "minSamplesForConclusionNote": "低于此样本量时相关性无结论价值（scripts/human_eval_correlation.py --min-n 默认同值）。",
+  "minSamplesForStrongConclusion": 30,
+  "minSamplesForStrongConclusionNote": "作业手册的建议值：样本达到此量才当结论用，否则只作方向性参考。",
+  "annotationsPath": "docs/human-eval/annotations.jsonl",
+  "annotationsPathNote": "真实标注数以该文件里 human 字段非 null 的行数为准。**严禁编造**：人评数据的全部价值来自「评分者是人」，编出来的数据会把权重体系带偏，比不做更糟。",
+  "statusVocabulary": {
+    "none": "一条真实标注都没有——所有『达线』结论仅为自洽，不具外部效度。",
+    "insufficient": "有标注但样本不足——只能作方向性参考，不得作为门禁依据。",
+    "provisional": "样本量够、结论已产出——但相关性会随词表改动退化，改判据后须重跑。",
+    "validated": "已完成相关性实验且结论为保留（报告见 docs/human-eval/report-*.md）。"
+  }
+}

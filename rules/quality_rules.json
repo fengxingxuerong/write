@@ -1050,8 +1050,14 @@
     {
       "id": "fixMinRatio",
       "dartType": "double",
-      "doc": "定点修提示词里的字数硬下限（改写后不得低于原文的该比例）。必须比采纳守卫（Python EDITOR_MIN_RATIO=0.85）更严一档，否则模型会照「删水段」整章压缩、产出被守卫整份拒绝、定点修白跑。",
+      "doc": "定点修提示词里的字数硬下限（改写后不得低于原文的该比例）。必须比采纳守卫（editorMinRatio=0.85）更严一档，否则模型会照「删水段」整章压缩、产出被守卫整份拒绝、定点修白跑。",
       "value": 0.92
+    },
+    {
+      "id": "editorMinRatio",
+      "dartType": "double",
+      "doc": "编辑类产出（润色/定点修/重写）的采纳下限：低于原文该比例即视为无效产出、保留原文并告警。比 fixMinRatio 松一档是设计意图（提示词从严，守卫兜底）。Python EDITOR_MIN_RATIO 与 Dart ai_pipeline_service 的压缩守卫共用本值。",
+      "value": 0.85
     },
     {
       "id": "intraRepeatMinBlock",
@@ -1067,12 +1073,6 @@
     }
   ],
   "asymmetries": [
-    {
-      "name": "editorMinRatio",
-      "dart": "尚未实现该守卫",
-      "python": 0.85,
-      "why": "novel_pipeline.apply_text_patch 的整章级补丁采纳下限。比 FIX_MIN_RATIO 松一档是设计意图（提示词从严，守卫兜底）；Dart 端补齐前不要把两者合并。"
-    },
     {
       "name": "genreThrillExtras",
       "dart": "只用基础 thrillWords / powerSurgeWords",
@@ -1117,9 +1117,9 @@
     },
     {
       "name": "instructionMarks",
-      "dart": "_instructionMark（21 词，含「招募」）",
-      "python": "INSTRUCTION_MARKERS（25 词，含错别字「招摹」、且「代办」重复两次）",
-      "why": "Python 侧的「招摹」是错别字，**永远匹配不到**「招募」；实测 124 份真实成书里「招募」出现 2 次、「招摹」0 次 → Python 在这两处会漏判指令痕迹。是否补「招募」需评估误伤（阻断级判定），故本轮只记录不改。"
+      "dart": "_instructionMark（21 词）",
+      "python": "INSTRUCTION_MARKERS（24 词：错别字「招摹」已修正为「招募」、重复的第二个「代办」已删除）",
+      "why": "同用途（教唆/推广语境标记，命中则情节类红线由「提示」升级为「否决」）。原 Python 侧「招摹」是错别字、永远匹配不到「招募」，且「代办」重复登记；2026-10-03 已按真实语料实测后修正（scripts/probe/probe_instruction_marker.py，174 份成书/样本：「招募」出现 2 次且均在 jsonl 大纲 goal 字段、修正前后否决升级条数差值 +0，即零新增否决面）。仍未统一的是词表长度：Dart 21 词无「代办/起办/群」，Python 多这 3 词（沿用历史 Python 口径，收编需真机 A/B）。另注：两侧均以 any() 语义使用，重复词条不产生重复计数。"
     },
     {
       "name": "narrativeOkCategories",
