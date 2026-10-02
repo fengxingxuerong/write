@@ -52,6 +52,7 @@ try:  # pragma: no cover - 分支取决于调用方式
         ANCIENT_GENRES,
         INTRA_REPEAT_MIN_BLOCK,
         INTRA_REPEAT_GRAM,
+        CONFLICT_WORDS,
 )
 except ImportError:  # pragma: no cover - 平铺导入（脚本直跑/同目录 import）
     _here = os.path.dirname(os.path.abspath(__file__))
@@ -74,6 +75,7 @@ except ImportError:  # pragma: no cover - 平铺导入（脚本直跑/同目录 
         ANCIENT_GENRES,
         INTRA_REPEAT_MIN_BLOCK,
         INTRA_REPEAT_GRAM,
+        CONFLICT_WORDS,
 )
 
 # ============================================================
@@ -175,10 +177,10 @@ NAME_PAT = re.compile(
     r"(?:说|道|问|答|笑|喊|盯|看|抬头|转身|点头|摇头|皱眉|收|站|蹲|伸手|开口|吐))")
 
 # 冲突信号：首屏必须出现至少一个（开局要带包袋）
-CONFLICT_WORDS = ["吼", "骂", "砸", "押", "欠", "逐", "抢", "抓", "审", "封门", "退婚",
-                  "断", "碎", "伤", "血", "死", "遗物", "最后", "今天必须", "不交", "偿命",
-                  "让位", "除名", "扫地出门", "递", "按在", "推到", "罚", "跪", "赔", "欠条",
-                  "盯上", "警告", "通融", "期限", "三天内", "当场", "搜", "抬走", "拉走"]
+# 值来自 rules/quality_rules.json 的 conflictWords -> quality_rules_generated
+# （2026-10-03 收编：Dart 原表是本表的真子集，Python 独有 9 词实测命中
+#  66/123 份真实成书 = 53.7%，属真漏判，故以本表全集为准单端收编并双端同源）
+CONFLICT_WORDS = list(CONFLICT_WORDS)
 
 # 骨架/规划官提示词泄漏（漏进正文 = 直接判废）
 PROMPT_LEAK = PROMPT_LEAK = list(PROMPT_LEAK)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）

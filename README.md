@@ -61,6 +61,8 @@
 
 `SKILL.md` 把本项目的核心能力封装为 coding-agent 可调用的 skill（Claude Code / OpenClaw 等生态可直接发现），含常用命令、产物读法与常见故障对照——**给 agent 看的说明书，也是人看的速查表**。
 
+> 📚 文档入口在 [`docs/README.md`](docs/README.md)：按「你要解决什么问题」组织，并标注了哪些是历史归档（勿照其改代码）。
+
 ```
 lib/
 ├── main.dart / app.dart            # 入口与根组件
@@ -83,7 +85,7 @@ lib/
 
 ### 质检判据与阈值（单一数据源）
 
-词表（钩子/爽点/变强异动/侧面反响/开场强弱/三件套…共 320 词）与阈值（对白下限、水段上限、断供三参、定点修字数下限…共 7 项）只存在一份：`rules/quality_rules.json`。
+词表（钩子/爽点/变强异动/侧面反响/开场强弱/三件套/首屏冲突信号…共 843 词）与阈值（对白下限、水段上限、断供三参、定点修字数下限、编辑采纳下限…共 10 项）只存在一份：`rules/quality_rules.json`。
 
 ```bash
 # 改判据：只改 JSON，然后重新生成三份产物（Dart 常量 / Python 常量 / 人读总表）
@@ -91,13 +93,20 @@ python scripts/rules_codegen.py
 
 # 校验（CI 门禁）：生成物与 JSON 必须逐字一致，否则失败
 python scripts/rules_codegen.py --check
+
+# 想知道两端词表差在哪、该不该收编：用真实成书 A/B（只测量、不改表）
+python scripts/ab_rules_parity
+
+# 想知道当前「达线」是否已与人评对齐（当前：0 条真实标注 = 未对齐）
+python scripts/quality_validation
 ```
 
 | 想知道 | 看哪里 |
 |---|---|
 | 当前阈值是多少、为什么是这个数 | `docs/quality-rules-current.md`（生成物，别手改） |
 | 双端常量是否被手改 | `test/engine/quality/quality_rules_parity_test.dart` + `scripts/test_quality_rules_parity.py` |
-| 指标与人评是否真的相关（该不该用） | `docs/human-eval-workflow.md` + `scripts/human_eval_correlation.py` |
+| 两端词表差在哪、收编影响面多大 | `python scripts/ab_rules_parity`（实测语料出结论，不靠推断） |
+| 指标与人评是否真的相关（该不该用） | `docs/human-eval-workflow.md` + `python scripts/quality_validation` |
 | 真实成书上双端**算法**是否一致 | `tool/verify_*_parity_test.dart`（需本地基线，按需手动跑；基线用 `python tool/gen_parity_baselines.py` 生成，`--check` 可重算比对） |
 
 > CI 里跑的 `flutter test` **不再**包含「基线缺失即 SKIP 通过」的用例——这类检查已移入 `tool/`，缺依赖时会直接失败，避免「测试全绿但双端口径其实不一致」的假绿。

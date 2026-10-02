@@ -359,6 +359,50 @@ class QualityRules {
   /// hookWords 中属三件套性质的成员：作为唯一尾部钩子信号时不采信。
   static const Set<String> triadHookOnly = <String>{'发烫', '醒了过来'};
 
+  /// 首屏「有无冲突信号」检查（开局要带包袋）。2026-10-03 按 scripts/ab_rules_parity.py 在 123 份真实成书上实测收编：Dart 原表是 Python 的真子集，Python 独有的 9 词命中 66/123 份（53.7%）——即过半成书 Dart 会漏判首屏冲突，属真漏判而非口径分歧，故以 Python 全集为准单端收编。命中即视为首屏有冲突信号。
+  static const List<String> conflictWords = <String>[
+    '吼',
+    '骂',
+    '砸',
+    '押',
+    '欠',
+    '逐',
+    '抢',
+    '抓',
+    '审',
+    '封门',
+    '退婚',
+    '断',
+    '碎',
+    '伤',
+    '血',
+    '死',
+    '遗物',
+    '最后',
+    '今天必须',
+    '不交',
+    '偿命',
+    '让位',
+    '除名',
+    '扫地出门',
+    '递',
+    '按在',
+    '推到',
+    '罚',
+    '跪',
+    '赔',
+    '欠条',
+    '盯上',
+    '警告',
+    '通融',
+    '期限',
+    '三天内',
+    '当场',
+    '搜',
+    '抬走',
+    '拉走',
+  ];
+
   /// 网文高频套句（Dart 侧过审闸门「同质化」判定用）：distinct 命中 ×1000/字 > 1.2 判修改。**注意**：与 Python 的 reviewClicheSentences 是同一套指标公式、不同词表——Dart 19 条多为短词（如「命运的车轮」「仿佛在诉说」，匹配更宽），Python 34 条多为长句（匹配更准但覆盖更窄）。两侧漂移见 asymmetries.clicheTables。
   static const List<String> gateClichePhrases = <String>[
     '空气仿佛凝固',

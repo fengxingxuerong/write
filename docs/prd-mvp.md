@@ -7,8 +7,11 @@
 | 日期 | 2026-07-31 |
 | 作者 | 许清楚（产品经理） |
 
+> **⚠️ 历史归档文档（2026-07-31 的 MVP 历史基线），不是当前需求。**
+> 当前以根目录 [`../README.md`](../README.md) 为准；本文仅供追溯「当初的需求是什么」。
+>
 > **文档说明**
-> - 本文是 2026-07-31 的 MVP 历史基线；当前已实现功能、平台边界和验证方式以根目录 `README.md` 与 `docs/optimization-report.md` 为准。
+> - 本文是 2026-07-31 的 MVP 历史基线；当前已实现功能、平台边界和验证方式以根目录 `README.md` 与 [`optimization-report.md`](optimization-report.md) 为准。
 > - 技术栈：Flutter（Dart）单代码库，跨端编译 Windows `.exe` + Android / iOS
 > - 硬性约束：**完全离线、不调用任何外部 API**（无云端、无 API key、无网络请求）
 > - MVP 生成引擎：基于**模板 / 规则 / 语料库**的离线生成引擎（非大模型）

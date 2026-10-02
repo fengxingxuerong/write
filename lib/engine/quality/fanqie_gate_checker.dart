@@ -256,11 +256,11 @@ class FanqieGateChecker {
       RegExp('[“"「『]([^”"」』]{1,200})[”"」』]');
 
   /// 冲突信号：首屏要带包袋。
-  static const List<String> _conflict = <String>[
-    '吼', '骂', '砸', '押', '欠', '逐', '抢', '抓', '审', '封门', '退婚', '断', '碎',
-    '伤', '血', '死', '遗物', '最后', '偿命', '让位', '除名', '扫地出门', '罚', '跪',
-    '赔', '欠条', '警告', '期限', '当场', '拉走', '抬走',
-  ];
+/// 值来自 [QualityRules.conflictWords]（rules/quality_rules.json 生成，40 词）。
+/// 2026-10-03 收编：本表原为 31 词硬编码，是 Python 表的真子集——实测
+/// Python 独有的 9 词在 123 份真实成书上命中 66 份（53.7%），即过半成书
+/// Dart 会漏判首屏冲突。收编后两端同源，不再有「子集漂移」。
+  static const List<String> _conflict = QualityRules.conflictWords;
 
   /// 网文高频套句（同质化风险）。
   /// 值来自 [QualityRules.gateClichePhrases]（Dart 闸门口径 19 条）；

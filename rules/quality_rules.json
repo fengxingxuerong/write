@@ -380,6 +380,18 @@
       ]
     },
     {
+      "id": "conflictWords",
+      "kind": "list",
+      "doc": "首屏「有无冲突信号」检查（开局要带包袋）。2026-10-03 按 scripts/ab_rules_parity.py 在 123 份真实成书上实测收编：Dart 原表是 Python 的真子集，Python 独有的 9 词命中 66/123 份（53.7%）——即过半成书 Dart 会漏判首屏冲突，属真漏判而非口径分歧，故以 Python 全集为准单端收编。命中即视为首屏有冲突信号。",
+      "values": [
+        "吼", "骂", "砸", "押", "欠", "逐", "抢", "抓", "审", "封门",
+        "退婚", "断", "碎", "伤", "血", "死", "遗物", "最后",
+        "今天必须", "不交", "偿命", "让位", "除名", "扫地出门",
+        "递", "按在", "推到", "罚", "跪", "赔", "欠条",
+        "盯上", "警告", "通融", "期限", "三天内", "当场", "搜", "抬走", "拉走"
+      ]
+    },
+    {
       "id": "gateClichePhrases",
       "kind": "list",
       "doc": "网文高频套句（Dart 侧过审闸门「同质化」判定用）：distinct 命中 ×1000/字 > 1.2 判修改。**注意**：与 Python 的 reviewClicheSentences 是同一套指标公式、不同词表——Dart 19 条多为短词（如「命运的车轮」「仿佛在诉说」，匹配更宽），Python 34 条多为长句（匹配更准但覆盖更窄）。两侧漂移见 asymmetries.clicheTables。",
@@ -1089,7 +1101,7 @@
       "name": "clicheTables",
       "dart": "gateClichePhrases（19 条，短词偏多）",
       "python": "reviewClicheSentences（34 条，长句偏多）",
-      "why": "同质化指标公式与阈值两端一致（distinct 命中 ×1000/字 > 1.2），但词表内容不同：Dart 独有「从这一刻起/命运的车轮/像有什么东西醒」等短词，Python 独有「莫欺少年穷/三十年河东三十年河西/命运的车轮开始转动」等长句。**待产品裁决**：统一成一张表会同时改变两端分数与定点修触发率，必须先用真机成书复验（A/B 分数变化）再落地——2026-10-01 只做收编与记录，不改语义。"
+      "why": "同质化指标公式与阈值两端一致（distinct 命中 ×1000/字 > 1.2），但词表内容不同：Dart 独有「从这一刻起/命运的车轮/像有什么东西醒」等短词，Python 独有「莫欺少年穷/三十年河东三十年河西/命运的车轮开始转动」等长句。**待产品裁决**：2026-10-03 已按 scripts/ab_rules_parity.py 在 123 份真实成书上 A/B：Dart 独有 4 词命中 1/123 份、Python 独有 19 词命中 1/123 份——实测影响面都很小，但两端**确有独有词且都在被使用**，属口径设计分歧（短词更宽 vs 长句更准）而非漏词。统一成一张表会同时改变两端分数与定点修触发率，仍需产品裁决，不宜由脚本单方面合并。"
     },
     {
       "name": "complianceTables",
@@ -1098,22 +1110,16 @@
       "why": "两端作用域不同**且几乎不相交**（词级交集仅 17 / 合计 295，2026-10-01 实测），而 fanqie_review 的旧注释称「与 Dart 侧保持同步扩充」——该表述与事实不符，已改为如实描述。**不要合并成一张表**：合并会同时改变平台红线判定、编辑自查命中与 UI 分类展示（分类名是对外可见的），需产品先定「平台红线是否要覆盖色情/脏话、编辑自查是否要含时政/宗教」再动。"
     },
     {
-      "name": "conflictWords",
-      "dart": "_conflict（31 词）",
-      "python": "CONFLICT_WORDS（40 词）",
-      "why": "**同用途**（首屏「有无冲突信号」检查，Dart firstScreenCheck ↔ Python first_screen_check），但 Dart 表是 Python 的真子集，Python 多 9 词（今天必须/不交/递/按在/推到/盯上 等）→ 同一段文字两端可能一处判「首屏无冲突」、另一处判「有」。收编前需真机 A/B 定哪一侧更准。"
-    },
-    {
       "name": "driveWords",
       "dart": "_drive（44 词）",
       "python": "DRIVE_WORDS（45 词，多「一个亿」）",
-      "why": "**同用途**（水段判定的「该段是否在推进」条件，Dart fillerStats ↔ Python filler_ratio）。Python 多一个「一个亿」→ 该段落一端算推进、另一端算水段，直接影响**水段率与评分**。收编前需真机 A/B。"
+      "why": "**同用途**（水段判定的「该段是否在推进」条件，Dart fillerStats ↔ Python filler_ratio）。2026-10-03 已按 scripts/ab_rules_parity.py 在 123 份真实成书上 A/B：Python 独有的「一个亿」**零命中**（0/123 份）→ 实测无影响，暂不收编。若将来成书里出现该词导致两端水段率分叉，再收编不迟。"
     },
     {
       "name": "aiClicheWords",
       "dart": "aiClicheWords（21 词）",
       "python": "AI_CLICHE（18 词）",
-      "why": "同用途（AI 味密度 aiEchoPct ↔ AI_CLICHE 命中数）。Dart 是 Python 的超集（多 空气凝固/嘴角勾起/眼底闪过）→ 同一章两端 AI 味数值不同、「AI 腔」告警阈值判定不同。收编前需真机 A/B。"
+      "why": "同用途（AI 味密度 aiEchoPct ↔ AI_CLICHE 命中数）。Dart 是 Python 的超集（多 空气凝固/嘴角勾起/眼底闪过）。2026-10-03 已按 scripts/ab_rules_parity.py 在 123 份真实成书上 A/B：这 3 个 Dart 独有词**零命中**（0/123 份）→ 实测无影响，暂不收编。（注：本表尚未进 rules/quality_rules.json，仍是 Dart pipeline_qa.dart 的独立字面量 + Python generate_novel.AI_CLICHE；收编前需先定「是否把 AI 腔词表也纳入单一数据源」。）"
     },
     {
       "name": "instructionMarks",
