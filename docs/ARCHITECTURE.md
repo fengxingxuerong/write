@@ -1,7 +1,9 @@
 # 墨匠 InkSmith —— 架构文档
 
 > 面向维护者。说明代码分层、关键抽象、AI 生成链路、数据流与测试策略。
-> 本文档与最新代码同步（2026-10-01：新增 `ai_pipeline/` 长篇流水线子系统、
+> 本文档与最新代码同步（2026-10-02：新增 `pipeline_quality_panel.dart` 质量面板、
+> `ChapterQualityReview` / `ChapterFactCheck` 结构化质量记录、Dart 端关卡5 编造核查；
+> 2026-10-01：新增 `ai_pipeline/` 长篇流水线子系统、
 > `engine/quality/` 质检层、`cross_chapter_qa.dart` / `style_fingerprint.dart`
 > 两个子模块拆分）。
 
@@ -91,7 +93,9 @@ lib/
 │   │   ├── split_chapter_dialog.dart # 章节分割确认弹窗
 │   │   └── sensitive_check_dialog.dart # 敏感词检查（含历史命中 TOP5）
 │   ├── generate/                  # 生成对话框 + GenerateViewModel（多章/预览/偏好持久化）
-│   ├── ai_pipeline/               # 流水线页面（角色矩阵 + 质检面板）
+│   ├── ai_pipeline/               # 流水线页面（角色矩阵 + 运行页 + 质量面板）
+│   │   ├── ai_pipeline_pages.dart  # 任务列表 / 配置页 / 运行页（日志↔质量分段切换）
+│   │   └── pipeline_quality_panel.dart # 质量面板（总览 + 逐章五维/编造/阻断项，纯读取）
 │   ├── export/                   # 导出（5 格式）+ 封面
 │   └── reader/                   # 阅读模式（三主题/字号/行距/衬线）
 └── widgets/                      # 通用组件
@@ -105,6 +109,16 @@ lib/
 > **质检模块的拆分约定（2026-10-01）**：`pipeline_qa.dart` 保留同名静态方法作为
 > **门面**，实现分别在 `StyleFingerprintQa` / `CrossChapterQa`。新增跨章或文风
 > 维度时请加到对应类里，不要塞回 `PipelineQa`——否则它会重新长回 1400+ 行。
+
+> **质量记录的结构化约定（2026-10-02）**：`PipelineChapter` 上的
+> `review`（`ChapterQualityReview`）与 `factCheck`（`ChapterFactCheck`）是
+> **质量主张的唯一 GUI 数据源**——旧实现把评分只拼进 `task.addLog` 的日志
+> 文本，日志滚出 400 条即丢，UI 也无法按维度渲染。三条不可让步的语义：
+> ① **未评分 ≠ 评了 0 分**（`overall` 用 -1、`scored` 区分）；
+> ② **未核查 ≠ 核查通过**（`ChapterFactCheck.ok=false` 单独记账，UI 用警示色
+> 显示「未核查」，绝不冒充「通过 ✅」——Python 端门禁第 16 项的核心教训）；
+> ③ 命中即修必须**复检确实变好才采纳**，否则回滚原文。
+> 新增质量维度时请落到这两个模型里，不要只写日志。
 
 ## 2. 核心抽象：生成引擎
 

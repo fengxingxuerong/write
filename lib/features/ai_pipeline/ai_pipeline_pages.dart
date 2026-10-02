@@ -344,6 +344,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
   );
   bool _useEditor = true;
   bool _useVerifier = true;
+  bool _useFactCheck = true;
 
   /// 是否把未实测的候选端点（NVIDIA / OpenRouter）也纳入备用链。
   bool _useUnverified = false;
@@ -376,6 +377,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
       _protagonistCtrl.text = cfg.protagonist;
       _useEditor = cfg.useEditor;
       _useVerifier = cfg.useVerifier;
+    _useFactCheck = cfg.useFactCheck;
       _roles = <AiRole, AiRoleConfig>{
         for (final AiRole r in AiRole.values) r: cfg.roleOf(r),
       };
@@ -401,6 +403,7 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
       protagonist: _protagonistCtrl.text.trim(),
       useEditor: _useEditor,
       useVerifier: _useVerifier,
+      useFactCheck: _useFactCheck,
       roles: _roles,
     );
     final List<AiRole> missing = AiPipelineService.missingRoles(config);
@@ -564,6 +567,13 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
             subtitle: const Text('审校角色每 5 章校验世界观/人物/剧情连贯性'),
             value: _useVerifier,
             onChanged: (bool v) => setState(() => _useVerifier = v),
+          ),
+          SwitchListTile(
+            title: const Text('启用编造核查（关卡5）'),
+            subtitle: const Text('对照已确立事实核查每章，凭空补的细节会被定点修掉。'
+                '每章多一次模型调用，配额紧张可关'),
+            value: _useFactCheck,
+            onChanged: (bool v) => setState(() => _useFactCheck = v),
           ),
           const SizedBox(height: 8),
           _section('固定角色分工'),
