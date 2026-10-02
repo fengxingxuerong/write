@@ -366,4 +366,80 @@ void main() {
       expect(FanqieGateChecker.intraRepeat(text).blocks, 0);
     });
   });
+
+  group('主角出现次数计数（优化后口径护栏）', () {
+    // 优化把「' \$text '.split(主角).length - 1」换成 indexOf 非重叠循环。
+    // 旧写法靠两侧补空格来统计**结尾命中**也计数；新写法用 indexOf 天然覆盖
+    // 首尾，无需补空格——但「非重叠」语义必须一致，否则 aaa 里数出 2 次。
+    FanqieGateReport gateWith(String text, String who) =>
+        FanqieGateChecker(protagonist: who).check(text);
+
+    test('主角出现在正文开头与结尾都要计数（旧实现补空格的原因）', () {
+      // 「仅出现 0~2 次」才产出该项，故用 ≥3 次的文本验证「没误报少算」。
+      const String head = '陆沉推开门，回头看了一眼。';
+      const String tail = '陆沉合上书，灯芯爆了一下。';
+      // 段内 3 次 + 开头 1 次 + 结尾 1 次 = 5 次 → 不应报「仅出现」。
+      // 首尾两次正是旧实现要靠「两侧补空格」才能数到的那两次。
+      final String body = List<String>.filled(
+        10,
+        '陆沉把剑横在身前，陆沉又看了一眼门口，陆沉始终没有说话，'
+            '远处的更声一下一下敲得人心里发紧。',
+      ).join('\n\n');
+      final FanqieGateReport ok = gateWith('$head\n\n$body\n\n$tail', '陆沉');
+      expect(
+        ok.issues.any((FanqieGateIssue e) => e.message.contains('仅出现')),
+        isFalse,
+        reason: '首/尾各 1 次主角必须被计入，不能因去掉补空格而漏算',
+      );
+      // 对照：只保留开头 1 次 → 必须报「仅出现」
+      final FanqieGateReport few =
+          gateWith('$head\n\n${List<String>.filled(10, '他把剑横在身前，刀锋贴着鞘口滑出来，一线寒光落在青砖上。').join('\n\n')}', '陆沉');
+      expect(
+        few.issues.any((FanqieGateIssue e) => e.message.contains('仅出现')),
+        isTrue,
+      );
+    });
+
+    test('非重叠计数：连写同名前缀不会多算', () {
+      // 主角名互为前缀（陆 / 陆沉）时，多出来的那一次「陆」不构成
+      // 「陆沉」的额外命中，避免把 2 次算成 3 次而误判「接住了主角」。
+      final String body = List<String>.filled(
+        12,
+        '陆沉站在崖边，陆沉把剑收回鞘中，风从脚下灌上来，吹得衣袍猎猎作响，'
+            '远处的山脊线被暮色压成一道墨痕。',
+      ).join('\n\n');
+      // 12 段 × 每段 2 次「陆沉」= 24 次，远超阈值 → 不应报「仅出现」
+      final FanqieGateReport r = gateWith(body, '陆沉');
+      expect(r.issues.any((FanqieGateIssue e) => e.message.contains('仅出现')),
+          isFalse);
+    });
+
+    test('姓氏查表与旧 contains 扫描等价（首字命中 / 非姓氏首字不误判）', () {
+      // 「同章多个高频人名」需 >2 个**不同**配角各出现 ≥3 次才触发。
+      // 人名正则要求「2~3 个汉字 + 紧随的对话/动作动词」，故写成「刘岩道：…」。
+      String manyNames(int n) => List<String>.filled(
+            n,
+            '刘岩道：雨深了。李霜问：何时起身？王祁笑：再等一会儿。'
+                '屋檐的水珠一颗一颗砸在石阶上，谁也没有先动。',
+          ).join('\n\n');
+      final FanqieGateReport hit = gateWith(manyNames(4), '陈默');
+      expect(
+        hit.issues.any((FanqieGateIssue e) => e.message.contains('高频人名')),
+        isTrue,
+        reason: '姓氏首字查表必须与旧 contains 扫描命中同一批名字',
+      );
+
+      final String noNames = List<String>.filled(
+        6,
+        '就在此时，屋外的雨停了，檐角的水珠一颗一颗落在石阶上，'
+            '声音很轻，却一下一下敲在心上。',
+      ).join('\n\n');
+      final FanqieGateReport miss = gateWith(noNames, '陈默');
+      expect(
+        miss.issues.any((FanqieGateIssue e) => e.message.contains('高频人名')),
+        isFalse,
+        reason: '非姓氏首字不得被查表误收',
+      );
+    });
+  });
 }

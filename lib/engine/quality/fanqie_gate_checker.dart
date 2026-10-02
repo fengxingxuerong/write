@@ -352,6 +352,18 @@ class FanqieGateChecker {
     '违法违规', '宗教民族', '现实品牌与真人', '广告引流',
   };
 
+  /// 用 [index] 预筛后取 [words] 中命中的子集（保持 [words] 原有顺序）。
+  ///
+  /// [TextIndex.mayContain] 为 false 时 `text.contains(w)` 必为 false（见
+  /// `text_index.dart` 的安全契约），故这里只可能**少做**扫描、不可能改变
+  /// 命中集合——与旧的 `words.where(text.contains)` 逐字等价。
+  static List<String> _hitsOf(
+    List<String> words,
+    String text,
+    TextIndex index,
+  ) =>
+      words.where((String w) => index.mayContain(w) && text.contains(w)).toList();
+
   /// 执行检查。[prevContent] 用于跨章自我重复比对（可空）。
   FanqieGateReport check(
     String content, {
@@ -446,7 +458,12 @@ class FanqieGateChecker {
           '删掉不影响剧情的一律重写',
           act));
     }
-    final List<String> hits = _cliche.where(text.contains).toList();
+    // 全文只建一次 TextIndex，供本章所有「词表 × 全文 contains」扫描预筛复用。
+    // 旧实现在 genreDrift / _redline / _countAny / 套句·泄漏·元话语 各建一次，
+    // 单章重复建 6 遍索引（每遍都是一次 O(文本长) 全码元扫描）。命中集合与
+    // 顺序均不变——mayContain=false 蕴含 contains=false。
+    final TextIndex textIndex = TextIndex(text);
+    final List<String> hits = _hitsOf(_cliche, text, textIndex);
     if (hits.length * 1000.0 / math.max(words, 1) > 1.2) {
       issues.add(FanqieGateIssue('同质化',
           '套句 ${hits.take(4).join('、')}（每千字 ${(hits.length * 1000.0 / words).toStringAsFixed(2)} 处）',
@@ -466,14 +483,14 @@ class FanqieGateChecker {
             FanqieGateAction.revise));
       }
     }
-    final List<String> leak = _leak.where(text.contains).toList();
+    final List<String> leak = _hitsOf(_leak, text, textIndex);
     if (leak.isNotEmpty) {
       issues.add(FanqieGateIssue('泄漏',
           '提示词/骨架残留漏进正文：${leak.take(4).join('、')}',
           FanqieGateAction.rewrite));
     }
     // 元话语/指令残留：补写与定点修把「我在干什么」写进正文（实测被拼进成书）
-    final List<String> meta = _metaTalk.where(text.contains).toList();
+    final List<String> meta = _hitsOf(_metaTalk, text, textIndex);
     if (meta.isNotEmpty) {
       issues.add(FanqieGateIssue('泄漏',
           '模型操作说明/元话语混进正文：${meta.take(3).join('、')}'
@@ -481,7 +498,8 @@ class FanqieGateChecker {
           FanqieGateAction.rewrite));
     }
     // 题材漂移：玄幻书写成都市悬疑（终审官抓到的整章跑题，旧规则看不见）
-    final ({String level, List<String> hits, int count}) drift = genreDrift(text, genre);
+    final ({String level, List<String> hits, int count}) drift =
+        genreDrift(text, genre, index: textIndex);
     if (drift.level.isNotEmpty) {
       issues.add(FanqieGateIssue('一致性',
           '题材漂移：$genre 题材出现现代标志词 ${drift.hits.take(4).join('、')}'
@@ -520,8 +538,8 @@ class FanqieGateChecker {
             FanqieGateAction.revise));
       }
     }
-    final int active = _countAny(text, _active);
-    final int passive = _countAny(text, _passive);
+    final int active = _countAny(text, _active, index: textIndex);
+    final int passive = _countAny(text, _passive, index: textIndex);
     if ((passive >= 3 && active == 0) ||
         (passive >= 5 && active < passive * 0.4)) {
       issues.add(FanqieGateIssue('主角性',
@@ -531,7 +549,7 @@ class FanqieGateChecker {
     }
 
     // ---- 红线 ----
-    final List<FanqieRedlineHit> redlines = _redline(text);
+    final List<FanqieRedlineHit> redlines = _redline(text, index: textIndex);
 
     double score = 100.0;
     for (final FanqieGateIssue e in issues) {
@@ -772,15 +790,19 @@ class FanqieGateChecker {
   /// `level`：'' 不报 / '修改' 个别穿帮 / '重写' 整章跑题（≥3 个不同标志词）。
   /// 都市/校园/悬疑等现代题材不做判定（它们本来就该有这些词）。
   static ({String level, List<String> hits, int count}) genreDrift(
-      String text, String genre) {
+    String text,
+    String genre, {
+    TextIndex? index,
+  }) {
     final String g = genre.trim();
     final bool lock =
         g.isNotEmpty && _ancientGenres.any((String a) => g.contains(a));
     if (!lock) return (level: '', hits: <String>[], count: 0);
     // 现代词表 36 个，旧实现是逐个 contains 扫全文；先过 TextIndex 把必然
     // 不命中的词挡掉（命中集合与顺序不变，只省扫描）。
-    final TextIndex index = TextIndex(text);
-    final List<String> hits = _modernMarkers.where(index.mayContain).toList();
+    // [index] 由 [check] 传入时复用本章已建的索引，避免重复全码元扫描。
+    final TextIndex idx = index ?? TextIndex(text);
+    final List<String> hits = _hitsOf(_modernMarkers, text, idx);
     int count = 0;
     for (final String w in hits) {
       count += _countOccurrences(text, w);
@@ -912,13 +934,14 @@ class FanqieGateChecker {
     return term.length >= 2 && text.contains(term.substring(term.length - 2));
   }
 
-  static int _countAny(String text, List<String> words) {
+  static int _countAny(String text, List<String> words, {TextIndex? index}) {
     if (words.isEmpty || text.isEmpty) return 0;
     // 主动/被动句词表各数十词，逐词 indexOf 扫全文；先挡掉必然不命中的词。
-    final TextIndex index = TextIndex(text);
+    // [index] 由 [check] 传入时复用本章已建的索引。
+    final TextIndex idx = index ?? TextIndex(text);
     int n = 0;
     for (final String w in words) {
-      if (!index.mayContain(w)) continue;
+      if (!idx.mayContain(w)) continue;
       int i = text.indexOf(w);
       while (i != -1) {
         n++;
@@ -958,15 +981,48 @@ class FanqieGateChecker {
     return ga.intersection(gb).length * 100.0 / ga.length;
   }
 
+  /// 常见姓氏首字（由下方 [surnames] 字面量一次性建表）。
+  ///
+  /// 旧实现是每次匹配都 `surnames.contains(nm[0])`——`contains` 在长串上线性扫描，
+  /// 而「百位姓氏」字面量有 ~200 字，单章匹配出几十个人名时就是几十次 ×200 字的
+  /// 无谓比对（`_nameDrift` 曾占全书体检单章耗时约 35%）。改成 Set 查表后
+  /// 每次匹配 O(1)，命中集合与顺序完全不变。
+  static final Set<String> _surnameSet = <String>{
+    for (final String s in _surnames.split(''))
+      if (s.isNotEmpty) s,
+  };
+
+  /// 常见姓氏字面量（仅用于建 [_surnameSet]，不再参与匹配）。
+  static const String _surnames =
+      '王李张刘陈杨黄赵周吴徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡'
+      '余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯'
+      '龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤柴桑关岳鲍盛赖樊温柯岑路桂傅齐应宗简';
+
+  /// 统计 [needle] 在 [text] 中的**非重叠**出现次数。
+  ///
+  /// 旧实现是 `' $text '.split(protagonist).length - 1`：为了防「命中开头/结尾」
+  /// 而在整章正文两侧各补一个空格，于是**每章为了一次计数就复制一遍全文**并
+  /// `split` 成列表——全书体检按章调用，这是单章最贵的一处分配。
+  /// `indexOf` 循环不复制任何内容，计数口径与 split 完全一致（非重叠、
+  /// 空串已由调用方拦掉）。
+  static int _countOccur(String text, String needle) {
+    if (needle.isEmpty) return 0;
+    int n = 0;
+    int i = 0;
+    while (true) {
+      final int found = text.indexOf(needle, i);
+      if (found < 0) break;
+      n++;
+      i = found + needle.length;
+    }
+    return n;
+  }
+
   List<String> _nameDrift(String text) {
-    const String surnames =
-        '王李张刘陈杨黄赵周吴徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡'
-        '余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯'
-        '龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤柴桑关岳鲍盛赖樊温柯岑路桂傅齐应宗简';
     final Map<String, int> cnt = <String, int>{};
     for (final RegExpMatch m in _namePat.allMatches(text)) {
       final String nm = m.group(1)!;
-      final bool isName = surnames.contains(nm.isEmpty ? '' : nm[0]) ||
+      final bool isName = _surnameSet.contains(nm.isEmpty ? '' : nm[0]) ||
           nm == protagonist;
       if (!isName) continue;
       cnt[nm] = (cnt[nm] ?? 0) + 1;
@@ -983,13 +1039,13 @@ class FanqieGateChecker {
       out.add('同章出现多个高频人名：${hot.take(4).join('、')}（视角/主角漂移）');
     }
     if (protagonist.isNotEmpty) {
-      final int c = ' $text '.split(protagonist).length - 1;
+      final int c = _countOccur(text, protagonist);
       if (c < 3) out.add('大纲主角「$protagonist」本章仅出现 $c 次（写手没接住主角）');
     }
     return out;
   }
 
-  List<FanqieRedlineHit> _redline(String text) {
+  List<FanqieRedlineHit> _redline(String text, {TextIndex? index}) {
     final List<FanqieRedlineHit> hits = <FanqieRedlineHit>[];
     // 1) 复用 app 内置词库（暴力血腥/色情/辱骂/违法/广告）
     final SensitiveCheckResult r = SensitiveWordsService().check(text);
@@ -1001,10 +1057,11 @@ class FanqieGateChecker {
       hits.add(FanqieRedlineHit(h.category, h.word, h.context, veto));
     }
     // 2) 番茄专有类别
-    final TextIndex index = TextIndex(text);
+    // [index] 由 [check] 传入时复用本章已建的索引，避免重复全码元扫描。
+    final TextIndex idx = index ?? TextIndex(text);
     _extraRedline.forEach((String cat, List<String> words) {
       for (final String w in words) {
-        if (!index.mayContain(w)) continue;
+        if (!idx.mayContain(w)) continue;
         int i = text.indexOf(w);
         while (i != -1) {
           final String wide = _window(text, i, w.length);
