@@ -34,6 +34,29 @@ void main() {
       );
     });
 
+    test('动词碎片不得被判成人名笔误（2026-10-02 真实误报回归）', () {
+      // 真机事故：都市题材正文「陈越把…」「陈越听…」「陈越不是…」被滑窗切成
+      // 越把/越听/越不（前一字「陈」是姓氏 → 命中前缀线索），「笑了出来」
+      // 「看了看」切出笑了/看了（后一字在后缀线索表里）。这些碎片两两编辑
+      // 距离＝1，把一本正文毫无问题的书报成「人名不一致 6 处」。
+      //
+      // 修复：候选名以虚词/动作动词收尾的一律视为碎片，不当人名比对。
+      final ConsistencyReport r = NovelConsistencyChecker.check(<Chapter>[
+        makeChapter(0, '陈越把便利店的门锁上。陈越听了一会儿。'
+            '陈越不是不想继续。她笑了出来。他看了看天。'),
+        makeChapter(1, '陈越把货搬到里屋。陈越听完了整段。'
+            '陈越不再犹豫。她笑了。他又看了看表。'),
+        makeChapter(2, '陈越把账本合上。陈越听完没有说话。'
+            '陈越不在意这些。她笑了起来。他看了看窗外。'),
+        makeChapter(3, '陈越把门推开。陈越听着雨声。'
+            '陈越不是第一次来。她笑了一声。他看了看手机。'),
+      ]);
+      expect(r.nameIssues, isEmpty,
+          reason: '动词碎片被误判成人名笔误：'
+              '${r.nameIssues.map((i) => '${i.nameA}/${i.nameB}').toList()}'
+              '——正文本身毫无问题，检查器不该造谣');
+    });
+
     test('世界观冲突检测', () {
       final ConsistencyReport r = NovelConsistencyChecker.check(<Chapter>[
         makeChapter(0, '这片大陆灵气充沛，修炼者无处不在。'),

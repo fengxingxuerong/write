@@ -122,6 +122,16 @@ void main() {
       int chapterTotal = 0;
       int wordTotal = 0;
 
+      // ---- 能力断言累计（2026-10-02 新增）----
+      // 此前本测试把文笔/闸门分全写进报告却不断言，唯一硬断言是红线为 0：
+      // 引擎若退化成「非空、字数够、无红线」的平庸产出，E2E 照样全绿。
+      // 这里把分数钉成下限（阈值见 writing_ability_test.dart 文件头「阈值来源」）。
+      int gateBelowFloor = 0;
+      int proseBelowFloor = 0;
+      int sensitiveHits = 0;
+      double gateMin = 100;
+      double proseMin = 100;
+
       // 只跑准备好的 5 种题材（GenrePresets.all 共 10 种，其余题材留待扩充）。
       // 文风与随机度按「第几本书」轮转取 5 项矩阵，避免依赖 GenrePresets.all 的全局顺序。
       int bookIdx = 0;
@@ -210,14 +220,23 @@ void main() {
           gateSum += gr.score;
           vetoInBook +=
               gr.redlines.where((FanqieRedlineHit h) => h.veto).length;
+          // 能力断言：逐章闸门分下限（实测 90~92，线取 80 = pass 口径）。
+          if (gr.score < 80) gateBelowFloor++;
+          if (gr.score < gateMin) gateMin = gr.score;
         }
         vetoTotal += vetoInBook;
         final QualityReport qr = NovelQualityChecker.check(fullText);
         final ConsistencyReport cr =
             NovelConsistencyChecker.check(reloaded.chapters);
+        // 能力断言：全书文笔卫生分下限（实测恒 90，封顶 90；线取 75）。
+        if (qr.overallScore < 75) proseBelowFloor++;
+        if (qr.overallScore < proseMin) proseMin = qr.overallScore;
 
         // ---- 敏感词全量扫描 ----
         final SensitiveCheckResult sr = SensitiveWordsService().check(fullText);
+        sensitiveHits += sr.count;
+        expect(sr.clean, isTrue,
+            reason: '${preset.label} 全书命中敏感词 ${sr.byCategory}');
 
         // ---- 索引同步与归档 ----
         await novelRepo.setArchived(novel.id, true);
@@ -288,6 +307,22 @@ void main() {
 
       // 硬性断言：内容安全红线（否决级）必须为零。
       expect(vetoTotal, 0, reason: '生成正文触达否决级红线，属于内容安全事故');
+
+      // ---- 能力断言：5 题材成书的质量下限（2026-10-02 新增）----
+      // 阈值依据见 writing_ability_test.dart 文件头「阈值来源」。
+      expect(gateBelowFloor, 0,
+          reason: '有 $gateBelowFloor 章番茄闸门低于 80 分线'
+              '（最低 ${gateMin.toStringAsFixed(1)}）——过审能力跌出下限');
+      expect(proseBelowFloor, 0,
+          reason: '有 $proseBelowFloor 本文笔卫生分低于 75'
+              '（最低 ${proseMin.toStringAsFixed(0)}）——文笔能力跌出下限');
+      expect(sensitiveHits, 0, reason: '生成正文命中敏感词');
+      // 顺带把最低分写进报告，便于日后复核阈值是否留足余量。
+      report
+        ..writeln('  能力下限：闸门最低 ${gateMin.toStringAsFixed(1)}，'
+            '文笔最低 ${proseMin.toStringAsFixed(0)}')
+        ..writeln();
+
       await File('verify-logs${Platform.pathSeparator}e2e_report.txt')
           .writeAsString(report.toString(), flush: true);
       stdout.writeln(report);

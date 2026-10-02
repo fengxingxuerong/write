@@ -386,6 +386,8 @@ class NovelConsistencyChecker {
     final List<int> posMap = _buildCharPosMap(text);
     for (final MapEntry<String, int> e in freq.entries) {
       if (e.value < 2) continue;
+      // 人名候选不得以虚词/纯动作动词收尾（碎片过滤）。
+      if (_isNonNameTail(e.key)) continue;
       // 遍历所有出现位置，任一位置上下文成立即采纳
       int searchFrom = 0;
       while (true) {
@@ -636,6 +638,37 @@ class NovelConsistencyChecker {
       '不是', '已经', '可以', '没', '有',
     };
     return stops.contains(s);
+  }
+
+  /// 人名候选的**尾字黑名单**：以这些字收尾的 2~4 字片段几乎必是动词短语
+  /// 或语法碎片，而非人名。
+  ///
+  /// 修 2026-10-02 实测误报：都市题材正文「陈越把…」「陈越听了一会儿」
+  /// 「陈越不是…」被滑窗切成 `越把 / 越听 / 越不`，因**前一字是姓氏「陈」**
+  /// 命中 [_hasNameContext] 的前缀线索而进候选；「笑了出来」「看了看」里的
+  /// `笑了 / 看了` 则因后一字（来 / 看）在后缀线索表里进候选。这些碎片两两比
+  /// 编辑距离＝1，于是把一本**正文毫无问题**的书报成「人名不一致 6 处」——
+  /// 检查器自己在造谣（由 test/engine/quality/writing_ability_test.dart 抓出）。
+  ///
+  /// 中文人名极少以这些字收尾，故按尾字一刀切：宁可漏报一个真笔误，也不误报
+  /// 污染结论（与 `protagonistContinuity`「未传主角名时不报」同哲学）。
+  /// 真笔误（王小明 / 王晓明，尾字「明」）不受影响。
+  ///
+  /// 与 Python 侧对齐：`scripts/fanqie_review.py::looks_like_name` 要求候选**首字**
+  /// 是姓氏，天然排除这类切片碎片；Dart 侧因用「窗口 + 前后线索」判候选，才需要
+  /// 本尾字黑名单补上同一道闸。改任一端请同步另一端。
+  static bool _isNonNameTail(String s) {
+    const Set<String> badTails = <String>{
+      // 语法虚词 / 时态助词 / 关联词
+      '了', '着', '过', '的', '地', '得', '把', '被', '在', '是',
+      '就', '都', '也', '很', '和', '与', '或', '而', '但', '并',
+      // 纯动作动词——正是 [_hasNameContext] 后缀线索表里的那些字。
+      // 它们跟在名字**后面**才是线索，出现在名字**末尾**就说明窗口切错了。
+      '说', '道', '笑', '看', '来', '去', '走', '回', '进', '出',
+      '站', '坐', '叫', '问', '想', '听', '吃', '喝', '躺', '跪', '飞',
+    };
+    if (s.isEmpty) return true;
+    return badTails.contains(s.characters.last);
   }
 
   /// 常用姓氏（简化表）。

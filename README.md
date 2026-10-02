@@ -173,6 +173,8 @@ flutter test
 
 当前测试与覆盖率以 CI 实际输出为准；CI 要求已采集生产文件的行覆盖率不低于 **80%**，并校验 12 个关键安全/存储/质检文件必须进入 LCOV（`secret_store` / `llm_config` / `novel` / `pipeline_storage` / `composite_quality_gate` / `app_database` / `chapter_repository` / `chapter_snapshot_service` / `novel_repository` / `setting_repository` / `novel_quality_checker` / `fanqie_gate_checker`）。测试覆盖模型序列化、模板生成、存储可靠性、导出、AI 流水线、断点续传、导入幂等、隐私文案、Windows DPAPI 通道，以及**质检词表/阈值的双端对账**（`quality_rules_parity_test`）。
 
+**写作能力下限护栏**（`test/engine/quality/writing_ability_test.dart`）：不再只验「引擎跑得通」，而是断言**引擎真实产出的小说达到质量下限**——5 题材 × 2 章连写，逐章钉住番茄闸门达线（≥80 分且无阻断项/否决）、文笔卫生分、AI 味密度、相邻段落重复率、对白占比与成章字数；全书钉住敏感词干净、跨章一致性（世界观/剧情/主角连续性为 0）与主角真实落地。同文件另带**负样本对照**（注水稿、AI 味堆砌稿必须跌破能力线），确保这些分数断言不是「质检器坏了也照样绿」的恒真命题。阈值全部取自实测基线并留余量，只拦能力塌陷级退化；离线冒烟（`test/smoke/write_demo_novel_test.dart`）与全链路 E2E（`test/features/full_novel_e2e_test.dart`）同口径校验分数下限。
+
 ### CI 流水线
 
 仓库已配置 GitHub Actions（`.github/workflows/ci.yml`）：push / PR 到 `main` 或 `master` 自动执行。Windows 构建会等待 Flutter 测试和 Web 回归全部通过后才打包上传。
