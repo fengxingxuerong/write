@@ -351,6 +351,21 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
   /// 是否把未实测的候选端点（NVIDIA / OpenRouter）也纳入备用链。
   bool _useUnverified = false;
 
+  /// 角色路由覆盖（JSON 文本，如 `{"writer":{"model":"glm-5.3"}}`）。
+  ///
+  /// 让「换模型」不必改代码：真实链路里模型换代极快（实测 NVIDIA
+  /// `z-ai/glm-5.2` 已 410 EOL、`stealth/ox-alpha` 更名 `z-ai/glm-5.3-flash`），
+  /// 硬编码的映射必然跟不上。空串 = 用预设。
+  final TextEditingController _roleRoutingCtrl = TextEditingController();
+
+  /// 最近一次导入的密钥映射（`FixedWorkflowPreset.parseKeys` 的结果）。
+  ///
+  /// 保留它是为了让「按路由覆盖重新装配」能复用**完全相同的装配路径**：
+  /// 不必从已装配的角色表里反推密钥（那是绕路，且一旦某角色被手工改过端点，
+  /// 反推出来的 key 名就对不上预设的 `NOVEL_KEY_*`，会静默装配出空链）。
+  /// 密钥只在内存里，不落盘、不回显。
+  Map<String, String> _lastKeys = <String, String>{};
+
   /// 五角色配置（默认值；可从最近任务配置加载）。
   Map<AiRole, AiRoleConfig> _roles = <AiRole, AiRoleConfig>{
     for (final AiRole r in AiRole.values)
@@ -388,12 +403,33 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
     });
   }
 
+  /// 按当前路由覆盖重新装配角色表。
+  ///
+  /// 复用导入密钥时的**同一条**装配路径（[FixedWorkflowPreset.roles]），只是多传
+  /// 一次覆盖表——不另开一条装配逻辑，否则两条路径迟早会漂移。
+  void _applyRoleRouting() {
+    if (_lastKeys.isEmpty) {
+      _snack('还没有导入过密钥：先「导入本机 API 配置」，再按路由装配');
+      return;
+    }
+    final Map<AiRole, AiRoleConfig> next = FixedWorkflowPreset.roles(
+      _lastKeys,
+      includeCandidates: _useUnverified,
+      roleOverrides:
+          FixedWorkflowPreset.parseOverrides(_roleRoutingCtrl.text),
+    );
+    setState(() => _roles = next);
+    final int n = FixedWorkflowPreset.parseOverrides(_roleRoutingCtrl.text).length;
+    _snack(n == 0 ? '路由覆盖为空，已回退预设装配' : '已按 $n 个角色覆盖重新装配');
+  }
+
   @override
   void dispose() {
     _wordsCtrl.dispose();
     _chaptersCtrl.dispose();
     _genreCtrl.dispose();
     _protagonistCtrl.dispose();
+    _roleRoutingCtrl.dispose();
     super.dispose();
   }
 
@@ -492,9 +528,11 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
       return;
     }
     setState(() {
+      _lastKeys = keys;
       _roles = FixedWorkflowPreset.roles(
         keys,
         includeCandidates: _useUnverified,
+        roleOverrides: FixedWorkflowPreset.parseOverrides(_roleRoutingCtrl.text),
       );
     });
     _snack(
@@ -634,6 +672,46 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
           ),
           _section('角色模型配置（各自填写 API 端点）'),
           for (final AiRole role in AiRole.values) _roleCard(role),
+          const SizedBox(height: 8),
+          _section('角色路由覆盖（按角色换主模型）'),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(AppTokens.s3),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  const Text(
+                    '换模型不必改代码。填 JSON 后点「装配固定分工」生效；'
+                    '只改每个角色的**主位**模型，备用链保持预设不变（多级降级不能丢）。',
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _roleRoutingCtrl,
+                    maxLines: 6,
+                    minLines: 3,
+                    style: AppFonts.text(AppInk.of(context).ink,
+                        size: 12.5, monoFace: true),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                      hintText: '{\n  "writer": {"model": "glm-5.3", "temperature": 0.9},\n'
+                          '  "planner": {"model": "z-ai/glm-5.3", "maxTokens": 8000}\n}',
+                      helperText: '可用角色：planner / writer / editor / titler / verifier；'
+                          '可用字段：model / temperature / maxTokens / baseUrl / apiKey。'
+                          '写错会被静默忽略并回退默认，不会崩。',
+                      helperMaxLines: 3,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: _applyRoleRouting,
+                    icon: const Icon(Icons.route_outlined, size: 16),
+                    label: const Text('按当前路由覆盖重新装配'),
+                  ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: AppTokens.s4),
           FilledButton.icon(
             icon: const Icon(Icons.play_arrow),

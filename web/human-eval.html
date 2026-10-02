@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>人评标注台 · 墨匠</title>
+<style>
+  :root {
+    --paper:#faf8f3; --surface:#fff; --ink:#2b2926; --ink-soft:#5d5850;
+    --ink-faint:#8f8a80; --line:#e5e0d5; --accent:#2f6f5e; --warn:#b8862f;
+    --danger:#b04a3a; --ok:#3d7a4e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:#1a1917; --surface:#232120; --ink:#e8e4dc; --ink-soft:#b5afa4;
+      --ink-faint:#837d72; --line:#38352f; --accent:#6fbfa3; --warn:#d4a44e;
+      --danger:#e08070; --ok:#7cc48d;
+    }
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--paper); color:var(--ink);
+    font:15px/1.7 "Microsoft YaHei UI","Microsoft YaHei","PingFang SC",
+         "Noto Sans CJK SC",system-ui,sans-serif;
+  }
+  header {
+    position:sticky; top:0; z-index:10; background:var(--surface);
+    border-bottom:1px solid var(--line); padding:12px 20px;
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  .stat { font-size:13px; color:var(--ink-soft); }
+  .stat b { color:var(--ink); font-variant-numeric:tabular-nums; }
+  .spacer { flex:1; }
+  button, select {
+    font:inherit; padding:6px 12px; border-radius:8px; cursor:pointer;
+    border:1px solid var(--line); background:var(--surface); color:var(--ink);
+  }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:#fff; border-color:transparent; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  main { display:grid; grid-template-columns:270px 1fr; min-height:calc(100vh - 57px); }
+  #list { border-right:1px solid var(--line); overflow-y:auto; max-height:calc(100vh - 57px); }
+  #list button {
+    display:block; width:100%; text-align:left; border:0; border-radius:0;
+    border-bottom:1px solid var(--line); padding:9px 14px; background:transparent;
+  }
+  #list button.active { background:var(--accent); color:#fff; }
+  #list button.done::after { content:" ✓"; color:var(--ok); }
+  #list button.active.done::after { color:#fff; }
+  #list .id { font-size:13px; }
+  #list .meta { font-size:11px; opacity:.7; font-variant-numeric:tabular-nums; }
+  #panel { padding:20px 26px 80px; overflow-y:auto; max-height:calc(100vh - 57px); }
+  .text {
+    white-space:pre-wrap; background:var(--surface); border:1px solid var(--line);
+    border-radius:10px; padding:16px; margin:12px 0 20px;
+    max-height:38vh; overflow-y:auto; line-height:1.9; font-size:15px;
+  }
+  .row { display:flex; align-items:center; gap:14px; margin:10px 0; flex-wrap:wrap; }
+  .row label { width:86px; color:var(--ink-soft); font-size:13.5px; }
+  input[type=range] { flex:1; min-width:160px; accent-color:var(--accent); }
+  input[type=text] {
+    flex:1; min-width:200px; font:inherit; padding:7px 10px; border-radius:8px;
+    border:1px solid var(--line); background:var(--paper); color:var(--ink);
+  }
+  .val { width:52px; text-align:right; font-variant-numeric:tabular-nums; font-weight:600; }
+  .score-row input[type=range] { accent-color:var(--danger); }
+  .hint { font-size:12.5px; color:var(--ink-faint); margin:6px 0 0; }
+  .machine {
+    font-size:12px; color:var(--ink-faint); background:var(--paper);
+    border:1px dashed var(--line); border-radius:8px; padding:8px 12px; margin-bottom:14px;
+  }
+  kbd {
+    background:var(--paper); border:1px solid var(--line); border-bottom-width:2px;
+    border-radius:5px; padding:1px 6px; font-size:12px; font-family:inherit;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>人评标注台</h1>
+  <span class="stat">已评 <b id="done">0</b> / <b id="total">0</b></span>
+  <span class="spacer"></span>
+  <button id="prev">← 上一章</button>
+  <button id="next">下一章 →</button>
+  <button id="export" class="primary">导出 JSONL</button>
+</header>
+<main>
+  <div id="list"></div>
+  <div id="panel"><p class="hint">点上方「载入 annotations.jsonl」开始。</p></div>
+</main>
+<input id="picker" type="file" multiple accept=".jsonl,.txt" style="display:none">
+<script>
+/* 标注台的数据流（刻意说清楚，别让后来的人误判它做了什么）：
+
+   1. 读 docs/human-eval/annotations.jsonl（取样器生成：file / _machine_hint，
+      human 全为 null）。浏览器不能直接读本地文件，故用 file input 授权；
+   2. 章节正文按 file 字段的文件名匹配用户一并选择的 samples/*.txt；
+   3. 打分结果存内存 + localStorage（自动续标，关页面不丢）；
+   4. 点「导出」下载新的 annotations.jsonl，**由用户手工覆盖回仓库**。
+
+   为什么不做成服务：这份数据的全部价值来自「评分者是人」。放进任何能自动
+   提交的链路，都会有被模型批量生成的诱惑；本地工具 + 人工覆盖是阻力最小的
+   诚实做法。 */
+const S = { rows: [], bodies: {}, cur: 0, key: 'human_eval_draft_v1' };
+const DIMS = [['opening','开篇'],['thrill','爽点'],['hook','钩子'],
+              ['motivation','动机'],['rhythm','节奏']];
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+const draft = () => {
+  try { const o = JSON.parse(localStorage.getItem(S.key) || '{}');
+        return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; }
+  catch (_) { return {}; }
+function render() {
+  const done = S.rows.filter(r => typeof r.human === 'number').length;
+  $('done').textContent = done;
+  $('total').textContent = S.rows.length;
+
+  $('list').innerHTML = S.rows.map((r, i) => {
+    const cls = [i === S.cur ? 'active' : '',
+                 typeof r.human === 'number' ? 'done' : ''].join(' ');
+    const mh = r._machine_hint || {};
+    const hint = mh.fanqieScore ?? mh.score;
+    return `<button class="${cls}" data-i="${i}">
+      <div class="id">${esc(r.id)}</div>
+      <div class="meta">${typeof r.human === 'number' ? r.human + ' 分' : '待评'}${hint !== undefined ? ' · 机器 ' + hint : ''}</div>
+    </button>`;
+  }).join('');
+
+  const row = S.rows[S.cur];
+  if (!row) { $('panel').innerHTML = '<p class="hint">先载入 annotations.jsonl。</p>'; return; }
+  const p = draft()[row.id] || annOf(row.id);
+  const dims = p.human_dims || {};
+  const mh = row._machine_hint || {};
+
+  $('panel').innerHTML = `
+    <h2 style="margin:0 0 4px;font-size:18px;">${esc(row.id)}</h2>
+    <p class="hint" style="margin:0 0 10px;">
+      <kbd>1</kbd>~<kbd>5</kbd> 跳章 · <kbd>←</kbd><kbd>→</kbd> 翻章 ·
+      <kbd>Enter</kbd> 记住并跳下一章
+    </p>
+    <div class="machine">机器指标（<b>仅备查，评分时请无视</b>——凭指标反推分数是循环论证）：${
+      Object.entries(mh).map(([k, v]) => `${esc(k)}=${esc(v)}`).join('　') || '无'}</div>
+    <div class="text">${esc(S.bodies[row.id] ||
+      '（正文未载入：选择 annotations.jsonl 时，请一并多选 samples 目录下的 .txt）')}</div>
+
+    <div class="row score-row">
+      <label>总分 0~100</label>
+      <input id="human" type="range" min="0" max="100" step="1" value="${p.human ?? 50}">
+      <span class="val" id="humanV">${p.human ?? 50}</span>
+    </div>
+    <p class="hint">总分是你读完这一章的整体判断。五维是它的分解，可留空。</p>
+
+    ${DIMS.map(([k, label]) => `
+      <div class="row">
+        <label>${label} 1~5</label>
+        <input type="range" min="0" max="5" step="1" data-dim="${k}" value="${dims[k] ?? 0}">
+        <span class="val">${dims[k] ?? '-'}</span>
+      </div>`).join('')}
+
+    <div class="row"><label>评分者</label>
+      <input id="rater" type="text" value="${esc(p.rater || '')}" placeholder="你的代号（报告会打印，便于追溯）"></div>
+    <div class="row"><label>一句话理由</label>
+      <input id="note" type="text" value="${esc(p.note || '')}" placeholder="写下来才能复查一致性"></div>
+    <div class="row"><button id="saveBtn" class="primary">保存并跳下一章</button></div>`;
+
+  const human = $('human');
+  human.oninput = () => { $('humanV').textContent = human.value; };
+  human.onchange = () => persist(false);
+  document.querySelectorAll('[data-dim]').forEach(el => {
+    const lab = el.parentElement.querySelector('.val');
+    el.oninput = () => { lab.textContent = el.value === '0' ? '-' : el.value; };
+    el.onchange = () => persist(false);
+  });
+  $('rater').onchange = () => persist(false);
+  $('note').onchange = () => persist(false);
+  $('saveBtn').onclick = () => persist(true);
+}
+
+/** 把当前控件的值写进内存草稿；[jump] 为真则跳到下一章。 */
+function persist(jump) {
+  const row = S.rows[S.cur];
+  const dims = {};
+  document.querySelectorAll('[data-dim]').forEach(el => {
+    const v = parseInt(el.value, 10);
+    if (v > 0) dims[el.dataset.dim] = v;
+  });
+  save(row.id, {
+    human: parseInt($('human').value, 10),
+    human_dims: Object.keys(dims).length ? dims : null,
+    rater: $('rater').value.trim(),
+    note: $('note').value.trim(),
+  });
+  if (jump) { S.cur = Math.min(S.cur + 1, S.rows.length - 1); }
+  render();
+}
+};
+const saveDraft = () => localStorage.setItem(S.key, JSON.stringify(draft()));
+function annOf(id) {
+  const r = S.rows.find(x => x.id === id);
+  return (r && typeof r === 'object') ? r : {};
+}
+function save(id, patch) {
+  const r = S.rows.find(x => x.id === id);
+  Object.assign(r, patch);
+  const d = draft(); d[id] = patch; saveDraft();
+}
+
+/** 导出：保留注释头与 _machine_hint，只填人工字段。 */
+function exportJsonl() {
+  const lines = [
+    '# 人评标注（JSONL，一行一章；本行及以 # 开头的行不参与计算）',
+    '# 由 web/human-eval.html 导出：human / human_dims / rater / note 为人工填写。',
+    '# _machine_hint 是机器指标，仅供事后对照——请勿据此回改分数。',
+  ];
+  for (const r of S.rows) {
+    const o = { id: r.id };
+    if (r.file) o.file = r.file;
+    if (r.text) o.text = r.text;
+    o.human = typeof r.human === 'number' ? r.human : null;
+    o.human_dims = r.human_dims || null;
+    o.rater = r.rater || '';
+    o.note = r.note || '';
+    if (r._machine_hint) o._machine_hint = r._machine_hint;
+    lines.push(JSON.stringify(o));
+  }
+  const blob = new Blob([lines.join('\n') + '\n'], { type: 'application/x-ndjson' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'annotations.jsonl';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+$('list').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-i]');
+  if (b) { S.cur = parseInt(b.dataset.i, 10); render(); }
+});
+$('prev').onclick = () => { if (S.cur > 0) { S.cur--; render(); } };
+$('next').onclick = () => { if (S.cur < S.rows.length - 1) { S.cur++; render(); } };
+$('export').onclick = exportJsonl;
+$('picker').onchange = (e) => { if (e.target.files.length) ingest(e.target.files); };
+
+document.addEventListener('keydown', (e) => {
+  if (/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) {
+    if (e.key === 'Enter') { e.preventDefault(); persist(true); }
+    return;
+  }
+  if (e.key === 'ArrowLeft') $('prev').click();
+  else if (e.key === 'ArrowRight') $('next').click();
+  else if (/^[1-5]$/.test(e.key)) {
+    S.cur = Math.max(0, Math.min(S.rows.length - 1, parseInt(e.key, 10) - 1));
+    render();
+  }
+});
+
+function parseRows(text) {
+  return text.split(/\r?\n/).map(l => l.trim())
+    .filter(l => l && !l.startsWith('#'))
+    .map(l => { try { return JSON.parse(l); } catch (e) { return null; } })
+    .filter(Boolean);
+}
+
+async function ingest(fileList) {
+  const files = Array.from(fileList);
+  const ann = files.find(f => /annotations.*\.jsonl$/i.test(f.name));
+  if (!ann) { alert('请选中 docs/human-eval/annotations.jsonl'); return; }
+  S.rows = parseRows(await ann.text());
+  for (const f of files) {
+    if (!/\.txt$/i.test(f.name)) continue;
+    S.bodies[f.name.replace(/\.txt$/i, '')] = await f.text();
+  }
+  S.cur = 0;
+  render();
+}
+
+if (location.protocol.startsWith('http')) {
+  fetch('../docs/human-eval/annotations.jsonl').then(r => r.text()).then(t => {
+    S.rows = parseRows(t);
+    for (const r of S.rows) {
+      const name = String(r.file || '').replace(/\.txt$/i, '').split(/[\\/]/).pop();
+      if (!name) continue;
+      fetch('../' + r.file).then(x => x.text())
+        .then(txt => { S.bodies[name] = txt; render(); }).catch(() => {});
+    }
+    render();
+  }).catch(() => {});
+} else {
+  const b = document.createElement('button');
+  b.textContent = '载入 annotations.jsonl';
+  b.onclick = () => $('picker').click();
+  document.querySelector('header').insertBefore(b, $('prev'));
+}
+render();
+</script>
+</body>
+</html>

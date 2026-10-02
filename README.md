@@ -59,6 +59,8 @@
 
 ## 目录结构
 
+`SKILL.md` 把本项目的核心能力封装为 coding-agent 可调用的 skill（Claude Code / OpenClaw 等生态可直接发现），含常用命令、产物读法与常见故障对照——**给 agent 看的说明书，也是人看的速查表**。
+
 ```
 lib/
 ├── main.dart / app.dart            # 入口与根组件
