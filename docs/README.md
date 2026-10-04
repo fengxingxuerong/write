@@ -31,17 +31,33 @@
 
 | 文档 | 用途 | 时效 |
 | --- | --- | --- |
-| [`quality-enhancement-log.md`](quality-enhancement-log.md) | **逐轮改动日志（最大的一份，156 KB）**，含真机实测数据与踩坑记录 | 追加式 |
 | [`交付文档.md`](交付文档.md) | 角色矩阵、终审三级权力、投前质检五关、**已知问题与遗留事项** | 追加式 |
+| [`quality-enhancement-log.md`](quality-enhancement-log.md) | **首轮改动总览**（仓库卫生 / 生成侧 / 质检侧 / 质量闭环 / 工具链），末尾有归档索引 | 冻结 |
 | [`storage-stress-200k-report.md`](storage-stress-200k-report.md) | 20 万字级存储压测与写放大实测 | 快照 |
+
+### 逐轮改动日志（已按轮次拆分归档）
+
+原先 `quality-enhancement-log.md` 是一个 156 KB 的追加式大文件，已按日期轮次拆成
+6 份归档件，**每份开头都标了「只读参考，不要照此改代码」**：
+
+| 归档件 | 覆盖轮次 |
+| --- | --- |
+| [`archive/quality-enhancement-log/2026-09-12-llm-role-matrix.md`](archive/quality-enhancement-log/2026-09-12-llm-role-matrix.md) | LLM 角色矩阵 v2、大纲终审官、读者官、句式层 AI 指纹 |
+| [`archive/quality-enhancement-log/2026-09-23-semantic-gates.md`](archive/quality-enhancement-log/2026-09-23-semantic-gates.md) | 语义硬伤检测器、关卡 4/5、冒烟门禁实战 |
+| [`archive/quality-enhancement-log/2026-09-26-gate-v7.md`](archive/quality-enhancement-log/2026-09-26-gate-v7.md) | 合规文案、Markdown 投影、门禁 v7 逐项根因治理 |
+| [`archive/quality-enhancement-log/2026-09-28-payoff-style.md`](archive/quality-enhancement-log/2026-09-28-payoff-style.md) | 商业爽点闭环、章末三件套、文风指纹 P1-1 |
+| [`archive/quality-enhancement-log/2026-09-29-live-verification.md`](archive/quality-enhancement-log/2026-09-29-live-verification.md) | 爽点断供检测、字数口径收敛、真机验证与自我推翻的判据 |
+| [`archive/quality-enhancement-log/2026-09-30-thinking-budget.md`](archive/quality-enhancement-log/2026-09-30-thinking-budget.md) | 思考链预算缺陷收敛 |
+
+> 拆分由 `python tool/split_quality_log.py` 完成（幂等，一次性工具，保留以便复核切分点）。
 
 ## ⚠️ 历史归档（勿照此改代码）
 
 | 文档 | 快照时点 | 已被什么取代 |
 | --- | --- | --- |
-| ⚠️ [`code-summary.md`](code-summary.md) | 2026-07-31 MVP 交付 | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
-| ⚠️ [`architecture-mvp.md`](architecture-mvp.md) | 2026-07-31 MVP 设计 | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
-| ⚠️ [`prd-mvp.md`](prd-mvp.md) | 2026-07-31 MVP 需求 | [`../README.md`](../README.md) |
+| ⚠️ [`archive/code-summary.md`](archive/code-summary.md) | 2026-07-31 MVP 交付 | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| ⚠️ [`archive/architecture-mvp.md`](archive/architecture-mvp.md) | 2026-07-31 MVP 设计 | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| ⚠️ [`archive/prd-mvp.md`](archive/prd-mvp.md) | 2026-07-31 MVP 需求 | [`../README.md`](../README.md) |
 
 > 保留它们是为了追溯「当初为什么这么设计」，以及**看踩过的坑**。
 > 三份文档自身已带归档警示标记（commit `60c9902`）。
@@ -58,3 +74,8 @@
 python scripts/quality_validation     # 质量指标是否已与人评对齐（当前：未对齐）
 python scripts/ab_rules_parity        # 双端词表 A/B（用真实成书量化收编影响面）
 ```
+
+> `ab_rules_parity` 测 5 项，其中 `instructionMarks` **不按词表命中判读**，
+> 而按**否决条数增量**——它只在叙事成立分类的红线 ±40 字窗口内起作用，
+> 「价格/加入/群」这类词在正文里遍地皆是，数命中说明不了判定会不会变。
+> 其余 4 项按词表命中判读。各项目前结论见总表第三节的说明。
