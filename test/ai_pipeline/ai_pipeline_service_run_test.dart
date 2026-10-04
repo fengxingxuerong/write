@@ -78,6 +78,7 @@ void main() {
     int rewriteThreshold = 55,
     bool useStateTrack = false,
     String protagonist = '林舟',
+    bool useChiefReview = false,
     Iterable<AiRole> activeRoles = const <AiRole>[
       AiRole.planner,
       AiRole.writer,
@@ -96,11 +97,26 @@ void main() {
     autoRewriteLowScore: autoRewriteLowScore,
     rewriteThreshold: rewriteThreshold,
     useStateTrack: useStateTrack,
+    useChiefReview: useChiefReview,
     roles: roles(activeRoles),
   );
 
-  AiPipelineTask task(AiPipelineConfig cfg, {String id = 'task-1'}) =>
-      AiPipelineTask(id: id, config: cfg, createdAt: DateTime(2026, 9, 1));
+  // chiefSamples / chiefRewriteThreshold 属于 **AiPipelineTask**（不是
+  // AiPipelineConfig）——模型里这两层的终审参数是分开的：config 只管
+  // 「要不要跑终审」(useChiefReview)，采样次数与打回线挂在任务上。
+  AiPipelineTask task(
+    AiPipelineConfig cfg, {
+    String id = 'task-1',
+    int chiefSamples = 3,
+    int chiefRewriteThreshold = 70,
+  }) =>
+      AiPipelineTask(
+        id: id,
+        config: cfg,
+        createdAt: DateTime(2026, 9, 1),
+        chiefSamples: chiefSamples,
+        chiefRewriteThreshold: chiefRewriteThreshold,
+      );
 
   /// 全书大纲（1 章，目标 60 字——小而可控）。
   /// 预置大纲 JSON。
@@ -144,9 +160,11 @@ void main() {
     String foreshadow =
         '{"foreshadows":[{"desc":"血煞盟的追杀令","status":"open","planted":1}]}',
     List<String>? editorOutputs,
+    List<String>? chiefOutputs,
   }) {
     int sceneNo = 0;
     int editorNo = 0;
+    int chiefNo = 0;
     final List<String> scenes = sceneTexts ?? <String>[scene1, scene2];
     return (String system, String user) {
       if (system == plannerSystemPrompt) {
@@ -159,6 +177,14 @@ void main() {
         return scenes[(sceneNo++) % scenes.length];
       }
       if (system == titlerSystemPrompt) return title;
+      // 终审官总评（Phase 3.5）。排在 editorSystemPrompt 之后但与之不同
+      // 常量，故不受编辑分支影响。打回重写也走 editorSystemPrompt，
+      // 由 editorOutputs 负责。
+      if (system == chiefEditorSystemPrompt) {
+        final List<String> outs = chiefOutputs ?? const <String>[];
+        if (outs.isEmpty) return '';
+        return outs[(chiefNo++) % outs.length];
+      }
       if (system == editorSystemPrompt) {
         final List<String> outs = editorOutputs ?? const <String>[''];
         return outs[(editorNo++) % outs.length];
@@ -878,6 +904,245 @@ void main() {
       expect(joined(t), contains('标题官 未配置模型，跳过'));
       expect(router.systems, isNot(contains(titlerSystemPrompt)));
       expect(t.chapters.single.title, '觉醒'); // 章纲标题兜底
+    });
+  });
+
+  // ==========================================================================
+  // 2026-10-03 新增：Phase 3.5 终审官「通读级总评 + 打回重写权」
+  //
+  // 为什么补这块：此前 useChiefReview 在整个文件里零引用——终审阶段从未
+  // 被测过。而它是本项目声称的「三级质量权力」里最重的一环（README 与
+  // docs/交付文档.md 称终审官有打回权），一旦回归将静默失效：分数再低也
+  // 不会有人改稿，且日志里看不出发生过什么。
+  //
+  // 覆盖重点（按风险排序）：
+  //   1. ok=false（终审没跑出结论）时**绝不打回**——对不存在的低分改稿是纯破坏；
+  //   2. 分数 ≥ 打回线不打回；
+  //   3. 低于打回线且点名到章 → 打回 + 采纳 + 二审；
+  //   4. 重写产出过不了采纳闸 → 保留原文但**照记轨迹**（「打回过但没改成」
+  //      比「没打回」更需要被看见）；
+  //   5. topIssues 为空时即使低分也不打回（无从点名）。
+  // ==========================================================================
+  group('Phase 3.5 终审打回重写权', () {
+    /// 构造一份终审 JSON。[overall] 为 null 时表示「解析失败/无结论」。
+    String chiefJson({
+      int overall = 60,
+      int chapter = 1,
+      String issue = '节奏塌陷：第 3 章无推进',
+      String evidence = '第 3 章 💥0.0/千字',
+    }) =>
+        jsonEncode(<String, dynamic>{
+          'overall': overall,
+          'dimensions': <String, dynamic>{
+            '开篇钩子': 70,
+            '节奏曲线': 40,
+            '人物弧光': 60,
+            '爽点与期待感': 55,
+            '伏笔回收': 60,
+            '结局力度': 60,
+          },
+          'verdict': '需打磨',
+          'top_issues': <Map<String, dynamic>>[
+            <String, dynamic>{
+              'chapter': chapter,
+              'issue': issue,
+              'evidence': evidence,
+            },
+          ],
+          'fix_priority': <String>['补一处打脸', '加快节奏'],
+        });
+
+    /// 终审配置：chiefSamples 固定为 1，避免多采样合并干扰本组断言。
+    ///
+    /// 注意两个字段分属不同类：`useChiefReview` 在 AiPipelineConfig（决定
+    /// 「跑不跑」），`chiefSamples` 在 AiPipelineTask（决定「跑几次」）。
+    /// 模型把它们拆开了，初版误把两者都传给 config 而编译失败。
+    /// ⚠ editor 角色**必须**在 activeRoles 里：终审官（Phase 3.5）是经
+    /// `_runChiefPass` → `_call(task, AiRole.editor, chiefEditorSystemPrompt, …)`
+    /// 调用的。若 editor 未配置，`_chainConfigured` 为 false，_runChiefPass
+    /// **第一行就返回 overall:-1**（无结论）——所有终审断言都会拿到 -1，
+    /// 而日志上看不出原因（因为它不是「解析失败」，是「压根没调用」）。
+    AiPipelineTask chiefTask({bool useChiefReview = true}) => task(
+          config(
+            activeRoles: <AiRole>[
+              AiRole.planner,
+              AiRole.writer,
+              AiRole.titler,
+              AiRole.editor,
+            ],
+            useChiefReview: useChiefReview,
+          ),
+          chiefSamples: 1,
+          chiefRewriteThreshold: 70,
+        );
+
+    test('终审开启时会跑通读级总评并落进 chiefReviews', () async {
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          chiefOutputs: <String>[chiefJson(overall: 82)],
+        ),
+      );
+      final AiPipelineTask t = await runTask(chiefTask(), router);
+
+      expect(router.systems, contains(chiefEditorSystemPrompt),
+          reason: 'useChiefReview=true 必须真的调用终审官');
+      expect(t.chiefReviews, isNotEmpty);
+      expect(t.chiefReviews.first.overall, 82);
+      expect(t.chiefReviews.first.round, 1);
+    });
+
+    test('终审关闭时完全不调用终审官', () async {
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(outline: outlineJson()),
+      );
+      final AiPipelineTask t =
+          await runTask(chiefTask(useChiefReview: false), router);
+
+      expect(router.systems, isNot(contains(chiefEditorSystemPrompt)));
+      expect(t.chiefReviews, isEmpty);
+    });
+
+    test('ok=false（终审无结论）时绝不打回', () async {
+      // 本组最重要的安全约束：终审返回非 JSON → 解析失败 → overall=-1 →
+      // ok=false。此时若误打回，等于对着「一个从未存在的低分」去改稿——
+      // 纯破坏且无从追溯。
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(outline: outlineJson(), chiefOutputs: <String>['']),
+      );
+      final AiPipelineTask t = await runTask(chiefTask(), router);
+
+      expect(t.chiefRewrites, isEmpty,
+          reason: '终审没跑出结论时不得打回——否则是在对着不存在的分数改稿');
+      expect(joined(t), isNot(contains('[打回]')));
+      expect(t.chapters.single.content, isNotEmpty,
+          reason: '正文必须原样保留');
+    });
+
+    test('分数 ≥ 打回线时不打回', () async {
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          chiefOutputs: <String>[chiefJson(overall: 85)],
+        ),
+      );
+      final AiPipelineTask t = await runTask(chiefTask(), router);
+
+      expect(t.chiefReviews.first.overall, 85);
+      expect(t.chiefRewrites, isEmpty);
+      expect(joined(t), isNot(contains('[打回]')));
+    });
+
+    test('topIssues 为空时即使低分也不打回（无从点名）', () async {
+      final String noIssues = jsonEncode(<String, dynamic>{
+        'overall': 40,
+        'dimensions': <String, dynamic>{'节奏曲线': 20},
+        'verdict': '不建议',
+        'top_issues': <dynamic>[],
+        'fix_priority': <String>[],
+      });
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(outline: outlineJson(), chiefOutputs: <String>[noIssues]),
+      );
+      final AiPipelineTask t = await runTask(chiefTask(), router);
+
+      expect(t.chiefReviews.first.overall, 40);
+      expect(t.chiefRewrites, isEmpty,
+          reason: '没有点名章就不能打回——不知道该改哪一章');
+    });
+
+    test('低于打回线且点名到章：打回 + 重写采纳 + 二审', () async {
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          // 第一轮终审低分点名第 1 章 → 触发打回；重写走 editorSystemPrompt；
+          // 第二轮终审给高分。
+          chiefOutputs: <String>[
+            chiefJson(overall: 55),
+            chiefJson(overall: 80),
+          ],
+          // ⚠ 重写产出的真实契约是**双向闸**（service 采纳条件 1407 行）：
+          //   上限：patchReject(maxWords = oldWords * 2)——超长判「超长」拒收；
+          //   下限：newWords >= oldWords * editorMinRatio(0.85)——过短判
+          //         「压缩过度」拒收（与「编辑砍半守卫」同一口径）；
+          //   卫生：patch 前 20+ 字不得与正文尾部 400 字重复、无指令残留/题材漂移。
+          // 本夹具第 1 章约 295 汉字 → 产出须落在约 [251, 590] 区间，且开头
+          // 不能复用 body 前缀（「林舟握紧拳头…」21 字会撞尾部重复检查）。
+          // 初版给了 6 倍 body(...) 超上限；二版给了 28 字短补丁过不了下限
+          // ——两版都只记住了闸的一半。此处用「全新开头句 + 2 倍 body(...)」
+          // ≈275 字恰好落窗。语义也对：打回是「按终审指出的问题改写出改进后
+          // 的整章级文本」，不是重写整章、更不是补丁式续写。
+          editorOutputs: <String>[
+            '林舟猛地侧身半步，刀锋贴着肩甲擦过去，火星溅上青石。${body('重写') * 2}',
+          ],
+        ),
+      );
+      final AiPipelineTask t = await runTask(chiefTask(), router);
+
+      expect(t.chiefRewrites, isNotEmpty, reason: '低分且点名到章必须打回');
+      expect(t.chiefRewrites.first.chapterIdx, 1);
+      expect(t.chiefRewrites.first.applied, isTrue,
+          reason: '重写产出过采纳闸时应替换正文');
+      expect(t.chiefRewrites.first.newWords, greaterThan(0));
+      expect(t.chiefRewrites.length, lessThanOrEqualTo(2),
+          reason: '打回章数受 chiefRewriteMax 限制（默认 2）');
+      expect(t.chiefReviews.length, 2, reason: '打回后必须二审，以二审为准');
+      expect(t.chiefReviews.last.overall, 80,
+          reason: '最终结论以二审为准');
+    });
+
+    test('打回数量受 chiefRewriteMax 限制（不会整本书重写）', () async {
+      // 点名 1~5 章，但 chiefRewriteMax=2 → 最多改 2 章。
+      final String manyIssues = jsonEncode(<String, dynamic>{
+        'overall': 50,
+        'dimensions': <String, dynamic>{'节奏曲线': 30},
+        'verdict': '需打磨',
+        'top_issues': <Map<String, dynamic>>[
+          for (int i = 1; i <= 5; i++)
+            <String, dynamic>{
+              'chapter': i,
+              'issue': '第 $i 章问题',
+              'evidence': '指标 x',
+            },
+        ],
+        'fix_priority': <String>['修'],
+      });
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          chiefOutputs: <String>[manyIssues, chiefJson(overall: 80)],
+          editorOutputs: <String>['林舟脚步一顿，陡然回头，拔刀挡住了那柄偷袭的长剑。'],
+        ),
+      );
+      final AiPipelineTask t = await runTask(chiefTask(), router);
+
+      expect(t.chiefRewrites.length, lessThanOrEqualTo(2),
+          reason: 'chiefRewriteMax 默认 2，打回数必须受限');
+    });
+
+    test('重写产出过不了采纳闸时保留原文但照记轨迹', () async {
+      // 空产出 → 采纳守卫拒绝 → applied=false，但**必须留下记录**：
+      // 「打回过但没改成」比「没打回」更需要被看见（源码注释原话）。
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(
+          outline: outlineJson(),
+          chiefOutputs: <String>[
+            chiefJson(overall: 50),
+            chiefJson(overall: 80),
+          ],
+          editorOutputs: <String>[''],
+        ),
+      );
+      final AiPipelineTask t = await runTask(chiefTask(), router);
+
+      expect(t.chiefRewrites, isNotEmpty, reason: '打回过就必须留痕');
+      expect(t.chiefRewrites.first.applied, isFalse);
+      expect(t.chiefRewrites.first.newWords,
+          t.chiefRewrites.first.oldWords,
+          reason: '未采纳时字数不应变化（正文原样保留）');
+      expect(t.chapters.single.content, isNotEmpty);
+      expect(joined(t), contains('保留原文'),
+          reason: '日志必须说清「打回了但没改成」');
     });
   });
 }

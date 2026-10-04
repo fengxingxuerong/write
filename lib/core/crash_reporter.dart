@@ -140,6 +140,43 @@ String sanitizeCrashContent(String content) {
   return sanitized;
 }
 
+/// 上报请求的 JSON 载荷（公开以便单测直接断言，无需起 HTTPS 服务）。
+///
+/// 为什么要抽出来（2026-10-03）：
+/// [uploadCrashLog] 只允许 HTTPS，而测试环境起 HTTPS 服务需要证书与
+/// `HttpOverrides`，成本高且易脆。结果是整个上传主体（构造载荷、脱敏、
+/// 状态码判定、异常转换）长期**零覆盖**，而 `crash_reporter_test.dart`
+/// 里那个「服务器返回 500」的用例其实在 `!config.enabled` 处就抛异常了
+/// ——它绿着，却一行都没跑到目标分支（典型的假绿）。
+///
+/// 把「与传输无关的纯逻辑」抽成可单测的函数，是让这段代码真正被测到的
+/// 最小改动：不必起服务器，也不放松 HTTPS-only 的安全约束。
+///
+/// 本地日志保留原始内容，仅远程上报使用脱敏副本。
+Map<String, dynamic> buildCrashPayload({
+  required String machineId,
+  required String version,
+  required String fileName,
+  required String content,
+  DateTime? uploadedAt,
+}) {
+  return <String, dynamic>{
+    // machineId 不回传：它用于本地聚合，上报无价值且是设备标识。
+    'machineId': '[redacted]',
+    'version': version,
+    'file': fileName,
+    'content': sanitizeCrashContent(content),
+    'uploadedAt': (uploadedAt ?? DateTime.now()).toIso8601String(),
+  };
+}
+
+/// 把 HTTP 状态码判定为「成功 / 失败消息」。
+///
+/// 2xx 视为已接受；其余一律失败并带上状态码，便于定位。
+/// 返回 null 表示成功。
+String? crashUploadFailureFor(int status) =>
+    (status >= 200 && status < 300) ? null : '服务器返回 HTTP $status';
+
 /// 上报一条崩溃日志。
 ///
 /// 返回 true 表示服务器已接受（HTTP 2xx）；其它情况抛 [CrashReportException]。
@@ -173,21 +210,21 @@ Future<bool> uploadCrashLog({
     request.headers.contentType = ContentType.json;
     request.headers.set(HttpHeaders.userAgentHeader, 'MojiangInkSmith/0.1');
     request.write(
-      jsonEncode(<String, dynamic>{
-        'machineId': '[redacted]',
-        'version': '0.1.0',
-        'file': fileName,
-        'content': sanitizeCrashContent(content),
-        'uploadedAt': DateTime.now().toIso8601String(),
-      }),
+      jsonEncode(buildCrashPayload(
+        machineId: machineId,
+        version: '0.1.0',
+        fileName: fileName,
+        content: content,
+      )),
     );
     final HttpClientResponse response = await request.close()
         .timeout(const Duration(seconds: 5));
     final int status = response.statusCode;
     // 读完响应体再判断，避免连接泄漏。
     await response.drain<void>().timeout(const Duration(seconds: 5));
-    if (status >= 200 && status < 300) return true;
-    throw CrashReportException('服务器返回 HTTP $status');
+    final String? failure = crashUploadFailureFor(status);
+    if (failure == null) return true;
+    throw CrashReportException(failure);
   } on CrashReportException {
     rethrow;
   } catch (e) {
