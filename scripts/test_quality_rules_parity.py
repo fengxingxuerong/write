@@ -79,13 +79,21 @@ class QualityRulesParityTest(unittest.TestCase):
         novel_pipeline.py 与 Dart 侧各自硬编码 0.85；fixMinRatio 在 Dart 侧也另有一份
         独立副本（factFixMinRatio = 0.92）。这类「手工同步的第二份」正是本对账体系
         要消灭的对象，故用源码级断言钉住。
+
+        2026-10-03 拆分注记：阈值随 LLM 调用层搬到 scripts/pipeline_llm.py。
+        门禁检查的是「**消费方代码里不得出现裸字面量**」这一性质，而非某个固定
+        文件路径——故对两个文件都查，且各自都不得出现裸赋值。检查面比拆分前更宽
+        （拆分前只查 novel_pipeline 一个文件，漏掉新文件里的硬编码）。
         """
         pipeline = (ROOT / "scripts" / "novel_pipeline.py").read_text(
             encoding="utf-8")
+        llm = (ROOT / "scripts" / "pipeline_llm.py").read_text(encoding="utf-8")
         # Python：采纳下限绑定到生成常量，且不再出现裸字面量赋值。
-        self.assertIn("EDITOR_MIN_RATIO = _gen.EDITOR_MIN_RATIO", pipeline)
-        self.assertNotRegex(pipeline, r"EDITOR_MIN_RATIO\s*=\s*0\.\d",
-                            "EDITOR_MIN_RATIO 退回硬编码，应改引生成常量")
+        self.assertIn("EDITOR_MIN_RATIO = _gen.EDITOR_MIN_RATIO", llm)
+        for name, text in (("novel_pipeline.py", pipeline), ("pipeline_llm.py", llm)):
+            self.assertNotRegex(text, r"EDITOR_MIN_RATIO\s*=\s*0\.\d",
+                                f"{name} 的 EDITOR_MIN_RATIO 退回硬编码，"
+                                f"应改引生成常量")
         # Dart：两个消费点都引用 QualityRules.*，不再出现 * 0.85 这类裸阈值。
         dart = (ROOT / "lib" / "ai_pipeline" / "services"
                 / "ai_pipeline_service.dart").read_text(encoding="utf-8")
@@ -95,6 +103,44 @@ class QualityRulesParityTest(unittest.TestCase):
         self.assertNotRegex(
             dart, r"=\s*0\.92\s*;",
             "ai_pipeline_service.dart 出现裸 0.92，应改用 QualityRules.fixMinRatio")
+
+
+    def test_python_consumers_reference_generated_word_lists(self):
+            """已收编词表的消费方不得再留字面量（收编的另一半，不做就等于白做）。
+
+            背景（2026-10-03）：instructionMarks 收编进 JSON 并生成 INSTRUCTION_MARKS，
+            但若 fanqie_review 仍保留自己的 24 词字面量，JSON 改了它不会跟着改——
+            结构上「同源」只是看起来成立，实际仍是两份可各自漂移的副本。
+
+            故用源码级断言钉住：消费方必须从生成物取值，且不再出现裸列表字面量。
+            这与 test_python_consumers_reference_generated_thresholds 是同一条纪律
+            在词表上的应用（那条管阈值，这条管词表）。
+            """
+            fr = (ROOT / "scripts" / "fanqie_review.py").read_text(encoding="utf-8")
+            self.assertIn("INSTRUCTION_MARKERS = list(INSTRUCTION_MARKS)", fr,
+                          "fanqie_review.INSTRUCTION_MARKERS 未引用生成物——"
+                          "请改 INSTRUCTION_MARKS = list(INSTRUCTION_MARKS)")
+            # 裸列表字面量回归检测：赋值右侧不得再是 [ ... ]。
+            self.assertNotRegex(fr, r"INSTRUCTION_MARKERS\s*=\s*\[",
+                                "fanqie_review.INSTRUCTION_MARKERS 退回字面量，"
+                                "应改引生成物 quality_rules_generated.INSTRUCTION_MARKS")
+            # 两个导入分支（相对导入 / 平铺导入）都要有该常量，否则「脚本直跑」
+            # 与「作为模块导入」两种用法行为不一致。
+            self.assertEqual(
+                2, fr.count("        INSTRUCTION_MARKS,\n"),
+                "fanqie_review 的两个导入分支应各有一条 INSTRUCTION_MARKS，"
+                f"实为 {fr.count('        INSTRUCTION_MARKS,')} 条")
+
+            # Dart 侧同样不得留字面量。
+            dart = (ROOT / "lib" / "engine" / "quality"
+                    / "fanqie_gate_checker.dart").read_text(encoding="utf-8")
+            self.assertRegex(
+                dart, r"_instructionMark\s*=\s*QualityRules\.instructionMarks",
+                "Dart _instructionMark 未引用 QualityRules.instructionMarks")
+            self.assertNotRegex(
+                dart, r"_instructionMark\s*=\s*<String>",
+                "Dart _instructionMark 退回字面量，"
+                "应改用 QualityRules.instructionMarks")
 
 
 if __name__ == "__main__":

@@ -53,6 +53,7 @@ try:  # pragma: no cover - 分支取决于调用方式
         INTRA_REPEAT_MIN_BLOCK,
         INTRA_REPEAT_GRAM,
         CONFLICT_WORDS,
+        INSTRUCTION_MARKS,
 )
 except ImportError:  # pragma: no cover - 平铺导入（脚本直跑/同目录 import）
     _here = os.path.dirname(os.path.abspath(__file__))
@@ -76,6 +77,7 @@ except ImportError:  # pragma: no cover - 平铺导入（脚本直跑/同目录 
         INTRA_REPEAT_MIN_BLOCK,
         INTRA_REPEAT_GRAM,
         CONFLICT_WORDS,
+        INSTRUCTION_MARKS,
 )
 
 # ============================================================
@@ -320,6 +322,11 @@ def split_chapters(path):
 NARRATIVE_OK_CATEGORIES = {
     "教唆与违法细节", "宗教民族", "现实品牌与真人"
 }
+# 2026-10-03 本表**收编进 rules/quality_rules.json**（instructionMarks），两端同源。
+# 原两端各写一份（Dart _instructionMark 21 词 / Python 24 词），漂移只能靠注释约束；
+# 收编前已按 scripts/ab_rules_parity.py 测过否决条数增量（134 份真实成书）：
+# 两表同为 5 条否决、增量 +0，即改判定零风险，故取 Python 全集。
+# 改词表请改 JSON 再跑 scripts/rules_codegen.py，不要在本文件写字面量。
 # 2026-10-03 修正两处历史笔误（依据：rules/quality_rules.json 的
 # asymmetries.instructionMarks；误伤面已用 scripts/probe/probe_instruction_marker.py
 # 在 174 份真实成书/样本上实测，否决升级条数差值 +0）：
@@ -327,9 +334,7 @@ NARRATIVE_OK_CATEGORIES = {
 #      导致正文出现「招募」时漏判指令痕迹（Dart 侧一直是对的）。
 #   2) 「代办」重复登记两次 → 去重。以 any() 语义使用，重复项不影响判定结果，
 #      仅属冗余；但留着会让「词表条数」与 Dart 侧对不上、误导后续收编对账。
-INSTRUCTION_MARKERS = ["方法", "教程", "步骤", "配方", "图解", "教你", "怎么", "如何", "加入",
-                      "联系", "转发", "关注", "下载", "买卖", "出售", "招募", "代办",
-                      "价格", "起办", "免抵押", "低息", "放款", "群", "链接"]
+INSTRUCTION_MARKERS = list(INSTRUCTION_MARKS)
 
 
 _SEP_CHARS = set(

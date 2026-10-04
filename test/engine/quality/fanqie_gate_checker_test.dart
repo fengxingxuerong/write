@@ -143,6 +143,37 @@ void main() {
           '她脱了衣服，镜头拍下裸体。 "别动。"那人说。\n\n${buildPassableChapter(blocks: 6)}');
       expect(r.redlines.any((FanqieRedlineHit h) => h.veto), isTrue);
     });
+
+    // 2026-10-03 回归：_narrativeOkCategories 曾漏了「教唆细节」——
+    // 即 _extraRedline 教唆类红线的真实分类名。后果是该类红线**恒为否决**，
+    // 教唆语境判定形同虚设（小说里提及「土制炸弹」也会被判否决）。
+    // 上一条「高利贷」用例走的是编辑自查库（违法违规），覆盖不到这条路径，
+    // 故这里对「教唆细节」路径单独立一组正反对照。
+    group('教唆细节（番茄专有红线路径）', () {
+      // _extraRedline['教唆细节'] 的真实词，非敏感词库路径。
+      const String word = '土制炸弹';
+
+      test('无教唆语境：只提示、不否决', () {
+        final FanqieGateReport r = plain.check(
+            '坊间传闻有人私藏$word，皆是谣传，不可轻信。\n\n${buildPassableChapter(blocks: 6)}');
+        final Iterable<FanqieRedlineHit> hits = r.redlines
+            .where((FanqieRedlineHit h) => h.word.contains(word));
+        expect(hits, isNotEmpty, reason: '该词属教唆细节类，应有命中');
+        expect(hits.every((FanqieRedlineHit h) => h.veto == false), isTrue,
+            reason: '仅叙事提及时不应否决——这正是「教唆语境」判定存在的意义');
+      });
+
+      test('有教唆语境：升级为否决', () {
+        final FanqieGateReport r = plain.check(
+            '他写下$word的制作配方，图文并茂，照着做即可。\n\n${buildPassableChapter(blocks: 6)}');
+        final Iterable<FanqieRedlineHit> hits = r.redlines
+            .where((FanqieRedlineHit h) => h.word.contains(word));
+        expect(hits, isNotEmpty);
+        expect(hits.any((FanqieRedlineHit h) => h.veto), isTrue,
+            reason: '伴随教唆语境必须升级为否决');
+        expect(r.pass, isFalse);
+      });
+    });
   });
 
   group('结论与定点修指令', () {

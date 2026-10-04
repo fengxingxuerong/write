@@ -658,7 +658,11 @@ def count_words(text):
 AI_CLICHE = ['嘴角', '唇角', '眼底', '眼神', '目光', '仿佛', '似乎', '宛如',
              '空气', '心跳', '深吸', '命运', '轨迹', '万语', '舒了一口',
              '微微上扬', '闪过一丝', '勾起一抹']
-NEGATION = NEGATION = list(NEGATION)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
+NEGATION = list(NEGATION)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
+# 注：此处原为 `NEGATION = NEGATION = list(NEGATION)`，是收编 negations 时
+# 一并替换赋值两侧留下的合并残留。双重赋值里左侧第一个 NEGATION 会被
+# Python 解析为**未定义的名字**——只是恰好因为右侧同名而侥幸不报 NameError。
+# 它能跑不代表它对，且掩盖了「到底在给谁赋值」的意图，故收敛为单次赋值。
 
 # ============================================================
 # 单一数据源（2026-10-01）：以下词表**不再**在本文件写死，而是从

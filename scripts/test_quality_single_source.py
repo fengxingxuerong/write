@@ -23,6 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import ab_rules_parity as ab  # noqa: E402
 import fanqie_review  # noqa: E402
 import quality_rules_generated as gen  # noqa: E402
 import novel_pipeline  # noqa: E402
@@ -84,6 +85,56 @@ class InstructionMarkersHygieneTest(unittest.TestCase):
         self.assertTrue(educ, "样例文本应命中教唆类红线")
         self.assertTrue(all(h["level"] != "否决" for h in educ),
                         "无 marker 语境时不应升级为否决")
+
+
+class InstructionMarkVerdictTest(unittest.TestCase):
+    """instructionMarks 的收编后状态：两端必须已一致，且判定结果未变。
+
+    时间线（2026-10-03）：
+      收编前——Dart 21 词 vs Python 24 词，需先测「否决条数增量」确认零风险；
+      收编后——两端同源，差异应恒为 0，且否决数与收编前基线一致。
+
+    为什么收编后仍要钉住否决数：收编若误改了词表（例如少了「招募」），
+    增量会显示 +0（因为已经没有「Python 独有词」可比了），但**否决数本身会变**。
+    只断言「无差异」是恒真命题——它无法区分「正确收编」与「收编时丢词」。
+
+    这与 test_pipeline_surface 里「门禁必须真能失败」是同一条纪律：
+    一个永远为真的断言比没有断言更糟，它给人虚假的安全感。
+    """
+
+    def test_two_ends_are_now_identical(self):
+        """收编后两端必须同源——若仍报「建议收编」，说明工具在拿过期副本比。"""
+        corpus = ab.load_corpus()
+        self.assertTrue(corpus, "真实语料为空（data/ 与人评样本章缺失），无法验证")
+        r = ab.analyze(corpus)["instructionMarks"]
+        self.assertEqual([], r["py_only"],
+                         "两端仍有 Python 独有词——若已收编，说明 ab_rules_parity.py "
+                         "里的 DART_INSTRUCTION_MARK 是过期副本（应取 gen.INSTRUCTION_MARKS）")
+        self.assertEqual([], r["dart_only"],
+                         "两端仍有 Dart 独有词——若已收编，同上")
+
+    def test_veto_count_unchanged_since_pre_adoption_baseline(self):
+        """否决数必须仍等于收编前实测的 5 条。
+
+        这是「收编没改判定」的实证：若收编时动了词表（如删掉「招募」），
+        教唆类红线将不再升级为否决，本断言立刻红。
+        """
+        corpus = ab.load_corpus()
+        r = ab.analyze(corpus)["instructionMarks"]
+        self.assertEqual(5, r["veto_with_dart_table"],
+                         "否决条数与收编前基线（5）不符——收编改了判定，"
+                         "或语料扩了需同步更新基线")
+        self.assertEqual(0, r["veto_delta"],
+                         f"两端否决条数出现差异（+{r['veto_delta']}）")
+
+    def test_recruit_marker_survives_adoption(self):
+        """「招募」必须仍在两端词表内——它是 2026-10-03 修正错别字的成果。
+
+        「招摹」是「招募」的错别字，contains 永远匹配不到，即正文出现「招募」时
+        漏判指令痕迹。收编是一次大规模搬运，这类成果最容易被悄悄弄丢。
+        """
+        self.assertIn("招募", gen.INSTRUCTION_MARKS)
+        self.assertNotIn("招摹", gen.INSTRUCTION_MARKS)
 
 
 class GeneratedArtifactCleanTest(unittest.TestCase):

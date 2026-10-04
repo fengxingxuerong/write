@@ -318,39 +318,61 @@ class FanqieGateChecker {
   static const int _hashMask = 0x3FFFFFFF;
 
   /// 番茄专有红线类别（其余类别走 [SensitiveWordsService] 内置词库）。
+  ///
+  /// 2026-10-03 收编：本表原为 5 类 56 词硬编码，其中 4 类是
+  /// `QualityRules` 生成物的**真子集**（时政 13/30、未成年 11/17、
+  /// 品牌真人 17/25、教唆 9/15）。子集意味着 Dart 侧会**漏判**——
+  /// Python 有词、Dart 无词 → 不判违规，而漏判性质比多判严重。
+  /// 已按 scripts/ab_rules_parity.py 在 134 份真实成书实测：这 4 类
+  /// Python 独有的 37 词**零命中**，故取全集不新增任何误判，同时消除漏判。
+  ///
+  /// 「宗教民族」**故意不收编**：它与生成物双向独有（Dart 独有
+  /// 邪教徒/异教徒该死/侮辱/藏传佛教活佛转世），且生成物独有的「礼拜」
+  /// 在 134 份真实成书里命中 2 份——合并会立刻改变这 2 份的判定，
+  /// 而 Dart 独有的「侮辱」在网文叙述里极易误伤。属口径设计分歧，
+  /// 须产品裁决，不得由本文件单方面对齐（见 quality_rules.json
+  /// 的 redlineReligion doc 与 docs/quality-rules-current.md 第三节）。
+  ///
+  /// 改词表请改 rules/quality_rules.json 再跑 scripts/rules_codegen.py。
   static const Map<String, List<String>> _extraRedline = <String, List<String>>{
-    '时政敏感': <String>[
-      '国家主席', '国务院', '中南海', '政治局', '省委书记', '中央委员会', '全国人大',
-      '政变', '分裂势力', '台独', '港独', '暴乱', '骚乱',
-    ],
+    '时政敏感': QualityRules.redlinePolitics,
+    // 宗教民族：故意保留 Dart 自有词表（见上方说明），不引生成物。
     '宗教民族': <String>[
       '邪教徒', '圣战', '异教徒该死', '侮辱', '藏传佛教活佛转世', '请神', '问米',
       '通灵', '招魂', '借尸还魂', '苗疆蛊', '蛊毒', '降头', '养小鬼',
     ],
-    '未成年风险': <String>[
-      '师生恋', '初中生怀孕', '高中生开房', '萝莉', '正太', '诱奸', '童养媳圆房',
-      '校园霸凌视频', '拍视频传播', '扒光衣服', '拍裸照',
-    ],
-    '现实品牌与真人': <String>[
-      '微信', '支付宝', '淘宝', '京东', '拼多多', '抖音', '快手', '腾讯', '阿里巴巴',
-      '清华大学', '北京大学', '协和医院', '钟南山', '马云', '马化腾', '任正非', '姚明',
-    ],
-    '教唆细节': <String>[
-      '制作炸药的方法', '土制炸弹', '开锁技巧', '伪造身份证', '办假证', '洗钱方法',
-      '下毒剂量', '自制枪支', '弩的图纸',
-    ],
+    '未成年风险': QualityRules.redlineMinorRisk,
+    '现实品牌与真人': QualityRules.redlineBrandCelebrity,
+    '教唆细节': QualityRules.redlineIllegalDetail,
   };
 
   /// 「教唆/推广」语境标记：只有伴随这些词，情节类红线才升级为否决。
-  static const List<String> _instructionMark = <String>[
-    '方法', '教程', '步骤', '配方', '图解', '教你', '怎么', '如何', '加入', '联系',
-    '转发', '关注', '下载', '买卖', '出售', '招募', '价格', '免抵押', '低息', '放款',
-    '链接',
-  ];
+  ///
+  /// 值来自 [QualityRules.instructionMarks]（rules/quality_rules.json 生成，
+  /// 2026-10-03 收编）。此前本文件与 Python `INSTRUCTION_MARKERS` 各写一份
+  /// （Dart 21 词 / Python 24 词），漂移只能靠注释约束；收编前已按
+  /// scripts/ab_rules_parity.py 在 134 份真实成书上测**否决条数增量**：
+  /// 两表同为 5 条否决、增量 +0，即改判定零风险，故取 Python 全集。
+  /// 改词表请改 JSON 再跑 scripts/rules_codegen.py，不要在此写字面量。
+  static const List<String> _instructionMark = QualityRules.instructionMarks;
 
   /// 这些类别在小说里作为情节元素出现是正常的，只有教唆语境才否决。
+  ///
+  /// 键必须与 [_extraRedline] 的**实际分类名**逐字一致，否则该类别永远
+  /// `narrativeOk == false` → 恒为「否决」，教唆语境判定形同虚设。
+  ///
+  /// 2026-10-03 修复：本集合原本漏了 `教唆细节`——即 [_extraRedline] 里
+  /// 教唆类红线的**真实分类名**。后果是该类红线完全无法区分「叙事提及」
+  /// 与「教唆传授」：小说里写「他妹妹欠下高利贷」也会被判否决，
+  /// 正是 Python 侧注释记载要避免的「误伤《碎星航线》第 1 章」。
+  /// （Python 侧对应键是 `教唆与违法细节`——同一语义、不同命名，
+  /// 故两端键集按各自的分类命名体系对齐，不强行统一成同一个字符串。）
+  ///
+  /// 两类教唆路径都要接上白名单，二者不可只留其一：
+  /// - `教唆细节`：番茄专有红线（[_extraRedline]）；
+  /// - `违法违规`：编辑自查词库（[SensitiveWordsService]）里的违法操作类。
   static const Set<String> _narrativeOkCategories = <String>{
-    '违法违规', '宗教民族', '现实品牌与真人', '广告引流',
+    '教唆细节', '违法违规', '宗教民族', '现实品牌与真人', '广告引流',
   };
 
   /// 用 [index] 预筛后取 [words] 中命中的子集（保持 [words] 原有顺序）。

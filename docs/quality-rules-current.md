@@ -2,7 +2,7 @@
 
 # 当前质检判据与阈值总表
 
-> 数据源：`rules/quality_rules.json`（version 1，updated 2026-10-01）。
+> 数据源：`rules/quality_rules.json`（version 2，updated 2026-10-03）。
 > 改判据请改 JSON 再跑 `python scripts/rules_codegen.py`；本文档与双端常量会自动同步。
 
 ## 一、词表（双端逐值、逐序一致）
@@ -20,12 +20,12 @@
 | `conflictWords` / `CONFLICT_WORDS` | 40 | 首屏「有无冲突信号」检查（开局要带包袋）。2026-10-03 按 scripts/ab_rules_parity.py 在 123 份真实成书上实测收编：Dart 原表是 Python 的真子集，Python 独有的 9 词命中 66/123 份（53.7%）——即过半成书 Dart 会漏判首屏冲突，属真漏判而非口径分歧，故以 Python 全集为准单端收编。命中即视为首屏有冲突信号。 |
 | `gateClichePhrases` / `GATE_CLICHE_PHRASES` | 19 | 网文高频套句（Dart 侧过审闸门「同质化」判定用）：distinct 命中 ×1000/字 > 1.2 判修改。**注意**：与 Python 的 reviewClicheSentences 是同一套指标公式、不同词表——Dart 19 条多为短词（如「命运的车轮」「仿佛在诉说」，匹配更宽），Python 34 条多为长句（匹配更准但覆盖更窄）。两侧漂移见 asymmetries.clicheTables。 |
 | `reviewClicheSentences` / `REVIEW_CLICHE_SENTENCES` | 34 | 网文高频套句（Python 侧 fanqie_review.cliche_overlap「同质化」判定用）：同样按 distinct 命中 ×1000/字 > 1.2 触发「修改」。与 gateClichePhrases 公式同、词表不同（见 asymmetries.clicheTables）。 |
-| `redlinePolitics` / `REDLINE_POLITICS` | 30 | Python 番茄过审红线·时政类（veto 级：命中即一票否决，部分词可经 REDLINE_WHITELIST 降级为提示）。分类名 `时政敏感`，共 30 词。 |
-| `redlineReligion` / `REDLINE_RELIGION` | 29 | Python 番茄过审红线·宗教/民族类（含邪教、巫术、通灵等封建迷信渲染）。分类名 `宗教民族`，共 29 词。 |
-| `redlineMinorRisk` / `REDLINE_MINOR_RISK` | 17 | Python 番茄过审红线·未成年人类（含校园、偷拍视频、性化描写；此类为平台最高风险之一）。分类名 `未成年风险`，共 17 词。 |
+| `redlinePolitics` / `REDLINE_POLITICS` | 30 | 番茄过审红线·时政类（veto 级：命中即一票否决，部分词可经 REDLINE_WHITELIST 降级为提示）。分类名 `时政敏感`，共 30 词。2026-10-03 双端同源：Dart 原 _extraRedline['时政敏感'] 仅 13 词，是本表的真子集；已按 scripts/ab_rules_parity.py 在 134 份真实成书实测，Python 独有的 17 词零命中 → 收编不新增误判，且消除 Dart 侧潜在漏判。 |
+| `redlineReligion` / `REDLINE_RELIGION` | 29 | 番茄过审红线·宗教/民族类（含邪教、巫术、通灵等封建迷信渲染）。分类名 `宗教民族`，共 29 词。⚠ **故意保持双端分歧、不得收编**：Dart _extraRedline['宗教民族'] 是 14 词、与本表双向独有（Dart 独有 邪教徒/异教徒该死/侮辱/藏传佛教活佛转世，本表独有 19 词）。2026-10-03 实测本表独有的「礼拜」在 134 份真实成书里命中 2 份——即合并会立刻改变这 2 份的判定；而 Dart 独有的「侮辱」在网文叙述里极易误伤普通情节。属口径设计分歧，须产品裁决，不宜由脚本单方面合并。 |
+| `redlineMinorRisk` / `REDLINE_MINOR_RISK` | 17 | 番茄过审红线·未成年人类（含校园、偷拍视频、性化描写；此类为平台最高风险之一）。分类名 `未成年风险`，共 17 词。2026-10-03 双端同源：Dart 原 _extraRedline['未成年风险'] 仅 11 词，是本表的真子集；Python 独有的 6 词在 134 份真实成书实测零命中 → 收编零误判风险。 |
 | `redlineGore` / `REDLINE_GORE` | 22 | Python 番茄过审红线·过度血腥类（分尸/肢解/凌迟等，多数词在 REDLINE_WHITELIST 中按叙事语境降级）。分类名 `过度血腥`，共 22 词。 |
-| `redlineBrandCelebrity` / `REDLINE_BRAND_CELEBRITY` | 25 | Python 番茄过审红线·现实品牌与在世真人（平台禁止出现真实商业品牌与公众人物名）。分类名 `现实品牌与真人`，共 25 词。 |
-| `redlineIllegalDetail` / `REDLINE_ILLEGAL_DETAIL` | 15 | Python 番茄过审红线·可被照做的违法/危险操作细节（配方、撬锁、洗钱、跑路等），属「方法可复现」类高危。分类名 `教唆与违法细节`，共 15 词。 |
+| `redlineBrandCelebrity` / `REDLINE_BRAND_CELEBRITY` | 25 | 番茄过审红线·现实品牌与在世真人（平台禁止出现真实商业品牌与公众人物名）。分类名 `现实品牌与真人`，共 25 词。2026-10-03 双端同源：Dart 原 _extraRedline['现实品牌与真人'] 仅 17 词，是本表的真子集；Python 独有的 8 词（百度/华为手机/苹果手机/茅台/可口可乐/星巴克/麦当劳/刘翔）在 134 份真实成书实测零命中 → 收编零误判风险。 |
+| `redlineIllegalDetail` / `REDLINE_ILLEGAL_DETAIL` | 15 | 番茄过审红线·可被照做的违法/危险操作细节（配方、撬锁、洗钱、跑路等），属「方法可复现」类高危。分类名 `教唆与违法细节`（Dart 侧同名分类叫 `教唆细节`），共 15 词。2026-10-03 双端同源：Dart 原 _extraRedline['教唆细节'] 仅 9 词，是本表的真子集；Python 独有的 6 词（配比/撬锁工具/跑路路线/如何逃脱追查/无色无味/射钉枪改造）在 134 份真实成书实测零命中 → 收编零误判风险。注意「配比」这类词面窄但语境强，命中与否取决于具体文本，真实书里出现即应判。 |
 | `sensitiveViolence` / `SENSITIVE_VIOLENCE` | 37 | Dart 编辑自查词库·暴力血腥类（自用提示，不做平台判定）。分类名 `暴力血腥`，共 37 词。 |
 | `sensitiveSexual` / `SENSITIVE_SEXUAL` | 33 | Dart 编辑自查词库·色情低俗类。分类名 `色情低俗`，共 33 词。 |
 | `sensitiveAbuse` / `SENSITIVE_ABUSE` | 27 | Dart 编辑自查词库·脏话辱骂类。分类名 `脏话辱骂`，共 27 词。 |
@@ -39,6 +39,7 @@
 | `aiAdverbs` / `AI_ADVERBS` | 12 | AI 腔副词（微微/轻轻/淡淡…）：统计层 AI 味指标之一。双端逐值一致（各 12 词）。 |
 | `sentenceConnectors` / `SENTENCE_CONNECTORS` | 10 | 句首连接词率：统计层 AI 味指标之一（然而/但是/因此…）。双端逐值一致（各 10 词）。 |
 | `bodyReactionWords` / `BODY_REACTION_WORDS` | 19 | 身体反应词表：句式指纹 body_reaction_density 项（发烫/发凉/汗毛…）。双端逐值一致（各 19 词）。 |
+| `instructionMarks` / `INSTRUCTION_MARKS` | 24 | 「教唆/推广」语境标记：只有伴随这些词，**叙事成立分类**（narrativeOkCategories）的红线才由「提示」升级为「否决」（教唆类词当情节元素写是正常的，「妹妹欠下高利贷」不是红线，「高利贷放款教程」才是）。2026-10-03 收编：原 Dart `_instructionMark`(21 词) 与 Python `INSTRUCTION_MARKERS`(24 词) 各写一份，Python 多「代办/起办/群」。已按 scripts/ab_rules_parity.py 在 134 份真实成书上测**否决条数增量**（不是词表命中——「价格/加入/群」在正文里遍地皆是，命中数无意义）：两表同为 5 条否决、增量 +0，即收编不改变任何判定，故取 Python 全集。双端以 any() 语义使用，重复词条不产生重复计数。 |
 
 ## 二、阈值
 
@@ -64,8 +65,7 @@
 | `clicheTables` | gateClichePhrases（19 条，短词偏多） | reviewClicheSentences（34 条，长句偏多） | 同质化指标公式与阈值两端一致（distinct 命中 ×1000/字 > 1.2），但词表内容不同：Dart 独有「从这一刻起/命运的车轮/像有什么东西醒」等短词，Python 独有「莫欺少年穷/三十年河东三十年河西/命运的车轮开始转动」等长句。**待产品裁决**：2026-10-03 已按 scripts/ab_rules_parity.py 在 123 份真实成书上 A/B：Dart 独有 4 词命中 1/123 份、Python 独有 19 词命中 1/123 份——实测影响面都很小，但两端**确有独有词且都在被使用**，属口径设计分歧（短词更宽 vs 长句更准）而非漏词。统一成一张表会同时改变两端分数与定点修触发率，仍需产品裁决，不宜由脚本单方面合并。 |
 | `complianceTables` | sensitiveViolence/Sexual/Abuse/Illegal/Ads（5 类 157 词，编辑自查） | redlinePolitics/Religion/MinorRisk/Gore/BrandCelebrity/IllegalDetail（6 类 137 词，番茄平台审核红线） | 两端作用域不同**且几乎不相交**（词级交集仅 17 / 合计 295，2026-10-01 实测），而 fanqie_review 的旧注释称「与 Dart 侧保持同步扩充」——该表述与事实不符，已改为如实描述。**不要合并成一张表**：合并会同时改变平台红线判定、编辑自查命中与 UI 分类展示（分类名是对外可见的），需产品先定「平台红线是否要覆盖色情/脏话、编辑自查是否要含时政/宗教」再动。 |
 | `driveWords` | _drive（44 词） | DRIVE_WORDS（45 词，多「一个亿」） | **同用途**（水段判定的「该段是否在推进」条件，Dart fillerStats ↔ Python filler_ratio）。2026-10-03 已按 scripts/ab_rules_parity.py 在 123 份真实成书上 A/B：Python 独有的「一个亿」**零命中**（0/123 份）→ 实测无影响，暂不收编。若将来成书里出现该词导致两端水段率分叉，再收编不迟。 |
-| `aiClicheWords` | aiClicheWords（21 词） | AI_CLICHE（18 词） | 同用途（AI 味密度 aiEchoPct ↔ AI_CLICHE 命中数）。Dart 是 Python 的超集（多 空气凝固/嘴角勾起/眼底闪过）。2026-10-03 已按 scripts/ab_rules_parity.py 在 123 份真实成书上 A/B：这 3 个 Dart 独有词**零命中**（0/123 份）→ 实测无影响，暂不收编。（注：本表尚未进 rules/quality_rules.json，仍是 Dart pipeline_qa.dart 的独立字面量 + Python generate_novel.AI_CLICHE；收编前需先定「是否把 AI 腔词表也纳入单一数据源」。） |
-| `instructionMarks` | _instructionMark（21 词） | INSTRUCTION_MARKERS（24 词：错别字「招摹」已修正为「招募」、重复的第二个「代办」已删除） | 同用途（教唆/推广语境标记，命中则情节类红线由「提示」升级为「否决」）。原 Python 侧「招摹」是错别字、永远匹配不到「招募」，且「代办」重复登记；2026-10-03 已按真实语料实测后修正（scripts/probe/probe_instruction_marker.py，174 份成书/样本：「招募」出现 2 次且均在 jsonl 大纲 goal 字段、修正前后否决升级条数差值 +0，即零新增否决面）。仍未统一的是词表长度：Dart 21 词无「代办/起办/群」，Python 多这 3 词（沿用历史 Python 口径，收编需真机 A/B）。另注：两侧均以 any() 语义使用，重复词条不产生重复计数。 |
+| `aiClicheWords` | aiClicheWords（21 词） | AI_CLICHE（18 词） | 同用途（AI 味密度 aiEchoPct ↔ AI_CLICHE 命中数）。Dart 是 Python 的超集（多 空气凝固/嘴角勾起/眼底闪过）。⚠ **本条实测数字已于 2026-10-03 更正**：原记「这 3 个 Dart 独有词零命中（0/123 份）→ 实测无影响，暂不收编」，重跑 scripts/ab_rules_parity.py（语料扩至 134 份）后实测为**命中 2/134 份（1.5%）**，各词各命中 2 次——即原结论「实测无影响」的前提已不成立，两端 AI 味数值在这 2 份成书上确实不同。仍**暂不收编**，但理由改为「收编会把 Dart 独有的 3 个词扩散到 Python、改变 AI 味密度与写作能力下限断言的分母，属口径变更需产品裁决」，而非「实测无影响」。（注：本表尚未进 rules/quality_rules.json，仍是 Dart pipeline_qa.dart 的独立字面量 + Python generate_novel.AI_CLICHE；收编前需先定「是否把 AI 腔词表也纳入单一数据源」。） |
 | `narrativeOkCategories` | _narrativeOkCategories（4 个分类键） | NARRATIVE_OK_CATEGORIES（3 个分类键，多「教唆与违法细节」） | 「叙事成立的分类」白名单（例：教唆类词出现在叙述里不算违规）。两侧键集合不同（Dart 有 违法违规/广告引流，Python 有 教唆与违法细节）→ 白名单豁免范围不一致。 |
 
 ## 四、改判据的正确流程

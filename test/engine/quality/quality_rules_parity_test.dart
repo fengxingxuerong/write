@@ -62,6 +62,7 @@ final Map<String, Object> _dartLists = <String, Object>{
   'sentenceConnectors': QualityRules.sentenceConnectors,
   'bodyReactionWords': QualityRules.bodyReactionWords,
   'conflictWords': QualityRules.conflictWords,
+  'instructionMarks': QualityRules.instructionMarks,
 };
 
 /// 阈值登记表：JSON `id` ⟷ Dart 常量（int / double 统一按 num 比）。

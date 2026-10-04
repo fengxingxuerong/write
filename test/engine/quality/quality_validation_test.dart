@@ -136,10 +136,121 @@ void main() {
       final File f = File('rules/quality_validation.json');
       final Map<String, dynamic> cfg =
           jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
-      expect(const QualityValidation.unknown.minConclusion,
-          cfg['minSamplesForConclusion']);
-      expect(const QualityValidation.unknown.minStrong,
-          cfg['minSamplesForStrongConclusion']);
+      // ⚠ 这里刻意用 const **局部变量**（而不是 const 前缀访问静态字段）。
+      // `const QualityValidation.unknown` 在 Dart 里不合法——const 只能修饰
+      // 构造调用，不能修饰字段访问。而 `const QualityValidation v =
+      // QualityValidation.unknown;` 才是真正的「可用于 const 上下文」探测：
+      // 若哪天有人去掉构造器的 const，这里会**编译失败**而不是静默退化。
+      //
+      // 2026-10-03 曾有人把本用例原本的 const 去掉（疑似为绕开某个 lint），
+      // 那等于悄悄撤掉了这道编译期守卫：测试照过，但常量性已丢。
+      const QualityValidation v = QualityValidation.unknown;
+      expect(v.minConclusion, cfg['minSamplesForConclusion']);
+      expect(v.minStrong, cfg['minSamplesForStrongConclusion']);
+    });
+
+    // 2026-10-03 补：以下三档状态的文案此前**零覆盖**（quality_validation.dart
+    // 第 118/128/130/132/149/150/152/155/157 行未执行）。文案是「效度声明」
+    // 的载体——写错会直接误导作者对自身结论的判断，故必须逐档钉住。
+    //
+    // ⚠ 关键区分：parse() **到不了** validated（源码明确「桌面端不判定
+    // validated，无从得知是否真跑过实验」），所以 validated 档只能用
+    // 构造器直接造。用例必须反映这个差异，不能为了「跑通 parse」去改
+    // parse 的判定逻辑——那等于为了让测试通过而改动产品语义。
+    group('三档状态的限定文案（此前零覆盖）', () {
+      QualityValidation make(QualityValidationStatus s, int ratings) =>
+          QualityValidation(
+            status: s,
+            ratings: ratings,
+            totalRows: ratings,
+          );
+
+      test('insufficient：样本不足，只能作方向性参考', () {
+        final QualityValidation v =
+            make(QualityValidationStatus.insufficient, 3);
+        expect(v.needsCaveat, isTrue,
+            reason: '样本不足同样必须披露限定，不能只对 none 披露');
+        expect(v.isValidated, isFalse);
+        expect(v.caveatLabel, contains('样本不足'));
+        expect(v.detail, contains('样本不足'));
+        expect(v.detail, contains('方向性参考'));
+        expect(v.detail, contains('3/3'), reason: '必须带上真实标注计数');
+        expect(v.detail, contains('10'), reason: '必须带上结论所需样本线');
+        expect(v.detail, contains('30'), reason: '必须带上建议样本量');
+      });
+
+      test('provisional：样本够但未跑实验，提示须重跑复核', () {
+        final QualityValidation v =
+            make(QualityValidationStatus.provisional, 12);
+        expect(v.needsCaveat, isFalse,
+            reason: '样本量已够，不必再强调「样本不足」');
+        expect(v.isValidated, isFalse,
+            reason: '样本够 ≠ 跑过实验，绝不能判为已验证');
+        expect(v.caveatLabel, contains('待复验'));
+        expect(v.detail, contains('重跑人评实验'));
+        expect(v.detail, contains('12/12'));
+      });
+
+      test('validated：唯一可称「已对齐」的档，且不需披露限定', () {
+        final QualityValidation v =
+            make(QualityValidationStatus.validated, 30);
+        expect(v.isValidated, isTrue);
+        expect(v.needsCaveat, isFalse);
+        expect(v.caveatLabel, contains('已与人评对齐'));
+        expect(v.detail, contains('已完成人评相关性实验'));
+        expect(v.detail, contains('report-'), reason: '须指明报告位置');
+      });
+
+      test('三档 detail 的措辞互不相同（防复制粘贴退化）', () {
+        final Set<String> details = <String>{
+          make(QualityValidationStatus.none, 0).detail,
+          make(QualityValidationStatus.insufficient, 3).detail,
+          make(QualityValidationStatus.provisional, 12).detail,
+          make(QualityValidationStatus.validated, 30).detail,
+        };
+        expect(details.length, 4,
+            reason: '四档 detail 出现重复，说明某档文案被写成了另一档——'
+                '作者会因此误判自己的结论');
+      });
+
+      test('caveatLabel 四档也互不相同', () {
+        final Set<String> labels = <String>{
+          make(QualityValidationStatus.none, 0).caveatLabel,
+          make(QualityValidationStatus.insufficient, 3).caveatLabel,
+          make(QualityValidationStatus.provisional, 12).caveatLabel,
+          make(QualityValidationStatus.validated, 30).caveatLabel,
+        };
+        expect(labels.length, 4);
+      });
+
+      test('parse 无论多少标注都不产出 validated', () {
+        // 钉住「桌面端不判定 validated」这条设计：它无从得知是否真跑过实验。
+        final QualityValidation v = QualityValidation.parse(
+          List<String>.filled(50, _row('x', 80)).join('\n'),
+        );
+        expect(v.ratings, 50);
+        expect(v.status, QualityValidationStatus.provisional,
+            reason: '样本再多也不该判 validated——没有报告就无法确认实验真跑过');
+        expect(v.isValidated, isFalse);
+      });
+
+      test('toString 含状态名与计数（调试用）', () {
+        expect(
+          make(QualityValidationStatus.insufficient, 4).toString(),
+          allOf(contains('insufficient'), contains('4/4')),
+        );
+      });
+    });
+
+    test('unknown 是编译期常量（可作 const 上下文）', () {
+      // 与上一条互为对照：上一条验证「值对得上」，这条验证「它还能是常量」。
+      // 两者是不同的失效模式——去掉 const 只破坏后者，而后者正是上面
+      // 那个改动悄悄破坏的东西。
+      const QualityValidation a = QualityValidation.unknown;
+      const QualityValidation b = QualityValidation.unknown;
+      expect(identical(a, b), isTrue,
+          reason: 'unknown 必须是编译期常量；失去常量性会让依赖它的 '
+              'const 上下文静默退化');
     });
   });
 }
