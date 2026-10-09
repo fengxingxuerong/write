@@ -165,7 +165,7 @@ class AppDatabase {
         // 递归拷贝旧 novels 内容到新目录。
         await for (final FileSystemEntity entity in legacyNovels.list()) {
           final String target =
-              '${newDir.path}${Platform.pathSeparator}${entity.uri.pathSegments.last}';
+              '${newDir.path}${Platform.pathSeparator}${_baseName(entity)}';
           if (entity is File) {
             await entity.copy(target);
           } else if (entity is Directory) {
@@ -192,7 +192,7 @@ class AppDatabase {
       await target.create(recursive: true);
     }
     await for (final FileSystemEntity entity in source.list()) {
-      final String name = entity.uri.pathSegments.last;
+      final String name = _baseName(entity);
       final String dest = '${target.path}${Platform.pathSeparator}$name';
       if (entity is File) {
         await entity.copy(dest);
@@ -200,6 +200,18 @@ class AppDatabase {
         await _copyDirectory(entity, Directory(dest));
       }
     }
+  }
+
+  /// 实体在其父目录中的名字。
+  ///
+  /// 2026-10-05 修复：此前用 `entity.uri.pathSegments.last` 取名，而
+  /// **目录 URI 带尾部斜杠**（`file:///a/b/`），其 `pathSegments.last` 是空串
+  /// ——于是子目录被「拍平」拷进目标根目录，同名文件会静默互相覆盖。
+  /// 用 `path` 的最后一段取名，文件与目录行为一致。
+  static String _baseName(FileSystemEntity entity) {
+    final String path = entity.path;
+    final int idx = path.lastIndexOf(Platform.pathSeparator);
+    return idx < 0 ? path : path.substring(idx + 1);
   }
 
   /// 测试专用：使用指定目录创建实例（不碰全局单例、不依赖 path_provider）。
