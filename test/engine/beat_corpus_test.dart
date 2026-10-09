@@ -116,4 +116,47 @@ void main() {
       expect(corpus.groupOf('???'), same(corpus.development));
     });
   });
+
+  group('pickForStage 阶段加权取样', () {
+    /// 该阶段候选组的模板并集。
+    Set<String> allowedFor(String stage) {
+      final Map<String, int> weights = BeatCorpus.groupsForStage(stage);
+      return <String>{
+        for (final String group in weights.keys) ...corpus.groupOf(group),
+      };
+    }
+
+    test('各阶段取样都落在该阶段的候选池内（不会串阶段）', () {
+      final Set<String> chengPools = allowedFor('承');
+      final Set<String> zhuanPools = allowedFor('转');
+      for (final String stage in <String>['起', '承', '转', '合', '未知阶段']) {
+        final Set<String> allowed = allowedFor(stage);
+        for (int seed = 0; seed < 60; seed++) {
+          final String picked = corpus.pickForStage(stage, SeededRandom(seed: seed));
+          expect(allowed, contains(picked),
+              reason: '阶段「$stage」种子 $seed 取到了候选池外的模板');
+        }
+      }
+      // 转阶段不应取到开篇句（阶段映射确实不同，而不是恒同一池）。
+      expect(chengPools.intersection(zhuanPools), isNot(equals(chengPools)));
+    });
+
+    test('同种子可复现（重生成/调试可回放）', () {
+      for (final String stage in <String>['起', '承', '转', '合']) {
+        expect(
+          corpus.pickForStage(stage, SeededRandom(seed: 99)),
+          corpus.pickForStage(stage, SeededRandom(seed: 99)),
+        );
+      }
+    });
+
+    test('大批量取样不抛异常（权重和为正、无空池）', () {
+      for (final String stage in <String>['起', '承', '转', '合']) {
+        for (int seed = 0; seed < 300; seed++) {
+          expect(corpus.pickForStage(stage, SeededRandom(seed: seed)),
+              isNotEmpty);
+        }
+      }
+    });
+  });
 }

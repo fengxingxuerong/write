@@ -25,6 +25,25 @@ def _test_text() -> str:
     return TEST.read_text(encoding="utf-8")
 
 
+def _upload_test_files():
+    """所有调用 uploadCrashLog 的测试文件（2026-10-05 扩展）。
+
+    原来只看硬编码的 crash_reporter_test.dart 一个文件——假栈（HttpOverrides
+    注入假 HttpClient）测试出现后，上传主体用例可能拆到别的文件；守卫若不跟着
+    扫描，就等于给「把假绿挪个文件」开了后门。范围扩到全 test/ 树后，
+    任何调用 uploadCrashLog 的文件都在判据之内。
+    """
+    files = []
+    for path in sorted((ROOT / "test").rglob("*.dart")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if "uploadCrashLog(" in text:
+            files.append(path)
+    return files
+
+
 def _test_names(text: str):
     """取出所有用例名（只取名字，不切分正文）。
 
@@ -136,22 +155,30 @@ class NoFakeGreenCrashUploadTest(unittest.TestCase):
         正确写法二选一：
           - 状态码判定由 crashUploadFailureFor 的纯函数用例直接覆盖；
           - 名字里明确注明测不到（如「（测不到 500 分支）」）。
-        """
-        t = _test_text()
-        # 守卫只对「传输层」文件生效：纯函数测试（如「边界：199 / 300
-        # 不算成功」）名字里带状态码完全合法——它不经过网络，也不受
-        # HTTPS-only 约束。这是**文件级**判断，不是用例级，因为切分
-        # 正文不可靠（见 _test_names 的 docstring）。
-        if "uploadCrashLog(" not in t:
-            self.skipTest("该文件不测传输层，用例名判据不适用")
-        if "uploadUrl: 'http://" not in t:
-            self.skipTest("该文件未用 http:// 调 uploadCrashLog")
 
+        范围（2026-10-05 扩展）：扫描**所有**调用 uploadCrashLog 的测试文件，
+        而不是只有 crash_reporter_test.dart——否则把用例挪个文件就绕过了守卫。
+        每个文件仍按原有 skip 规则处理：文件里没有把 http:// 传给
+        uploadCrashLog 时，「名字声称到不了的状态码分支」这一前提不成立
+        （纯函数文件、假栈 https 文件都属此类），跳过。
+        """
+        files = _upload_test_files()
+        if not files:
+            self.skipTest("没有测试文件调用 uploadCrashLog")
         offenders = []
-        for name in _test_names(t):
-            claim = _claims_unreachable_branch(name)
-            if claim:
-                offenders.append(f"{name} —— {claim}")
+        checked = 0
+        for path in files:
+            t = path.read_text(encoding="utf-8")
+            if "uploadUrl: 'http://" not in t:
+                continue
+            checked += 1
+            rel = path.relative_to(ROOT).as_posix()
+            for name in _test_names(t):
+                claim = _claims_unreachable_branch(name)
+                if claim:
+                    offenders.append(f"{rel}: {name} —— {claim}")
+        if checked == 0:
+            self.skipTest("没有测试用 http:// 调 uploadCrashLog")
         self.assertEqual(
             [], offenders,
             "以下用例名声称测了 HTTPS-only 设计下到不了的分支（假绿形态）："

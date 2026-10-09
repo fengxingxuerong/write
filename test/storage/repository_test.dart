@@ -7,6 +7,7 @@ import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/novel.dart';
+import 'package:novel_writer/models/style_ref.dart';
 import 'package:novel_writer/storage/app_database.dart';
 import 'package:novel_writer/storage/chapter_repository.dart';
 import 'package:novel_writer/storage/novel_repository.dart';
@@ -138,6 +139,63 @@ void main() {
 
     test('readIndex 文件缺失时返回空列表', () async {
       expect(await db.readIndex(), isEmpty);
+    });
+
+    test('writeNovel 失败：抛 StorageException 且不残留 .tmp', () async {
+      // 用「同名目录占住目标路径」制造跨平台一致的 rename 失败。
+      final novel = Novel(
+        id: 'n-block',
+        title: 'T',
+        genre: 'xuanhuan',
+        tone: '热血',
+        targetWordsPerChapter: 2000,
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 1),
+        chapters: const [],
+        characters: const [],
+        worldSettings: const [],
+      );
+      final blocker = Directory('${db.directory.path}/n-block.json');
+      await blocker.create(recursive: true);
+      try {
+        await expectLater(
+          db.writeNovel(novel),
+          throwsA(isA<StorageException>()),
+        );
+        final tmpFiles = await db.directory
+            .list()
+            .where((e) => e.path.endsWith('.tmp'))
+            .toList();
+        expect(tmpFiles, isEmpty,
+            reason: '失败路径也必须清理临时文件，否则残留 .tmp 会卡住后续写入');
+      } finally {
+        await blocker.delete(recursive: true);
+      }
+    });
+
+    test('writeIndex 失败：抛 StorageException 且不残留 .tmp', () async {
+      final blocker = Directory('${db.directory.path}/index.json');
+      await blocker.create(recursive: true);
+      try {
+        await expectLater(
+          db.writeIndex(<NovelSummary>[
+            NovelSummary(
+              id: 'x',
+              title: 'X',
+              genre: 'dushi',
+              updatedAt: DateTime(2026, 1, 1),
+            ),
+          ]),
+          throwsA(isA<StorageException>()),
+        );
+        final tmpFiles = await db.directory
+            .list()
+            .where((e) => e.path.endsWith('.tmp'))
+            .toList();
+        expect(tmpFiles, isEmpty, reason: '索引写失败同样不得残留 .tmp');
+      } finally {
+        await blocker.delete(recursive: true);
+      }
     });
   });
 
@@ -424,6 +482,34 @@ void main() {
       await settingRepo.deleteWorldSetting(novelId, w.id);
       final after = await novelRepo.getNovel(novelId);
       expect(after.worldSettings, isEmpty);
+    });
+
+    test('setStyleRef / clearStyleRef：文风参考随项目持久化', () async {
+      final StyleRef ref = StyleRef(
+        source: '参考文.txt',
+        fingerprint: <String, double>{
+          'source': 0,
+          'words': 1200,
+          'sent_len_mean': 24.5,
+          'dialogue_ratio': 0.31,
+        },
+        savedAt: DateTime.utc(2026, 10, 5),
+      );
+      await settingRepo.setStyleRef(novelId, ref);
+      final withRef = await novelRepo.getNovel(novelId);
+      expect(withRef.styleRef, isNotNull);
+      expect(withRef.styleRef!.source, '参考文.txt');
+      expect(withRef.styleRef!.words, 1200,
+          reason: '指纹数值必须落盘，否则重启后注入悄悄消失');
+
+      // 重读（模拟重启）仍在。
+      final reloaded = await novelRepo.getNovel(novelId);
+      expect(reloaded.styleRef, isNotNull);
+
+      await settingRepo.clearStyleRef(novelId);
+      final cleared = await novelRepo.getNovel(novelId);
+      expect(cleared.styleRef, isNull,
+          reason: '清除后必须回到「不注入指纹」的旧行为');
     });
   });
 

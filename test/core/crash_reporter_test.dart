@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:novel_writer/core/crash_reporter.dart';
 
+import '../support/fake_http.dart';
+
 void main() {
   late Directory tempDir;
   late Directory supportDir;
@@ -398,4 +400,33 @@ path=C:\\Users\\Alice\\secret-project
       expect(e.toString(), contains('500'));
     });
   });
+
+  // 2026-10-05：上传主体（2xx/5xx/连接失败）的假栈用例移入
+  // crash_reporter_upload_test.dart（只用 https 配置）；本文件保留
+  // 「HTTP 地址被拒绝」的安全用例与纯函数判定用例。
+  group('uploadCrashLog 假栈：HTTPS-only 约束', () {
+    test('HTTP 地址一个请求都不发（假栈同样守住 HTTPS-only）', () async {
+      File('${crashDir.path}/crash-http2.log').writeAsStringSync('boom');
+      final FakeHttpClient client = FakeHttpClient(
+        respond: (FakeHttpRequest request, Uri url) async => FakeHttpResponse(),
+      );
+      await expectLater(
+        withFakeHttpClient(
+          client,
+          () => uploadCrashLog(
+            crashDir: crashDir,
+            fileName: 'crash-http2.log',
+            config: const CrashReporterConfig(
+              uploadUrl: 'http://diagnostics.example.com/api/crash',
+            ),
+            machineId: 'm',
+          ),
+        ),
+        throwsA(isA<CrashReportException>()),
+      );
+      expect(client.requestUrls, isEmpty);
+    });
+  });
+
+
 }
