@@ -7,6 +7,8 @@
 /// 本层是**纯数据 + 结论派生**（blockers/pass/fixPrompt 等 getter 只读自身
 /// 字段，不触碰 checker 的任何私有成员），与 `scripts/fanqie_review.py` 的
 /// 结论结构同口径。
+library;
+
 import 'package:novel_writer/engine/quality/quality_rules.g.dart';
 
 /// 定点修字数下限（与 Python 侧 `fanqie_review.FIX_MIN_RATIO` 同值同源）。
