@@ -764,6 +764,60 @@ def concretize_world(outline, genre):
     return outline
 
 
+def render_eval_card(title, genre, reviews, chapters):
+    """渲染番茄过审评估卡正文（纯函数：不读文件、不发网络、无副作用）。
+
+    从 main() Phase 5 内联块提取，使其获得直接单测覆盖。输出结构：
+    1) 书名标题行；
+    2) 成书残缺告警（若有）——**排在均分之前**，避免内容半残的章节
+       （标题与章纲对不上）被正常均分掩盖；
+    3) 题材 / 章节数 / 评审均分 / 阻断级硬伤章数汇总；
+    4) 逐章明细：评分、字数、阻断项、问题项、红线（veto）。
+
+    参数：
+        title:    书名（可为空字符串）。
+        genre:    题材（写入汇总行）。
+        reviews:  review_chapter() 结果列表，每项含 idx/score/verdict/
+                  words/blockers/problems/redline 等键（缺失键一律安全回退）。
+        chapters: state["chapters"]，用于按 scenes_written/scenes_planned
+                  判定「成书残缺」章节（端点全链失败导致场景丢失的章节）。
+    返回：评估卡完整文本（以换行结尾，直接写入 .评估卡.txt）。
+    """
+    n_block = sum(1 for r in reviews if r.get("blockers"))
+    # 成书残缺汇总（2026-09-30 可观测性）：端点全链失败导致场景丢失的章，
+    # 必须在评估卡顶部显式列出——这类章的标题与章纲对不上、内容半残，
+    # 却能拿正常评分伪装成好章。放在最前面，不允许被均分淹没。
+    lost_chapters = [c for c in chapters
+                     if int(c.get("scenes_written", c.get("scenes", 0)) or 0)
+                     < int(c.get("scenes_planned", c.get("scenes", 0)) or 0)]
+    out = []
+    out.append(f"《{title}》 番茄过审评估卡\n")
+    # 残缺告警排在**均分之前**：残缺章的评分本身没有意义
+    # （内容半残、标题与章纲对不上），让读者先看均分会以为这本书质量正常。
+    if lost_chapters:
+        out.append(f"⛔ 成书残缺告警：{len(lost_chapters)} 章有场景未产出正文"
+                   f"（端点全链失败），这些章内容不完整、标题与章纲可能对不上，"
+                   f"其评分不代表真实质量，须重跑或人工补写：\n")
+        for c in lost_chapters:
+            planned = int(c.get("scenes_planned", c.get("scenes", 0)) or 0)
+            written = int(c.get("scenes_written", planned) or 0)
+            out.append(f"    第 {c.get('idx')} 章：{written}/{planned} 场景"
+                       f"（{c.get('title', '')}）\n")
+        out.append("\n")
+    out.append(f"题材：{genre}｜章节：{len(reviews)}｜评审均分："
+               f"{round(sum(r['score'] for r in reviews) / max(len(reviews), 1), 1)}\n")
+    out.append(f"阻断级硬伤章数：{n_block}（有阻断项即不给「可投」，先按下列清单定点修）\n\n")
+    for r in reviews:
+        out.append(f"第 {r['idx']} 章  {r.get('score', '-')} 分  {r.get('verdict', '')}｜{r.get('words', 0)} 字\n")
+        if r.get("blockers"):
+            out.append(f"    ⛔ 阻断项：{'、'.join(r['blockers'])}\n")
+        for pr in r.get("problems") or []:
+            out.append(f"    [{pr['action']}] {pr['type']}：{pr['msg']}\n")
+        for h in (r.get("redline") or {}).get("veto") or []:
+            out.append(f"    ☠ 红线（{h['category']}）「{h['word']}」 上下文：{h['context']}\n")
+    return "".join(out)
+
+
 def main():
     p = argparse.ArgumentParser(description="墨匠多模型协作流水线")
     p.add_argument("--total-words", type=int, default=100000, help="目标总字数")
@@ -1713,38 +1767,10 @@ def main():
                                       args.genre, protagonist, review_world_terms)
                        for i, c in enumerate(state["chapters"])]
             print(f"  [评估卡] reviews 为空，按正文现算 {len(reviews)} 章")
-        n_block = sum(1 for r in reviews if r.get("blockers"))
-        # 成书残缺汇总（2026-09-30 可观测性）：端点全链失败导致场景丢失的章，
-        # 必须在评估卡顶部显式列出——这类章的标题与章纲对不上、内容半残，
-        # 却能拿正常评分伪装成好章。放在最前面，不允许被均分淹没。
-        lost_chapters = [c for c in state["chapters"]
-                         if int(c.get("scenes_written", c.get("scenes", 0)) or 0)
-                         < int(c.get("scenes_planned", c.get("scenes", 0)) or 0)]
+        card_text = render_eval_card(outline.get('title', ''), args.genre,
+                                     reviews, state["chapters"])
         with open(card, "w", encoding="utf-8") as f:
-            f.write(f"《{outline.get('title', '')}》 番茄过审评估卡\n")
-            # 残缺告警排在**均分之前**：残缺章的评分本身没有意义
-            # （内容半残、标题与章纲对不上），让读者先看均分会以为这本书质量正常。
-            if lost_chapters:
-                f.write(f"⛔ 成书残缺告警：{len(lost_chapters)} 章有场景未产出正文"
-                        f"（端点全链失败），这些章内容不完整、标题与章纲可能对不上，"
-                        f"其评分不代表真实质量，须重跑或人工补写：\n")
-                for c in lost_chapters:
-                    planned = int(c.get("scenes_planned", c.get("scenes", 0)) or 0)
-                    written = int(c.get("scenes_written", planned) or 0)
-                    f.write(f"    第 {c.get('idx')} 章：{written}/{planned} 场景"
-                            f"（{c.get('title', '')}）\n")
-                f.write("\n")
-            f.write(f"题材：{args.genre}｜章节：{len(reviews)}｜评审均分："
-                    f"{round(sum(r['score'] for r in reviews) / max(len(reviews), 1), 1)}\n")
-            f.write(f"阻断级硬伤章数：{n_block}（有阻断项即不给「可投」，先按下列清单定点修）\n\n")
-            for r in reviews:
-                f.write(f"第 {r['idx']} 章  {r.get('score', '-')} 分  {r.get('verdict', '')}｜{r.get('words', 0)} 字\n")
-                if r.get("blockers"):
-                    f.write(f"    ⛔ 阻断项：{'、'.join(r['blockers'])}\n")
-                for pr in r.get("problems") or []:
-                    f.write(f"    [{pr['action']}] {pr['type']}：{pr['msg']}\n")
-                for h in (r.get("redline") or {}).get("veto") or []:
-                    f.write(f"    ☠ 红线（{h['category']}）「{h['word']}」 上下文：{h['context']}\n")
+            f.write(card_text)
         print(f"[OK] 评估卡：{card}")
 
         first3 = "\n\n".join(c.get("content", "")[:900] for c in state["chapters"][:3])
