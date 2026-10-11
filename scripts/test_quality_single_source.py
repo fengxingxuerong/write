@@ -103,10 +103,15 @@ class InstructionMarkVerdictTest(unittest.TestCase):
     """
 
     def test_two_ends_are_now_identical(self):
-        """收编后两端必须同源——若仍报「建议收编」，说明工具在拿过期副本比。"""
-        corpus = ab.load_corpus()
-        self.assertTrue(corpus, "真实语料为空（data/ 与人评样本章缺失），无法验证")
-        r = ab.analyze(corpus)["instructionMarks"]
+        """收编后两端必须同源——若仍报「建议收编」，说明工具在拿过期副本比。
+
+        本断言**不依赖真实语料**：py_only / dart_only 是两端词表直接做差集得到的，
+        与语料无关。早期实现先断言语料非空，等于把「不需要语料」的检查错绑成
+        「需要语料」——CI 干净检出（data/ 已 gitignore）下必然红，而本地有 data/
+        所以一直没暴露。改为传空语料，让它在任何环境都能跑，仍能抓到
+        「工具拿过期副本比」这类回归。
+        """
+        r = ab.analyze([])["instructionMarks"]
         self.assertEqual([], r["py_only"],
                          "两端仍有 Python 独有词——若已收编，说明 ab_rules_parity.py "
                          "里的 DART_INSTRUCTION_MARK 是过期副本（应取 gen.INSTRUCTION_MARKS）")
@@ -118,8 +123,16 @@ class InstructionMarkVerdictTest(unittest.TestCase):
 
         这是「收编没改判定」的实证：若收编时动了词表（如删掉「招募」），
         教唆类红线将不再升级为否决，本断言立刻红。
+
+        语料依赖：本断言的有效性完全来自**真实成书语料**（否决条数是跑遍语料
+        数出来的，不是纯函数值）。`data/` 已 gitignore，CI 干净检出下语料为空，
+        此时算出的 0 条否决只是「没有样本」，不是「收编改了判定」——故按仓库
+        既有约定（test_narrative_ok_scope.py / test_count_words.py）SkipTest，
+        既不让缺语料伪装成断言失败，也不让它伪装成断言通过。
         """
         corpus = ab.load_corpus()
+        if not corpus:
+            raise unittest.SkipTest("真实语料为空（data/ 与人评样本章缺失）")
         r = ab.analyze(corpus)["instructionMarks"]
         self.assertEqual(5, r["veto_with_dart_table"],
                          "否决条数与收编前基线（5）不符——收编改了判定，"
