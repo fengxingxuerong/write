@@ -230,6 +230,21 @@ generate()
 
 `lib/ai_pipeline/` 是应用内「多角色协作」流水线（与 `scripts/novel_pipeline.py` 双端同步）：
 
+> **Python 侧模块拆分（2026-10-10）**：`scripts/novel_pipeline.py` 已按职责拆为兄弟模块
+> `pipeline_llm.py`（LLM 调用 / 健康池）、`pipeline_prompts.py`（提示词）、
+> `pipeline_quality.py`（纯规则质检 / 采纳）、`pipeline_state.py`（续传状态读取）、
+> `foreshadow.py`（伏笔台账），主文件只留触网编排，用 `from pipeline_x import (...)`
+> 转发导入保持 `import novel_pipeline as np` 契约不变（对外符号面由
+> `scripts/test_pipeline_surface.py` 锁死，漏转发即红）。同类拆分也应用于共享函数库
+> `scripts/generate_novel.py`：LLM 调用 + JSON 解析 → `gen_llm.py`，质检指标 / 文风指纹 /
+> 文本卫生 → `gen_quality.py`，同样以转发导入保持 `from generate_novel import ...` 契约不变。
+> 评审器 `scripts/fanqie_review.py` 同法拆出 `fanqie_text.py`（文本基础）/ `fanqie_metrics.py`
+> （完读率·同质化指标）/ `fanqie_world.py`（世界观专名）；红线合规与 `INSTRUCTION_MARKERS`
+> 因有源码级测试钉死而保留在主文件。语义检测器 `scripts/qa_semantic_check.py` 则按四个
+> 关卡拆为 `qa_pov.py`（人称）/ `qa_names.py`（称谓）/ `qa_content.py`（内容塌陷）/
+> `qa_relation.py`（关系张冠李戴），共享文本基础 `qa_text.py`。详见 `scripts/README.md`。
+
+
 - **五角色**：规划官（Planner）/ 正文写手（Writer）/ 去AI味编辑（Editor）/ 标题官（Titler）/ 一致性审校（Verifier）
 - **断点续传**：每章生成后原子落盘，中断可从下一章继续
 - **幂等导入**：`NovelImporter.importTask` 已导入的任务返回既有 id，不重复建书

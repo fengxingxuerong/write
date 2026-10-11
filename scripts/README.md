@@ -6,15 +6,39 @@
 
 | 脚本 | 用途 |
 |---|---|
-| `generate_novel.py` | 单模型长篇小说批量生成（多 pass + 断点续传 + 质检 + 导出） |
-| `novel_pipeline.py` | **多模型协作流水线**：规划/正文/润色/标题/审校五角色分工生成 |
-| `fanqie_review.py` | **番茄过审评审器**（本地零成本）：合规红线 / 首屏 / 对白占比 / 水段率 / 套句 / 主角漂移，输出分数与「定点修」提示 |
+| `generate_novel.py` | 单模型长篇小说批量生成（多 pass + 断点续传 + 质检 + 导出）。已拆出下方兄弟模块，本文件保留生成编排 + 共享函数库 |
+| `gen_llm.py` | generate_novel 的通用流式 LLM 调用 + JSON 解析层（2026-10-10 拆出） |
+| `gen_quality.py` | generate_novel 的质检指标 / 文风指纹 / 文本卫生（爽点/异动/侧反密度、断供、AI 味深度、钩子判定）（2026-10-10 拆出） |
+| `novel_pipeline.py` | **多模型协作流水线主程序**：多角色分工生成（规划/正文/润色/标题/审校/终审…）+ 断点续传 + 终审三级权力。已拆出下方兄弟模块，本文件保留**触网编排** |
+| `pipeline_llm.py` | novel_pipeline 的 LLM 调用层：角色槽位配置 / 健康池 / 故障转移（2026-10-03 拆出） |
+| `pipeline_prompts.py` | novel_pipeline 的各角色提示词（纯字符串构建，无 I/O、无网络）（2026-10-10 拆出） |
+| `pipeline_quality.py` | novel_pipeline 的纯规则质检 / 采纳闸 / 文本卫生（无网络、无 LLM 调用）（2026-10-10 拆出） |
+| `pipeline_state.py` | novel_pipeline 的断点续传状态读取（读者反馈 / 评审 / 打回补丁 / 跨章状态）（2026-10-10 拆出） |
+| `foreshadow.py` | 伏笔台账 / 跨章状态清单（2026-10-03 拆出） |
+| `fanqie_review.py` | **番茄过审评审器**（本地零成本）：合规红线 / 评审门 / 定点修 prompt。已拆出下方兄弟模块，本文件保留红线合规 + review_chapter/review_book/fix_prompt |
+| `fanqie_text.py` | fanqie_review 的文本基础工具：字数 / 句 / 段 / 对白占比 / 章切分（2026-10-10 拆出） |
+| `fanqie_metrics.py` | fanqie_review 的完读率 / 同质化 / 结构指标：首屏、节奏、水段、套句、漂移、重复（2026-10-10 拆出） |
+| `fanqie_world.py` | fanqie_review 的世界观专名一致性：抽专名、按专名判题材落地（2026-10-10 拆出） |
+| `qa_semantic_check.py` | **投前语义硬伤检测器**（人称 / 称谓 / 题材内容 / 关系张冠李戴，关卡 1–4 纯规则零 LLM 成本）。已拆出下方兄弟模块，本文件保留 load_chapters / print_report / main |
+| `qa_text.py` | qa_semantic_check 的文本基础：对白剥离（多关卡复用）（2026-10-10 拆出） |
+| `qa_pov.py` | qa_semantic_check 关卡1：人称漂移 + 叙述块切分（2026-10-10 拆出） |
+| `qa_names.py` | qa_semantic_check 关卡2：主角称谓漂移 + 候选名发现/聚类（2026-10-10 拆出） |
+| `qa_content.py` | qa_semantic_check 关卡3：题材内容塌陷（标题-内容脱节）（2026-10-10 拆出） |
+| `qa_relation.py` | qa_semantic_check 关卡4：人物关系张冠李戴（2026-10-10 拆出） |
 | `fanqie_prompts.py` | 番茄向写作准则与 prompt 库（与 `fanqie_review.py` 指标一一对应） |
 | `demo_novel_gen.py` | 离线模板引擎演示（纯语料拼接，无 API，用于对比） |
 | `rules_codegen.py` | **质检规则单一数据源**：读 `rules/quality_rules.json` 生成 Dart/Python 双端常量与 `docs/quality-rules-current.md`；`--check` 为 CI 门禁 |
 | `human_eval_correlation.py` | **人评相关性实验**：Spearman + 置换检验，回答「指标涨了人评涨了吗」（见 `docs/human-eval-workflow.md`） |
 | `test_secret_hygiene.py` | 密钥卫生回归：`.env.local` 必须被忽略、入库文件不得出现真 Key |
 | `watchdog_pipeline.ps1` | 守护脚本：检测 pipeline 进程退出自动续传重启（长任务防中断） |
+
+> **novel_pipeline 模块拆分约定**：`novel_pipeline.py` 已按职责拆为上述兄弟模块，
+> 用 `from pipeline_x import (...)` **转发导入**，使 `import novel_pipeline as np` /
+> `from novel_pipeline import Y` 两种用法零改动（仓库内 16 个测试/探针脚本依赖此契约）。
+> 触网编排函数（`main` / `fact_check_stage` / `plan_scenes_or_fallback` …）**必须留在
+> `novel_pipeline.py`**——测试用 `patch.object(novel_pipeline, "llm_call"/"call_chain"/…)`
+> 打桩，搬到子模块会让补丁落空、静默发真网络请求。对外符号面由
+> `scripts/test_pipeline_surface.py` 锁死，漏转发即红。
 
 ---
 

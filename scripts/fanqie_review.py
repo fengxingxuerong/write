@@ -26,13 +26,13 @@ try:
 except Exception:
     pass
 
-CHAPTER_RE = re.compile(r"^第\s*(\d+)\s*章")
 
 # 词表/阈值单一数据源（rules/quality_rules.json 的生成物，与 Dart QualityRules 同源）。
 # 两种入口都要能导入：`python -m scripts.fanqie_review`（包内，走相对导入）与
 # `python scripts/fanqie_review.py` / 被 generate_novel 同目录导入（走平铺导入）。
-# 下方 TRIAD_END_WORDS / TRIAD_END_WINDOW / FIX_MIN_RATIO 即由该生成物提供——
-# 本文件不再保存字面量（改词表请改 JSON 后跑 scripts/rules_codegen.py）。
+# 下方 FIX_MIN_RATIO / REDLINE_* / INSTRUCTION_MARKS 即由该生成物提供——本文件不再保存
+# 字面量（改词表请改 JSON 后跑 scripts/rules_codegen.py）；TRIAD_END_* 等指标词表随拆分
+# 迁到 fanqie_metrics（由该模块从生成物导入）。
 # TRIAD_HOOK_ONLY 本模块不用（由 generate_novel 直接从生成物导入），故不在此转发。
 try:  # pragma: no cover - 分支取决于调用方式
     from .quality_rules_generated import (
@@ -43,16 +43,6 @@ try:  # pragma: no cover - 分支取决于调用方式
         REDLINE_MINOR_RISK,
         REDLINE_POLITICS,
         REDLINE_RELIGION,
-        REVIEW_CLICHE_SENTENCES,
-        TRIAD_END_WINDOW,
-        TRIAD_END_WORDS,
-            PROMPT_LEAK,
-        META_TALK,
-        MODERN_MARKERS,
-        ANCIENT_GENRES,
-        INTRA_REPEAT_MIN_BLOCK,
-        INTRA_REPEAT_GRAM,
-        CONFLICT_WORDS,
         INSTRUCTION_MARKS,
 )
 except ImportError:  # pragma: no cover - 平铺导入（脚本直跑/同目录 import）
@@ -67,18 +57,40 @@ except ImportError:  # pragma: no cover - 平铺导入（脚本直跑/同目录 
         REDLINE_MINOR_RISK,
         REDLINE_POLITICS,
         REDLINE_RELIGION,
-        REVIEW_CLICHE_SENTENCES,
-        TRIAD_END_WINDOW,
-        TRIAD_END_WORDS,
-            PROMPT_LEAK,
-        META_TALK,
-        MODERN_MARKERS,
-        ANCIENT_GENRES,
-        INTRA_REPEAT_MIN_BLOCK,
-        INTRA_REPEAT_GRAM,
-        CONFLICT_WORDS,
         INSTRUCTION_MARKS,
 )
+
+# ============================================================
+# 兄弟模块转发（2026-10-10 从本文件拆出）
+# ============================================================
+# 转发导入而非直接定义，是为了让调用点（本文件 review_chapter/fix_prompt/main
+# 及仓库内各脚本/测试）零改动——拆分只降低维护成本，不改对外契约。
+# 先补 sys.path 使 `python -m scripts.fanqie_review` 与直跑两种入口都能解析平铺同级模块。
+if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fanqie_text import (  # noqa: E402,F401
+    CHAPTER_RE, SENT_SPLIT, CHAR_RE, QUOTE_RE,
+    count_words, sentences, paragraphs, dialogue_ratio,
+    split_chapters,
+)
+
+from fanqie_metrics import (  # noqa: E402,F401
+    CLICHE_SENTENCES, TRIAD_END_WORDS, DRIVE_WORDS, NAME_PAT,
+    CONFLICT_WORDS, PROMPT_LEAK, META_TALK, MODERN_MARKERS,
+    ANCIENT_GENRES, INTRA_REPEAT_MIN_BLOCK, INTRA_REPEAT_GRAM, BLOCKING_MIN_WORDS,
+    SURNAMES, looks_like_name, ending_triad, ending_ev_fragment,
+    first_screen_check, pacing_stats, filler_ratio, cliche_overlap,
+    repeat_with_prev, agency_check, self_repeat_ratio, name_drift,
+    blocking_reasons, prompt_leak, meta_talk, genre_drift,
+    intra_repeat, dedup_intra_repeat, _dup_spans, _long_paras,
+    _para_dup,
+)
+
+from fanqie_world import (  # noqa: E402,F401
+    _SEP_CHARS, _TERM_OK, _GENERIC_WORLD, extract_world_terms,
+    _term_hit, world_consistency,
+)
+
 
 # ============================================================
 # 1) 红线词表（番茄平台审核红线，6 类）
@@ -112,7 +124,6 @@ REDLINE_WHITELIST = {
 #    注意：Dart 闸门用的是**另一张**表 gateClichePhrases（同公式不同词表，
 #    两端差异记录于 docs/quality-rules-current.md 第三节 asymmetries.clicheTables）。
 # ============================================================
-CLICHE_SENTENCES = REVIEW_CLICHE_SENTENCES
 
 # ============================================================
 # 3) 章末三件套收尾（FANQIE 规则 20 / 规则 10 / scene_prompt 双端承诺的检测器）
@@ -124,89 +135,38 @@ CLICHE_SENTENCES = REVIEW_CLICHE_SENTENCES
 # 收束区域判定词表（TRIAD_END_WORDS）：值来自 rules/quality_rules.json -> 生成物。
 # 长词在前（像有什么东西醒了 > 醒了过来 > 醒了、亮了起来 > 亮了）。
 # 「亮」字族带天字排除（「天亮了」是时间过渡，不是发光物件收束）。
-TRIAD_END_WORDS = list(TRIAD_END_WORDS)  # 本地可变副本（值来自生成物）
 # HOOK_WORDS 中属于三件套性质的成员：作为**唯一**尾部钩子信号时不采信（frozenset，生成物）。
 # 收束区域窗口（校准：tool/probe_ending_and_simile.py 三窗口 × 词表敏感性——
 # 末句 6.9% / 末60字 11.2% / 末200字 25.9%；取末 60 字，200 字窗会把
 # 「尾部另有真钩子、三件套只出现在中段」的章误伤）。
 
 
-def ending_triad(text):
-    """章末三件套收尾检测：收束区域（末 60 字）命中规则 20 词表则返回该词。
-
-    返回命中的词（如「发烫」），未命中返回空串。只管收尾位置——正文中段
-    出现发烫/苏醒是正常身体异动描写（POWER_SURGE 通道），不算本违规。
-    """
-    if not text:
-        return ""
-    seg = text[-TRIAD_END_WINDOW:]
-    for w in TRIAD_END_WORDS:
-        start = 0
-        while True:
-            i = seg.find(w, start)
-            if i < 0:
-                break
-            # 「天亮了」是时间推进，不是发光物件收束（逐个出现位置排除，
-            # 同窗内「天亮了」在前、「玉符亮了」在后时仍能命中后者）
-            if w.startswith("亮") and i > 0 and seg[i - 1] == "天":
-                start = i + len(w)
-                continue
-            return w
-    return ""
-
-
-def ending_ev_fragment(text):
-    """评审证据串：章末收尾（注入 qa_ev，与 Dart endingEvFragment 同文）。"""
-    w = ending_triad(text)
-    if w:
-        return f"章末收尾：三件套命中「{w}」⚠（规则20禁止身体异动/发光物件收束，需换成未落地悬念）"
-    return "章末收尾：未见三件套 ✅"
-
 # 段落"推进力"检测用的动词/信息词（有则视为该段在推进剧情）
-DRIVE_WORDS = [
-    "说", "道", "问", "答", "喊", "笑", "看", "抓", "推", "砸", "拔", "转身",
-    "走", "跑", "冲", "拿", "递", "写", "敲", "点", "掀", "摸", "掏", "塞",
-    "死", "伤", "血", "钱", "字", "信", "刀", "枪", "门", "窗", "牌", "图",
-    "答应", "拒绝", "决定", "必须", "马上", "今晚", "三天", "一个亿", "名字",
-]
 
-SENT_SPLIT = re.compile(r"[。！？…；]+")
-CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
 
 # 人名候选：2~3 字汉字串 + 动作/说话词（用于查“主角漂移”）
-NAME_PAT = re.compile(
-    r"([\u4e00-\u9fff]{2,3})(?:[，,、]?"
-    r"(?:说|道|问|答|笑|喊|盯|看|抬头|转身|点头|摇头|皱眉|收|站|蹲|伸手|开口|吐))")
 
 # 冲突信号：首屏必须出现至少一个（开局要带包袋）
 # 值来自 rules/quality_rules.json 的 conflictWords -> quality_rules_generated
 # （2026-10-03 收编：Dart 原表是本表的真子集，Python 独有 9 词实测命中
 #  66/123 份真实成书 = 53.7%，属真漏判，故以本表全集为准单端收编并双端同源）
-CONFLICT_WORDS = list(CONFLICT_WORDS)
 
 # 骨架/规划官提示词泄漏（漏进正文 = 直接判废）
-PROMPT_LEAK = PROMPT_LEAK = list(PROMPT_LEAK)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
 
 # 元话语/指令残留（模型把「补写操作说明」当正文吐出来，拼进成书 = 直接判废）
 # 实测事故：钩子补写返回「我拿到的指令是补写钩子，不是扩写。你贴的那段"充到 2000 字以上"…」
 # 被原样拼到第 1 章末尾，本地评审仍给 92 分（旧 PROMPT_LEAK 只覆盖骨架词，抓不到这类）。
 # 选词原则：只收「叙事里不可能出现」的短语，避免误伤正文（不用「抱歉」「请确认」这类口语）。
-META_TALK = META_TALK = list(META_TALK)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
 
 # 题材漂移：给「古风/非现代」题材用的现代生活标志词。
 # 实测事故：玄幻书第 3 章整章变成现代都市悬疑（路灯/手机/牛皮纸袋/面包车），
 # 逐章本地评审仍给 84 分，直到终审官通读才发现「书名标称玄幻，末章主角换人」。
 # 只收古风题材几乎不可能自然出现的词：「钥匙/医院/巷口」这类玄幻也合法的词一律不收。
-MODERN_MARKERS = MODERN_MARKERS = list(MODERN_MARKERS)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
 
 # 需要锁题材的「非现代」题材（其余题材如都市/校园/悬疑不做现代词漂移判定）
-ANCIENT_GENRES = ANCIENT_GENRES = tuple(ANCIENT_GENRES)  # 值来自 rules/quality_rules.json 的生成物（勿在本文件再写词表）
 
 # 章内大段重复判定：重复块最短字数 / 指纹长度
-INTRA_REPEAT_MIN_BLOCK = INTRA_REPEAT_MIN_BLOCK  # 值来自 rules/quality_rules.json 生成物
-INTRA_REPEAT_GRAM = INTRA_REPEAT_GRAM  # 值来自 rules/quality_rules.json 生成物
 # 阻断级硬伤的下限字数：番茄单章建议 2000~3000，低于这条线不给「可投」
-BLOCKING_MIN_WORDS = 1500
 
 
 # ------------------------------------------------------------
@@ -214,61 +174,7 @@ BLOCKING_MIN_WORDS = 1500
 # ------------------------------------------------------------
 # 常见姓氏（含网文高频复姓/生僻姓）：只有开头是姓的候选才算人名，
 # 否则「人影×10」「老人×8」会被误报成主角漂移。
-SURNAMES = set(
-    "王李张刘陈杨黄赵周吴徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡"
-    "余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯"
-    "龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤柴桑关岳鲍盛赖樊温柯岑路桂傅齐应宗简")
 SURNAMES |= set("欧司马东方上官独孤南宫慕容宇文长孙闻人东郭呼延轩墨夜司徒卿慕凌花")
-
-
-def looks_like_name(s):
-    """粗略判断：首字是姓才算人名。"""
-    return bool(s) and s[0] in SURNAMES
-
-
-def count_words(text):
-    """正文字数（唯一口径，与 Dart `AppConstants.countWords` 逐字符等价）。
-
-    2026-09-29 收敛：此前仓库里有**三套**互不相同的实现——本函数只数 CJK 基本区，
-    `generate_novel.count_words` 少算扩展A且把数字单独计词，Dart 版又多算扩展A。
-    三处都自称「同口径」，实测同一本书两端差 0.028%（正文）/ 最多 20%（评估卡等
-    ASCII 密集的报表）。现统一到 Dart 版，理由：
-      1. **对用户零可见变化**——Dart 是界面显示的那一套，改它才会动用户看到的字数；
-         改 Python 只是让流水线口径向界面对齐；
-      2. Dart 版**含 CJK 扩展A**（㐀-䶿一类生僻字），语义上更正确；
-      3. 数字与字母连续算一个词（MVP2024=1）符合中英混排的直觉。
-
-    依赖方向：本模块是 `generate_novel` 的下层（后者 import 本模块），故**唯一定义
-    放这里**，`generate_novel.count_words` 改为薄转发，杜绝双份实现再次漂移。
-    """
-    if not text:
-        return 0
-    count = 0
-    in_ascii = False
-    for ch in text:
-        r = ord(ch)
-        # CJK 统一表意文字（基本区 + 扩展A + 兼容区）：每字计 1。
-        if (0x3400 <= r <= 0x4DBF or 0x4E00 <= r <= 0x9FFF
-                or 0xF900 <= r <= 0xFAFF):
-            count += 1
-            in_ascii = False
-        # ASCII 字母或数字：连续成一个词，计 1。
-        elif (0x41 <= r <= 0x5A or 0x61 <= r <= 0x7A
-              or 0x30 <= r <= 0x39):
-            if not in_ascii:
-                count += 1
-                in_ascii = True
-        else:
-            in_ascii = False
-    return count
-
-
-def sentences(text):
-    return [s.strip() for s in SENT_SPLIT.split(text) if s.strip()]
-
-
-def paragraphs(text):
-    return [p.strip() for p in (text or "").split("\n") if p.strip()]
 
 
 # 对白引号配对（与 Dart 侧 PipelineQa.dialogueRatioOf 同口径）。
@@ -279,38 +185,6 @@ def paragraphs(text):
 # 跨句）两种口径输出完全一致**，因为「起引号后紧跟同类型收引号」是绝大多数情况，
 # 而落单的引号两边都匹配不到。故原写法并无实际缺陷，本次改动回退，
 # 保持单正则（更短、且与历史产物对账口径不变）。
-QUOTE_RE = re.compile(r"[“\"『「]([^”\"』」]{1,200})[”\"』」]")
-
-
-def dialogue_ratio(text):
-    """引号内字数占比。"""
-    quoted = "".join(QUOTE_RE.findall(text or ""))
-    total = max(count_words(text or ""), 1)
-    return round(count_words(quoted) / total, 3)
-
-
-def split_chapters(path):
-    """按「第 N 章」拆章；无标题行时整篇当一章。"""
-    lines = io.open(path, encoding="utf-8").read().splitlines()
-    out, idx, title, body = [], None, "", []
-    for line in lines:
-        s = line.strip()
-        m = CHAPTER_RE.match(s)
-        if m:
-            if idx is not None:
-                out.append((idx, title, "\n".join(body).strip()))
-            idx, title, body = int(m.group(1)), s, []
-        elif s.startswith("—"):
-            continue
-        elif idx is not None:
-            body.append(line)
-    if idx is not None:
-        out.append((idx, title, "\n".join(body).strip()))
-    out = [x for x in out if x[2]]
-    if out:
-        return out
-    whole = "\n".join(lines).strip()
-    return [(1, "全文", whole)] if whole else []
 
 
 # ------------------------------------------------------------
@@ -337,85 +211,6 @@ NARRATIVE_OK_CATEGORIES = {
 INSTRUCTION_MARKERS = list(INSTRUCTION_MARKS)
 
 
-_SEP_CHARS = set(
-    "，。、；：！？（）()《》〈〉“”‘’「」『』【】[]{}\\/\"':;,·—-与和及／｜ \t\r\n"
-)
-_TERM_OK = re.compile(r"^[\u4e00-\u9fffA-Za-z0-9·]{2,12}$")
-_GENERIC_WORLD = {
-    "主舞台", "城市", "势力", "等级", "体系", "境界", "科技", "能源", "联赛", "舞台",
-    "俱乐部", "国家队", "朝代名", "大陆名", "星域名", "游戏世界", "职业", "出身",
-    "性格特征", "竞技场", "背景", "主要", "门派", "世家", "组织", "机构", "主要势力",
-    "自拟", "三大势力", "自拟专名", "能源为",
-}
-
-
-def extract_world_terms(outline):
-    """从大纲的 world 字段抽专名候选（供一致性检查用）。与 Dart worldTermsFrom 同口径。
-
-    1) 先收引号/书名号里的片段——规划官写的专名通常带引号（『星髓』、《深渊回廊》）；
-    2) 再按分隔符切片，只留 **3 字以上**的片段。
-    收 2 字词会把「秩序」「资本」当专名，跟跑题文本随手撞上，一致性检查就失效
-    （定标实测：阈值降到 2 字后，旧版跑题样本从 55 分涨回 63 分）。"""
-    blob = json.dumps(outline.get("world") or {}, ensure_ascii=False) \
-        if isinstance(outline, dict) else str(outline or "")
-    out = []
-
-    def push(t):
-        t = t.strip().rstrip("的地了")
-        # 必须含汉字：否则 JSON 的键名（galaxy/faction）会混进专名池
-        if not re.search(r"[\u4e00-\u9fff]", t):
-            return
-        if 2 <= len(t) <= 12 and t not in _GENERIC_WORLD \
-                and _TERM_OK.match(t) and t not in out:
-            out.append(t)
-
-    for m in re.finditer("[「『《“‘]([^\\n」』”’]{2,10})[」』”’]", blob):
-        push(m.group(1))
-    frag, cur = [], []
-    for ch in blob:
-        if ch in _SEP_CHARS:
-            frag.append("".join(cur))
-            cur = []
-        else:
-            cur.append(ch)
-    frag.append("".join(cur))
-    for raw in frag:
-        if len(raw.strip()) >= 3:
-            push(raw)
-    return out[:14]
-
-
-def _term_hit(text, term):
-    """专名命中：允许局部命中。
-
-    专名池是从大纲 world 字段切的完整短语（「星洲奥体中心」），正文可能写「星洲青训基地」；
-    「体能师老韩」正文写「老韩」。整串包含会把接住了设定的正文误判为跑题，
-    所以退一步：term 的 3 字滑窗或尾 2 字任一命中即算命中。"""
-    if not term or not text:
-        return False
-    if term in text:
-        return True
-    for i in range(0, max(len(term) - 2, 0)):
-        if term[i:i + 3] in text:
-            return True
-    return len(term) >= 2 and term[-2:] in text
-
-
-def world_consistency(text, terms):
-    """世界观一致性：大纲里的专名在正文命中几个。一个都没有 = 写手跑题。
-
-    同时给出 missing（未命中的专名清单）：定点修与写手提示词要靠它点名。
-    只告诉模型「专名一个都没出现」而不给清单，模型根本无从下手——这是
-    门禁 v7 第 13 项「世界观未落地」定点修一轮后仍残留的直接原因。
-    """
-    if not terms:
-        return None
-    hit = [t for t in terms if _term_hit(text or "", t)]
-    missing = [t for t in terms if not _term_hit(text or "", t)]
-    return {"hit": len(hit), "total": len(terms), "terms": hit[:5],
-            "missing": missing[:8], "missing_total": len(missing)}
-
-
 def redline_scan(text):
     """返回命中列表（含类别/词/等级/上下文）。「否决」= 硬伤，「提示」= 人工再看一眼。"""
     hits = []
@@ -434,285 +229,6 @@ def redline_scan(text):
                 hits.append({"category": cat, "word": w.strip(), "level": level,
                              "context": ctx})
     return hits
-
-
-def first_screen_check(text):
-    """首屏 300 字：编辑与算法的第一道门槛。"""
-    head = (text or "")[:320]
-    probs, good = [], []
-    if count_words(head) < 120:
-        probs.append(("首屏不足 120 字，多半是空行或标题占位", "重写"))
-    if re.match(r"^\s*[^\n]{0,16}[雨雪霜雾风]", head):
-        probs.append(("首屏以天气起手（模板化，且未进入事件）", "修改"))
-    if not re.search(r"[“\"「]", head):
-        probs.append(("首屏无对白：纯描述开场完读率风险高", "重写"))
-    has_actor = bool(NAME_PAT.search(head)) or bool(re.search(r"[“「]", head))
-    if not has_actor:
-        probs.append(("首屏看不到「谁在做什么」——缺具体主语+动作", "修改"))
-    if not any(w in head for w in CONFLICT_WORDS):
-        probs.append(("首屏无冲突信号（无威胁/无要求/无损失）", "修改"))
-    long_ones = [s for s in sentences(head) if len(s) > 32]
-    if len(long_ones) >= 3:
-        probs.append((f"首屏有 {len(long_ones)} 句超 32 字（移动端一行放不下）", "修改"))
-    if not probs:
-        good.append("首屏具备：在场人物 + 正在发生 + 可对白的冲突")
-    return probs, good
-
-
-def pacing_stats(text):
-    """完读率三兄弟：句长、段长、对话占比。"""
-    sents = sentences(text)
-    paras = paragraphs(text)
-    slen = [len(s) for s in sents]
-    plen = [count_words(p) for p in paras]
-    return {
-        "sent_avg": round(sum(slen) / len(slen), 1) if slen else 0.0,
-        "sent_over30": round(sum(1 for x in slen if x > 30) / max(len(slen), 1) * 100, 1),
-        "para_over5": round(sum(1 for x in plen if x > 160) / max(len(plen), 1) * 100, 1),
-        "dialogue": dialogue_ratio(text),
-        "paras": len(paras),
-    }
-
-
-def filler_ratio(text):
-    """水段率：长度 ≥ 40 字、既无对白又无推进词的段落占比（可替换性代理）。
-
-    短段一律不判水：「他顿了顿。」「弯腰，捾鞋，拍灰，穿上。」这类喘气段是写作准则
-    明要求的节奏手段，拿段落长短去砍它会把好文风压成流水账。"""
-    paras = paragraphs(text)
-    if not paras:
-        return 0.0, 0
-    bad = counted = 0
-    for p in paras:
-        if count_words(p) < 40:
-            continue
-        counted += 1
-        if "“" in p or "\"" in p or "「" in p:
-            continue
-        if any(w in p for w in DRIVE_WORDS):
-            continue
-        bad += 1
-    ratio = round(bad / max(counted, 1) * 100, 1)
-    return ratio, counted
-
-
-def cliche_overlap(text, corpus_hint=""):
-    """同质化：套句命中数 / 千字。"""
-    n = max(count_words(text), 1)
-    hit = [s for s in CLICHE_SENTENCES if s in text]
-    return {"per_k": round(len(hit) / n * 1000, 2), "hits": hit}
-
-
-def repeat_with_prev(text, prev_text):
-    """与上一章的 8-gram 重合率（自我重复/灌水代理）。"""
-    if not prev_text:
-        return 0.0
-    def grams(t):
-        t = re.sub(r"\s+", "", t or "")
-        return {t[i:i + 8] for i in range(0, max(len(t) - 7, 0), 3)}
-    a, b = grams(text), grams(prev_text)
-    if not a:
-        return 0.0
-    return round(len(a & b) / len(a) * 100, 2)
-
-
-def agency_check(text):
-    """主角主动性：每千字主动句 vs 被动句（代理指标，只作「修改」级提醒）。"""
-    active = sum(text.count(w) for w in
-                 ["我决定", "我选", "我接", "我应", "我来", "我先", "当场", "主动", "开口",
-                  "提出", "要求", "接下", "应下", "带着人", "连夜", "先把",
-                  "他决定", "他选", "她要", "他要", "我偏", "我会", "我自己", "不靠",
-                  "就算", "也要", "给我", "等着", "记住", "他反问", "他拒绝", "他点头",
-                  "他开口", "他伸手", "他站起身", "他抢", "他夺", "他扫", "他赌", "他押",
-                  "他扯", "他拆开", "他抬手", "他推开", "他回", "他接"])
-    passive = sum(text.count(w) for w in
-                  ["不得不", "只能", "只好", "由不得", "被人", "无从", "无处可",
-                   "听天由命", "没办法", "被拖", "被推", "被换", "被安排"])
-    n = max(count_words(text), 1) / 1000.0
-    return {"active": active, "passive": passive,
-            "active_per_k": round(active / n, 2), "passive_per_k": round(passive / n, 2),
-            "ratio": round(active / max(passive, 1), 2)}
-
-
-def self_repeat_ratio(text):
-    """整句重复率（模板引擎与注水最直接的特征）。"""
-    ss = [s for s in sentences(text) if len(s) >= 10]
-    if not ss:
-        return 0.0
-    seen, dup = set(), 0
-    for s in ss:
-        if s in seen:
-            dup += 1
-        seen.add(s)
-    return round(dup / len(ss) * 100, 2)
-
-
-def name_drift(text, protagonist=""):
-    """主角漂移：同章多个高频人名，或大纲主角名缺席。"""
-    cnt = {}
-    for m in NAME_PAT.finditer(text or ""):
-        nm = m.group(1)
-        if nm != protagonist and not looks_like_name(nm):
-            continue
-        cnt[nm] = cnt.get(nm, 0) + 1
-    # 主角高频出现是正常叙事，不计入漂移判定（与 Dart 端 FanqieGateChecker 同口径）
-    hot = sorted(((w, c) for w, c in cnt.items() if c >= 3 and w != protagonist),
-                 key=lambda x: -x[1])
-    probs = []
-    # 「对手 + 盟友」两个常驻配角同章活跃是正常戏剧结构（与 Dart 端
-    # FanqieGateChecker 同口径）；真正的视角漂移信号是 3 个以上高频配角。
-    if len(hot) > 2:
-        probs.append("同章出现多个高频人名：" + "、".join("%s×%d" % (w, c) for w, c in hot[:4])
-                     + "（视角/主角漂移）")
-    if protagonist and (text or "").count(protagonist) < 3:
-        probs.append("大纲主角「%s」本章仅出现 %d 次（写手没接住主角）"
-                     % (protagonist, (text or "").count(protagonist)))
-    return probs
-
-
-def blocking_reasons(row):
-    """阻断级硬伤（不修完不给「可投」）。
-
-    与「扣分项」分开的原因：分数只回答「写得好不好」，阻断项回答「能不能投」。
-    实测事故：第 1 章 92 分（仅字数不足）时 fix_prompt 直接返回空串 → 那一章再也没被修，
-    泄漏/跑题就留在了成书里。阻断项必须能独立触发定点修。
-    """
-    out = []
-    for p in row.get("problems") or []:
-        t, msg = p.get("type", ""), p.get("msg", "")
-        if t == "泄漏":
-            out.append("提示词/元话语残留")
-        elif t == "重复" and "章内大段重复" in msg:
-            out.append("章内大段重复")
-        elif t == "一致性" and "题材漂移" in msg:
-            out.append("题材漂移")
-        elif t == "一致性" and "没接住主角" in msg:
-            out.append("主角缺席")
-        elif t == "一致性" and "世界观专名" in msg:
-            out.append("世界观未落地")
-        elif t == "钩子":
-            out.append("无章末钩子")
-    if row.get("words", 0) < BLOCKING_MIN_WORDS:
-        out.append(f"单章仅 {row.get('words', 0)} 字")
-    return out
-
-
-def prompt_leak(text):
-    """骨架/规划官提示词漏进正文。"""
-    return [p for p in PROMPT_LEAK if p in (text or "")]
-
-
-def meta_talk(text):
-    """模型元话语/操作说明残留（补写、定点修把「我在干什么」写进正文）。"""
-    return [p for p in META_TALK if p in (text or "")]
-
-
-def genre_drift(text, genre=""):
-    """题材漂移：非现代题材正文里出现现代生活标志词。
-
-    level："" 不报 / 「修改」个别穿帮 / 「重写」整章跑题（≥3 个不同标志词）。
-    都市/校园/悬疑等现代题材不做判定（它们本来就该有这些词）。
-    """
-    g = (genre or "").strip()
-    if not g or not any(a in g for a in ANCIENT_GENRES):
-        return {"level": "", "hits": [], "count": 0, "total": len(MODERN_MARKERS)}
-    hits = [w for w in MODERN_MARKERS if w in (text or "")]
-    n = sum((text or "").count(w) for w in hits)
-    if len(hits) >= 3:
-        return {"level": "重写", "hits": hits, "count": n, "total": len(MODERN_MARKERS)}
-    if hits:
-        return {"level": "修改", "hits": hits, "count": n, "total": len(MODERN_MARKERS)}
-    return {"level": "", "hits": [], "count": 0, "total": len(MODERN_MARKERS)}
-
-
-def _dup_spans(t, gram=INTRA_REPEAT_GRAM, step=3, min_block=INTRA_REPEAT_MIN_BLOCK):
-    """滑动指纹找长重复块：返回 [(起点, 终点)]（第二次出现的区间）。O(n)。"""
-    seen, spans = {}, []
-    for i in range(0, max(len(t) - gram + 1, 0), step):
-        g = t[i:i + gram]
-        first = seen.get(g)
-        if first is None:
-            seen[g] = i
-            continue
-        k = 0
-        while first + k < len(t) and i + k < len(t) and t[first + k] == t[i + k]:
-            k += 1
-        if k >= min_block:
-            spans.append((i, i + k))
-    merged = []
-    for a, b in sorted(spans):
-        if merged and a <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
-        else:
-            merged.append((a, b))
-    return merged
-
-
-def _long_paras(text, min_words=INTRA_REPEAT_MIN_BLOCK):
-    """长段落及其在原文/扁平文本中的位置（段落级近似重复用）。"""
-    out = []
-    for p in paragraphs(text):
-        if count_words(p) >= min_words:
-            out.append(p)
-    return out
-
-
-def _para_dup(text, min_words=INTRA_REPEAT_MIN_BLOCK):
-    """段落级近似重复（标点/个别用词微调也算）：相似度 ≥0.9 判重。"""
-    import difflib
-    long_paras = _long_paras(text, min_words)
-    hits = []
-    for i in range(1, len(long_paras)):
-        for j in range(i):
-            a = re.sub(r"\s+", "", long_paras[j])
-            b = re.sub(r"\s+", "", long_paras[i])
-            if not a or not b:
-                continue
-            ratio = difflib.SequenceMatcher(None, a, b).ratio()
-            if ratio >= 0.9:
-                hits.append((long_paras[i], ratio))
-                break
-    return hits
-
-
-def intra_repeat(text):
-    """章内大段重复：同章 ≥120 字的整块文字出现两次（复制粘贴事故）。
-
-    两条通道：① 扁平文本滑动指纹（完全相同的长块）；
-    ② 段落级近似比对（标点/个别用词微调，实测事故正是这种形态）。
-    返回 {"blocks", "words", "sample"}。
-    """
-    t = re.sub(r"\s+", "", text or "")
-    spans = _dup_spans(t) if len(t) >= INTRA_REPEAT_MIN_BLOCK * 2 else []
-    words = sum(b - a for a, b in spans)
-    sample = t[spans[0][0]:spans[0][0] + 24] if spans else ""
-    fuzzy = _para_dup(text) if not spans else []
-    if fuzzy and not spans:
-        words = count_words(fuzzy[0][0])
-        sample = fuzzy[0][0][:24]
-    return {"blocks": len(spans) + (1 if (fuzzy and not spans) else 0),
-            "words": words, "sample": sample}
-
-
-def dedup_intra_repeat(text, min_para_words=40):
-    """章内重复段去重（保留首次出现，删掉后面复制的段）。返回 (新文本, 删除字数)。
-
-    只对「与前面完全相同的段（≥40 字）」动手：短句复诵（"他点头。"）与刻意排比不受影响。
-    """
-    if not text:
-        return text, 0
-    seen, out, removed = set(), [], 0
-    for ln in text.split("\n"):
-        norm = re.sub(r"\s+", "", ln)
-        if len(norm) >= min_para_words:
-            if norm in seen:
-                removed += len(norm)
-                continue
-            seen.add(norm)
-        out.append(ln)
-    if not removed:
-        return text, 0
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip(), removed
 
 
 def patch_gate(patch, base_text="", genre="", max_words=260):

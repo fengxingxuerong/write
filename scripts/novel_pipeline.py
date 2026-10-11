@@ -11,6 +11,17 @@
 
 断点续传：Ctrl+C 后重跑同一命令即可继续。
 密钥经环境变量传入：NOVEL_KEY_AMD / NOVEL_KEY_SENSE_K1 / NOVEL_KEY_SENSE_K2 / NOVEL_KEY_SENSE_K3
+
+本文件已按职责拆分为兄弟模块（用转发导入保持 `import novel_pipeline as np` 的
+对外契约不变，见下方各 import 块）：
+  pipeline_llm       LLM 调用层 + 角色槽位配置 / 健康池 / 故障转移
+  pipeline_prompts   各角色提示词（纯字符串构建，无 I/O、无网络）
+  pipeline_quality   纯规则质检 / 采纳 / 文本卫生（无网络）
+  pipeline_state     断点续传状态读取（纯 I/O）
+  foreshadow         伏笔台账 / 跨章状态清单
+本文件只保留**触网编排**（main / generate_appended_chapter / fact_check_stage /
+plan_scenes_or_fallback …）——它们调用 call_chain / llm_call 等被打桩的符号，
+搬走会让测试补丁落空、静默发真网络请求，故一律原位。
 """
 import argparse
 import json
@@ -45,14 +56,13 @@ from generate_novel import (count_words, parse_json_from_llm, quality_check,
                             registry_block, facts_block, extract_registry_prompt,
                             merge_registry, merge_facts)  # noqa: E402
 from fanqie_review import (review_chapter, fix_prompt, patch_gate, local_hook_fallback,
-                           extract_world_terms, dedup_intra_repeat,
-                           ending_ev_fragment,
-                           FIX_MIN_RATIO)  # noqa: E402
+                           extract_world_terms,
+                           ending_ev_fragment)  # noqa: E402
 # 注：原先此处 import quality_rules_generated as _gen，已于2026-10-03 移除——
 # 阈值随 LLM 调用层搬到 pipeline_llm.py 并由下方 from pipeline_llm import 转发，
 # 本文件不再直接引用生成物，留着会触发 ruff F401（CI 的 ruff --select=F 会红）。
 from fanqie_prompts import first_screen_rewrite_prompt, pack_prompt  # noqa: E402
-# 伏笔台账 / 跨章状态清单（2026-10-03 从本文件拆出，本文件已 2905 行）。
+# 伏笔台账 / 跨章状态清单（2026-10-03 从本文件拆出）。
 # 转发导入而非直接定义，是为了让调用点（generate_appended_chapter / main 等）
 # 与外部测试都无需改动——拆分只降低维护成本，不该顺手制造调用方迁移。
 from foreshadow import (  # noqa: E402,F401
@@ -85,6 +95,44 @@ from pipeline_llm import (  # noqa: E402,F401
     _HEALTH, _health_key, _mark_fail, _mark_ok, _in_cooldown,
 )
 
+# ============================================================
+# 各角色提示词（Prompt）（2026-10-10 从本文件拆出 -> pipeline_prompts.py）
+# ============================================================
+# 转发导入而非直接定义，是为了让调用点（本文件 main / generate_appended_chapter
+# 及仓库内 16 个 `import novel_pipeline as np` 的测试与探针脚本）零改动——
+# 拆分只降低维护成本，不改对外契约；函数体逐字搬运、未改写。
+from pipeline_prompts import (  # noqa: E402,F401
+    PLANNER_SYS, EDITOR_SYS, TITLER_SYS, VERIFIER_SYS,
+    OUTLINE_REVIEWER_SYS, FACT_CHECK_SYS, editor_prompt, titler_prompt,
+    verifier_prompt, quality_review_prompt, rewrite_prompt, state_extract_prompt,
+    payoff_repair_prompt, fabrication_check_prompt, fact_fix_prompt, chief_editor_prompt,
+    chief_rewrite_prompt, structure_fix_prompt, outline_review_prompt, reader_proxy_prompt,
+    verify_promises_prompt,
+)
+
+# ============================================================
+# 纯规则质检 / 采纳 / 文本卫生（2026-10-10 从本文件拆出 -> pipeline_quality.py）
+# ============================================================
+# 转发导入而非直接定义，是为了让调用点（本文件 main / generate_appended_chapter
+# 及仓库内 16 个 `import novel_pipeline as np` 的测试与探针脚本）零改动——
+# 拆分只降低维护成本，不改对外契约；函数体逐字搬运、未改写。
+from pipeline_quality import (  # noqa: E402,F401
+    PAYOFF_SCENE_KEYS, extract_chapter_hook, apply_text_patch, dedup_chapter,
+    trailing_drought_len, needs_payoff_repair, accept_payoff_repair, needs_fix,
+    is_payoff_scene, payoff_scene_constraint, fallback_scenes, verdict_from_score,
+    _merge_chief_samples, apply_promise_closures, build_promise_block, _splice_head,
+)
+
+# ============================================================
+# 断点续传状态读取（2026-10-10 从本文件拆出 -> pipeline_state.py）
+# ============================================================
+# 转发导入而非直接定义，是为了让调用点（本文件 main / generate_appended_chapter
+# 及仓库内 16 个 `import novel_pipeline as np` 的测试与探针脚本）零改动——
+# 拆分只降低维护成本，不改对外契约；函数体逐字搬运、未改写。
+from pipeline_state import (  # noqa: E402,F401
+    load_reader_feedback, load_reviews_from_jsonl, apply_chief_rewrites, load_state_track,
+)
+
 
 def call_chain(chain, system, user, max_tokens):
     """转发到 pipeline_llm.call_chain，并把**本模块的属性**作为注入点传下去。
@@ -102,11 +150,6 @@ def call_chain(chain, system, user, max_tokens):
 # ============================================================
 # 各角色 Prompt
 # ============================================================
-PLANNER_SYS = "你是一位资深网文总编，擅长长篇小说的框架规划。输出严格遵循要求的 JSON 格式。"
-EDITOR_SYS = "你是一位资深网文编辑，专精「去AI味」改写。"
-TITLER_SYS = "你是一位网文章名提炼师，擅长从章节内容提炼短而带悬念的章名，只输出章名本身。"
-VERIFIER_SYS = "你是一位严谨的长篇小说一致性审校编辑。"
-OUTLINE_REVIEWER_SYS = "你是番茄/起点资深内容主编，在大纲阶段就为签约稿把关。只输出严格 JSON。"
 
 
 # ============================================================
@@ -118,19 +161,6 @@ OUTLINE_REVIEWER_SYS = "你是番茄/起点资深内容主编，在大纲阶段�
 # 三道防线：patch_gate（指令残留/题材漂移/红线/与正文重复）+ 章纲钩子本地兜底 + 章内去重。
 # ============================================================
 HOOK_FALLBACK_SIGNALS = ("还没", "突然", "竟然", "不对劲", "盯着", "动静", "浮现", "逼近", "异动")
-
-
-def extract_chapter_hook(ch):
-    """从章纲里取钩子原文（兜底时唯一可信的「题材内素材」）。
-
-    规划官把钩子写在 goal 里（`…｜钩子=威胁逼近：血煞盟的人影一闪而逝`），
-    结构补章的章纲则可能带独立 hook 字段。"""
-    if not isinstance(ch, dict):
-        return ""
-    m = re.search(r"钩子[=＝:：]\s*([^｜|]+)", ch.get("goal", "") or "")
-    if m:
-        return m.group(1).strip()
-    return (ch.get("hook") or "").strip()
 
 
 def apply_hook_patch(final_text, hook_hint, protagonist, genre, tag=""):
@@ -166,322 +196,16 @@ def apply_hook_patch(final_text, hook_hint, protagonist, genre, tag=""):
     return final_text, ""
 
 
-def apply_text_patch(final_text, patch, genre, min_ratio=EDITOR_MIN_RATIO, tag="补丁"):
-    """整章级补丁（扩写/定点修/打勾补写）的通用采纳判定：字数下限 + 补丁卫生。
-
-    与旧实现相比多了一道 patch_gate：字数够但跑题/带操作说明的产出不再被采纳
-    （旧实现只看字数比例，实测放进了「手机屏幕亮了」这种跨题材文本）。
-    """
-    if not patch or not patch.strip():
-        print(f"  [{tag}] 无有效产出，保留原文")
-        return final_text
-    p = patch.strip()
-    if count_words(p) < count_words(final_text) * min_ratio:
-        print(f"  [{tag}] 过度压缩（{count_words(final_text)} -> {count_words(p)} 字，"
-              f"低于 {int(min_ratio * 100)}%），拒绝采纳保留原文")
-        return final_text
-    ok, why = patch_gate(p, genre=genre, max_words=10 ** 9)
-    if not ok:
-        print(f"  [{tag}] 补丁被拒（{why}），保留原文")
-        return final_text
-    return p
-
-
-def dedup_chapter(final_text, idx):
-    """章内重复段自动去重（复制粘贴级事故：同一章 800 字整块出现两遍）。"""
-    if not final_text:
-        return final_text
-    clean, removed = dedup_intra_repeat(final_text)
-    if removed:
-        print(f"  [去重] 第 {idx} 章删掉 {removed} 字章内重复段")
-    return clean
-
-
-def trailing_drought_len(thrill_per_k, side_per_k=None, threshold=0.5,
-                         side_threshold=0.3):
-    """末尾连续「无外显兑现」的章数（不含当前章，判断「已断供多久」）。
-
-    传入**已完成的**前序章序列，返回当前章之前处于断供中的连续长度：
-    0 表示上一章有外显兑现（未断供），>=3 表示已连着 3 章以上没有。
-
-    side_per_k 传入时启用侧面反响逃生通道（与 payoff_drought_zones 同口径）：
-    某章 💥 低但在场者反应达标 = 外显兑现其实已送达，不计断供。
-    """
-    n = len(thrill_per_k or [])
-    k = 0
-    for i in range(n - 1, -1, -1):
-        flat = thrill_per_k[i] < threshold
-        if flat and side_per_k is not None and i < len(side_per_k):
-            flat = side_per_k[i] < side_threshold
-        if not flat:
-            break
-        k += 1
-    return k
-
-
-def needs_payoff_repair(thrill, surge, min_words_ok=True, drought_len=0,
-                        threshold=0.5, surge_ok=1.0, drought_min_run=3,
-                        side=0.0, side_ok=0.3):
-    """本章是否需要「外显爽点」情绪强化修（单章口径 + 跨章断供口径取或）。
-
-    旧口径只有「双低」（thrill<0.5 **且** surge<1.0），实测 14 本成书 116 章里
-    只触发 **7 章**——因为 ✨ 含蓄异动恒高（~2.2/千字），双低几乎永不成立，
-    真正缺外显爽点的章被静默放过。断供带内的「低💥但✨高」章共 **47 章**漏修。
-
-    两个通道：
-    ① 单章双低（保留旧行为，零回归）；
-    ② 跨章断供：已处于连续 >=drought_min_run 章 💥 断供带中（drought_len>0）时，
-       本章只要 💥 仍 <threshold 就修——不再要求 ✨ 也低。断供带内含蓄流正是
-       「读者感觉不到爽」的高发形态，此时补外显兑现正是处方。
-       drought_len=0（未传历史）时本通道自动关闭，行为与旧版完全一致。
-
-    min_words_ok 由调用方传字数下限判定（过短章不修：没内容可强化）。
-
-    **side 逃生通道（2026-09-29 真机 A/B 后补）**：若在场者已有明确外部反应
-    （侧面反响达标），说明外显兑现其实**已经送达读者**，只是没用 💥 词表里的
-    套话词——真机实测确有此类样本（满堂哄笑/全场屏息/众目睽睽，💥=0.0）。
-    此时再送修纯属白烧一次 LLM 调用，故直接跳过。side=0.0（未传）时该通道关闭，
-    行为与旧版完全一致。
-    """
-    if not min_words_ok:
-        return False
-    if side >= side_ok:
-        return False
-    if thrill < threshold and surge < surge_ok:
-        return True
-    return bool(drought_len >= drought_min_run) and thrill < threshold
-
-
-def payoff_repair_prompt(full_text, registry="", facts="", drought_len=0):
-    """情绪强化定点修提示词：只补外显爽点，其余一律不许动。
-
-    与 `generate_novel.emotion_fix_prompt` 同款要求（保持主线/姓名/数字不变），
-    此处补一条**断供语境**：跨章连续缺外显爽点时点明章数，让模型知道
-    「不是本章没写爽点，是连着若干章都没有」，处方更对症。
-    """
-    ctx = ""
-    if drought_len >= 3:
-        ctx = (f"\n【背景】本书已连续 {drought_len} 章没有出现读者可感知的"
-               f"「外显爽点」（打脸/收获/揭露/当众反应），追读正在流失——"
-               f"本章必须补上一处，且要外部可见。\n")
-    reg = f"\n【配角户籍表】\n{registry}\n" if registry else ""
-    num = f"\n【数字台账】\n{facts}\n" if facts else ""
-    return f"""下面这章小说情节完整，但缺少读者可感知的「外显爽点」，移动端读者会弃书。
-{ctx}请输出强化后的全章正文，要求：
-- 主线情节、人物姓名、数字设定一律不变；
-- 选章内一个冲突场景，补一处「外部可见」的爽点：对手当众吃瘪的反应 / 关键物件入手的触感细节 / 真相反转时在众人的震惊，三选一；
-- 禁止只写主角内心感受充当爽点（如「他感到修为精进」）；
-- 保持原有字数规模（±20% 内），不要另起新情节。
-{reg}{num}
-【原章正文】
-{full_text}
-
-只输出强化后的全章正文："""
-
-
-def accept_payoff_repair(original, fix, registry="", min_ratio=0.7, max_ratio=1.6,
-                        threshold=0.5, side_ok=0.3):
-    """情绪强化稿采纳判定：字数在区间 + 户籍完整 + 💥 真的提升（绝不劣化原文）。
-
-    沿用 `generate_novel` 情绪闸门的三项验收（字数/户籍/指标不劣化），
-    补一道**必须真的补上外显爽点**的硬条件：断供带内补修的目的是补 💥，
-    若强化稿只把 ✨ 写高而 💥 没动，等于没修——此时拒绝采纳。
-    非断供场景（drought_len=0）保持旧语义：💥 或 ✨ 任一提升即采纳。
-    """
-    o_w, f_w = count_words(original or ""), count_words(fix or "")
-    if not (min_ratio * o_w <= f_w <= max_ratio * o_w):
-        return False, f"字数越界（{o_w}->{f_w}，允许 {min_ratio}~{max_ratio}）"
-    reg = registry or ""
-    if reg:
-        names = [ln.strip() for ln in reg.splitlines()
-                 if ln.strip() and "：" in ln]
-        missing = [ln for ln in names
-                   if ln.split("：", 1)[0].strip() and
-                   ln.split("：", 1)[0].strip() not in fix]
-        if missing:
-            return False, f"户籍角色丢失（{missing[0].split('：')[0]}）"
-    o_t = thrill_per_thousand(original or "")
-    f_t = thrill_per_thousand(fix or "")
-    o_s = surge_per_thousand(original or "")
-    f_s = surge_per_thousand(fix or "")
-    o_side = side_reaction_per_thousand(original or "")
-    f_side = side_reaction_per_thousand(fix or "")
-    # 判定顺序要紧：**先把「侧反达标」记为有效提升**，再看「是否整体没动」。
-    # 否则只涨侧反（💥/✨ 都没动）的稿会在下面的「未提升」被提前拒掉——
-    # 这正是真机实测的好稿形态（不套话、只有在场者反应）。
-    side_ok_gain = f_side >= side_ok and f_side > o_side
-    if not side_ok_gain and f_t <= o_t and f_s <= o_s:
-        return False, (f"未提升（💥{o_t}->{f_t}｜✨{o_s}->{f_s}"
-                       f"｜侧反{o_side}->{f_side}）")
-    # 补修的目的是让读者看见外显兑现：💥 仍低于阈值时，**只涨 ✨ 不算数**
-    # （那是把「含蓄异动」当外显兑现，正是断供的成因本身）；但若**侧面反响
-    # 涨到达标**（在场者确有反应，如惊呼/哗然/脸色铁青），那外显兑现同样成立
-    # ——真机实测确有此类不套话的好稿，💥 词表天然抓不到。
-    if f_t < threshold and not side_ok_gain:
-        return False, (f"未补上外显爽点（💥{f_t}<{threshold}、侧反{f_side}<{side_ok}，"
-                       f"仅 ✨{o_s}->{f_s} 不算修好）")
-    return True, f"💥{o_t}->{f_t}｜✨{o_s}->{f_s}｜侧反{f_side}｜{f_w}字"
-
-
-def needs_fix(rv, review_pass):
-    """是否需要定点修：不达线，或带阻断级硬伤（分数达线也不能放过）。
-
-    实测事故：第 1 章 92 分但含「元话语残留/字数不足」→ 旧条件只看分数，修复链直接跳过。
-    """
-    return bool(rv.get("problems")) and (rv.get("score", 0) < review_pass
-                                         or bool(rv.get("blockers")))
-
-
-
-def editor_prompt(text, style_block=""):
-    keep = ""
-    if style_block:
-        keep = ("\n5. 下列文风分布必须保持（改稿同样向其靠拢，不得把这些指标"
-                "改离参考文）：\n" + style_block)
-    return f"""请把下面的小说章节改写得更像真人网文作者的手笔：
-
-1. 全篇「仿佛/似乎/宛如」合计不超过 2 次；清除「嘴角勾起」「眼底闪过」「空气凝固」「深吸一口气」「空气像是被人抽走」等 AI 高频表达
-2. 情节、人物、伏笔、章节结尾的钩子必须全部保留，不新增、不删减剧情
-3. 对话更口语化、更有潜台词；描写更具体（数字、颜色、气味、声响），允许更「糙」、更有网文节奏
-4. 保持原有段落结构
-{keep}
-只输出改写后的完整正文，不要任何解释或前缀。
-
-【章节正文】
-{text}"""
-
-
-def titler_prompt(text):
-    return f"""为下面的章节内容提炼一个章名。要求：
-1. 字数严格控制在 4~10 字，越短越好；
-2. 要有悬念感、点击欲，符合网文章名习惯（如「废柴之辱」「残魂入体」「血玉现世」）；
-3. 禁止整句照抄正文，禁止带引号、冒号、逗号等标点的长句（如「送餐遇前任，桌上压着百元钞」不合格）；
-4. 只输出章名本身，不要任何解释、引号或序号。
-
-【章节内容】
-{text[:500]}"""
-
-
-def verifier_prompt(outline, chapters):
-    return f"""以下是本书的大纲设定与已生成章节的标题列表。请检查：1) 世界观设定是否自相矛盾；2) 人物名称/身份是否混乱；3) 剧情是否有明显断裂或逻辑硬伤。
-
-只输出 JSON（不要 Markdown 包裹）：{{"issues":[{{"chapter":N,"type":"矛盾类型","desc":"一句话说明"}}]}}
-无问题则输出：{{"issues":[]}}
-
-【大纲设定】
-{json.dumps(outline, ensure_ascii=False)[:1500]}
-
-【已生成章节】
-{chapters}"""
-
-
-def quality_review_prompt(text, qa_evidence=""):
-    """语义级五维评分（开篇/爽点/钩子/动机/节奏），输出 JSON。
-
-    qa_evidence：本地质检证据（钩子有无/爽点密度/AI 味/爽点落点），注入后 LLM 评审带证据打分，
-    避免与本地检测互相矛盾（终审官实测抓到「评审 100 分但钩子无」的分裂案例）。"""
-    ev = ""
-    if qa_evidence:
-        ev = f"\n【本地质检证据（规则引擎实测，评分时必须与之对照，不得与证据矛盾）】\n{qa_evidence}\n"
-    return f"""请以网文编辑的眼光为下面的章节打分（每项 0~100）：
-1. opening：开篇是否快速进入事件、有代入感（黄金三章标准）
-2. thrill：爽点密度与强度（打脸/升级/收获/秘密揭露，以及三视角侧面反响/震惊链闭环）
-3. hook：章末钩子是否让人想看下一章（悬念/变故/威胁）
-4. motivation：人物动机是否清晰、行为是否合理
-5. rhythm：节奏是否张弛有度、无注水、无流水账（压抑蓄水后是否及时释放打脸）
-{ev}
-严格输出 JSON（不要 Markdown 包裹）：
-{{"scores":{{"opening":85,"thrill":60,"hook":90,"motivation":75,"rhythm":80}},"overall":78,"comment":"一句话点评（30字内）"}}
-
-【章节正文】
-{text}"""
-
-
-def rewrite_prompt(text, comment, scores):
-    """低分章节定向重写（保留情节与钩子，针对薄弱维度改进）。"""
-    dims = ""
-    if scores:
-        dims = "薄弱维度参考：" + " ".join(f"{k}={v}" for k, v in scores.items())
-    return f"""你是资深网文编辑。下面的章节质量评分偏低，请重写以提升质量：
-
-- 保留原情节、人物、伏笔、章末钩子，不新增、不删减剧情
-- 针对薄弱维度重点改进：开篇快速进入事件 / 爽点密度 / 章末钩子 / 人物动机 / 节奏
-- 反AI腔：全篇「仿佛/似乎/宛如」合计不超过 2 次，禁用万能描写
-- 保持原有段落结构，总字数与原作相当（只多不少）
-
-原评语：{comment}
-{dims}
-
-【章节正文】
-{text}
-
-只输出重写后的完整正文，不要任何解释或前缀。"""
-
-
-def state_extract_prompt(text, prev_state):
-    """跨章状态提取：维护状态清单供下一章写作遵守（防人物状态断片 + 防剧情重复线）。"""
-    prev = prev_state if prev_state and prev_state.strip() else "（无）"
-    return f"""你是长篇小说状态管理员。请根据本章内容，维护一份「跨章状态清单」，供下一章写作时遵守，防止人物状态断片（如上一章断腿、下一章健步如飞），并防止剧情重复线（如上一章已取走遗物、下一章又设计一次取遗物）。
-
-只记录硬状态：
-- 人物伤势（含恢复情况）、修为/境界变化
-- 人物关系（谁是谁的父亲/师父/仇家等——关系确立后不得改写换人，防关系张冠李戴）
-- 随身物品的获得/丢失（含具体物名：玉简/银戒/灰布/断剑/钥匙等）
-- 承诺、恩怨、伪装身份
-- 关键地点变化
-- 已发生的关键事件（探秘/寻宝/获传承/对峙等，注明已完成，下章不得重复设计同一事件）
-
-要求：
-1. 在旧状态基础上增删改，不要整段重写
-2. 每条一行，格式：人物：状态；关系：A是B的师父；物品：xxx；事件：xxx（已完成）
-3. 输出 3~10 行，简洁具体
-4. 只输出状态清单文本，不要任何解释或 Markdown
-
-【旧状态】（首次为空）
-{prev}
-
-【本章内容】
-{text}"""
-
-
 # ============================================================
 # 关卡 5 · 编造核查（投前五关最后一关，2026-09-23）
 # ============================================================
 # 与写手不同模型家族独立核查（写手主位 dsf/DeepSeek → 核查走规划官 glm 链），
 # 对照户籍表/数字台账/跨章状态，抓「身份换人 / 数字漂移 / 状态矛盾 / 无中生有」。
 # 必须在户籍表更新前调用——核查的是「本章 vs 前章已确立事实」。
-FACT_CHECK_SYS = "你是独立事实核查员，只输出 JSON，不要任何解释。"
 # 核查预算（2026-09-26 门禁 v7 实锤修复）：PLANNER_CHAIN 主位是思考型 glm-5.2，
 # 原固定 3000 预算下「思考链吃满 → 正文为空 → 整章核查记 error」三章复发，直接把门禁
 # 第 16 项判负。逐档重试：8000（与链定义同档）→ 16000（仍被吃满时的最后一道）。
 FACT_CHECK_BUDGETS = (8000, 16000)
-
-
-def fabrication_check_prompt(chapter_text, registry, state_track, idx):
-    """编造核查 prompt：对照已确立事实核查本章正文的编造/篡改。"""
-    reg = registry_block(registry) or "（空）"
-    facts = facts_block(registry) or "（无已确立数字）"
-    return f"""对照下列已确立事实，核查第 {idx} 章正文是否编造/篡改了事实：
-1. 身份矛盾：给户籍表内姓名安排了不同身份/职业/立场
-2. 数字漂移：同一事项的金额/期限/数量与数字台账不一致（新事项首次出现的数字不算问题）
-3. 状态矛盾：与跨章状态清单冲突的伤势/修为/物品得失
-4. 无中生有：把前文从未确立的细节当前文既定事实引用（凭空师门/恩怨/旧约）
-
-只输出 JSON：
-{{"fabrications":[{{"claim":"正文问题断言原句节选（30字内）","evidence":"对照依据","type":"identity|number|state|fabricated"}}]}}
-没有问题就输出 {{"fabrications":[]}}。
-
-【配角户籍表】
-{reg}
-
-【数字台账】
-{facts}
-
-【跨章状态清单】
-{state_track or "（无）"}
-
-【第 {idx} 章正文】
-{chapter_text}"""
 
 
 def run_fact_check(registry, state_track, final_text, idx):
@@ -506,42 +230,6 @@ def run_fact_check(registry, state_track, final_text, idx):
         else:
             print(f"    [核查] 预算提到 {budget} 仍未取到合法 JSON，本轮核查放弃")
     return None
-
-
-def fact_fix_prompt(chapter_text, fabrications, idx):
-    """编造定点修 prompt：只处置核查命中的断言，其余段落一字不动。
-
-    三条处置路径（优先删/弱化）：无据断言要么删，要么改成非断言（传闻/未证实），
-    要么在本章内补出「谁、何时、为何、在哪」变成本章首次确立的设定。
-    字数下限沿用 FIX_MIN_RATIO——删掉的部分必须用等量铺陈补回，禁止「以删代修」。
-    """
-    words = count_words(chapter_text or "")
-    floor = int(words * FIX_MIN_RATIO)
-    items = []
-    for fb in fabrications[:8]:
-        claim = str(fb.get("claim", "")).strip()
-        if not claim:
-            continue
-        ev = str(fb.get("evidence", "")).strip() or "台账/前文无据"
-        items.append(f"- [{fb.get('type', 'fabricated')}] 断言「{claim}」｜核查依据：{ev}")
-    listing = "\n".join(items) or "- （无明细，按「无据断言」类型自行定位）"
-    floor_line = ""
-    if floor:
-        floor_line = (f"【字数硬约束】改写后正文不得少于 {floor} 字（原文 {words} 字）："
-                      "删掉的断言要用等量的铺陈/对白补回，禁止整段删除凑字数差。\n")
-    return f"""第 {idx} 章被独立事实核查员判出 {len(fabrications)} 处与户籍表/数字台账/跨章状态无据的断言。
-请**只处置下列断言**，其余段落一字不改；人名、事件顺序、已确立的台账数字、章末钩子必须原样保留：
-{listing}
-
-每处断言按优先级三选一：
-1. 删掉该断言；或
-2. 改写成非断言（传闻/猜测/未证实的口气，如「据说…」「他也不确定…」），确保后续章节不会把它当既定事实；或
-3. 确为剧情必需时，在本章内补出来龙去脉（谁在何时为何、在哪儿），让它成为本章首次确立的设定。
-{floor_line}
-只输出改写后的完整正文，不要任何解释、说明或前言。
-
-【第 {idx} 章正文】
-{chapter_text}"""
 
 
 def fact_check_stage(registry, state_track, final_text, idx, genre):
@@ -587,63 +275,6 @@ def fact_check_stage(registry, state_track, final_text, idx, genre):
 
 
 # 外显爽点场景的识别键：规划层 goal 里出现任一即视为爽点场景。
-PAYOFF_SCENE_KEYS = ("外显爽点", "打脸", "当众")
-
-
-def is_payoff_scene(goal, stage="", si=0, total=0):
-    """本场景是否承担「外显爽点」职责（关键词 **或** 位置双通道判定）。
-
-    为什么不能只靠关键词（2026-09-29 实测）：
-    ① `scene_planning_prompt` 要求 goal「20字内」，模型很少写满「外显爽点/打脸」
-       这类词——14 本真实成书 108 章里仅 **16 章**的 goal 含爽点键，
-       于是 novel_pipeline 的写手硬约束几乎永不触发，💥 通道系统性断供；
-    ② 规划链失败走 `fallback_scenes` 时，骨架 goal 是固定文案
-       （「事件推进，冲突升级」等），关键词更不可能命中。
-
-    故补位置通道：写作准则要求「爽点放在章内后半段、先压后扬」，而场景按
-    起承转合顺序排列——**后半段的「转」场景天然是爽点位**。两个通道取或：
-    关键词命中照旧（尊重规划层显式意图），位置兜底则保证「每章至少一个
-    外显爽点场景」不再依赖模型是否恰好用了那三个词。
-    """
-    if any(k in (goal or "") for k in PAYOFF_SCENE_KEYS):
-        return True
-    if not total:
-        return False
-    # 后半段（进度 >= 55%）且 stage 为「转」——起承转合的第三拍
-    return stage == "转" and (si + 1) / total >= 0.55
-
-
-def payoff_scene_constraint(goal):
-    """写手「外显爽点」硬约束文案（两处调用点共用，避免文案漂移）。"""
-    return ("【本场景硬约束·外显爽点】这是外显爽点场景：必须写出对手/旁观者的"
-            "当众外部反应（脸色骤变、失态、惊呼、修为显化、围观哗然），"
-            "禁止只写主角内心感受或含蓄暗示。")
-
-
-def fallback_scenes(goal, target):
-    """场景规划全档失败时的兜底骨架（起承转合，字数按章目标 30/25/25/20 分配）。
-
-    兜底只是「不空转」的底线：场景目标里没有世界/设定锚点，写手只能自己脑补——
-    v7 四章里三章走兜底，随后第 1/2/3 章连挂「世界观未落地」、第 2 章 6 处编造。
-    小章（target 小）时下限取 min(400, target/4)，避免四段之和反超章目标。
-    """
-    floor = min(400, max(1, int(target // 4)))
-    # 「转」场景定为外显爽点场景：与 scene_planning_prompt「爽点放章内后半段、
-    # 压抑不超过 60%」对齐（转 = 第 3/4 个场景，位置天然落在后半段）。
-    # 此前兜底骨架**一个爽点场景都没有**——规划链失败走兜底时，
-    # 写手的「外显爽点硬约束」（novel_pipeline 按 goal 含「外显爽点/打脸/当众」
-    # 触发）永不命中，💥 通道必然断供。实测 14 本书里仅 16/108 章的 goal
-    # 含爽点键，而兜底章占其中一部分，这是断供的结构性成因之一。
-    return [
-        {"index": 0, "stage": "起", "goal": f"场景铺垫：{goal[:30]}", "beats": [],
-         "targetWords": max(floor, int(target * 0.3))},
-        {"index": 1, "stage": "承", "goal": "事件推进，冲突升级", "beats": [],
-         "targetWords": max(floor, int(target * 0.25))},
-        {"index": 2, "stage": "转", "goal": "外显爽点：局势逆转，当众打脸或收获到手",
-         "beats": [], "targetWords": max(floor, int(target * 0.25))},
-        {"index": 3, "stage": "合", "goal": "收束本章并埋下钩子", "beats": [],
-         "targetWords": max(floor, int(target * 0.2))},
-    ]
 
 
 # 场景规划预算：与关卡5 同款教训——规划官链主位是思考型 glm-5.2、链自身 max_tokens=8000，
@@ -703,191 +334,6 @@ def update_registry(output, registry, final_text, idx):
     append_state(output, "registry", registry)
     print(f"  [户籍] 户籍表 {len(registry.get('characters', []))} 人 / "
           f"数字台账 {len(registry.get('facts', []))} 条")
-
-
-def reader_proxy_prompt(text, genre):
-    """读者官 prompt（第 12 角色）：以追读读者视角回答三问。
-
-    输出纯文本 3 行（非 JSON，与状态提取同理——轻任务避免解析失败）：
-    追不追 / 哪里想划走 / 下一章最想看到什么。反馈注入下一章场景规划。"""
-    return f"""你是一位番茄小说的重度读者，正在追一本{genre}小说。你刚看完下面这一章，
-凭真实读感回答三个问题（每问一行，共 3 行，每行不超过 40 字，直说不客气）：
-
-1. 追：下一章你点不点？【追 / 犹豫 / 弃】，加半句原因
-2. 弃点：本章哪一段你想划走或快进（没有写"无"）
-3. 期待：下一章你最想看到什么（具体到情节，不写空话）
-
-只输出这 3 行，不要任何解释、序号以外的格式。
-
-【本章正文】
-{text}"""
-
-
-def load_reader_feedback(path):
-    """续传恢复：取最后一条 type=reader_feedback 记录的反馈文本（无则空串）。"""
-    if not os.path.exists(path):
-        return ""
-    fb = ""
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            if rec.get("type") == "reader_feedback":
-                d = rec.get("data", {})
-                if isinstance(d, dict):
-                    fb = str(d.get("feedback", ""))
-    return fb
-
-
-def chief_editor_prompt(outline, chapters, reviews, state_track,
-                        foreshadow_ledger, genre, total_words):
-    """终审官 prompt：全书收官总评。输入结构化摘要 + 样本正文，避免整本塞不下。"""
-    rev_map = {r["idx"]: r for r in reviews}
-    lines = []
-    for c in chapters:
-        r = rev_map.get(c["idx"], {})
-        lines.append(
-            f"第{c['idx']}章《{c.get('title', '')}》{c.get('words', 0)}字｜"
-            f"评审{r.get('score', '-')}分｜钩子{'有' if c.get('_has_hook') else '无'}｜"
-            f"AI味{c.get('_ai_echo_pct', 0)}%｜问题{len(c.get('issues', []))}处")
-    chapter_table = "\n".join(lines) if lines else "（无章节数据）"
-
-    first = chapters[0].get("content", "")[:1200] if chapters else ""
-    last = chapters[-1].get("content", "")[:1200] if chapters else ""
-    worst_idx = min(reviews, key=lambda r: r.get("score", 100))["idx"] if reviews else 0
-    worst_ch = next((c for c in chapters if c["idx"] == worst_idx), None)
-    worst_text = (worst_ch.get("content", "")[:800] if worst_ch else "（无）")
-
-    open_fs = []
-    try:
-        ledger = json.loads(foreshadow_ledger) if foreshadow_ledger else {}
-        for it in ledger.get("foreshadows", []):
-            if it.get("status") == "open":
-                open_fs.append(f"第{it.get('planted', '?')}章埋：{it.get('desc', '')[:40]}")
-    except Exception:
-        pass
-    fs_text = "\n".join(open_fs[:12]) if open_fs else "（无未收伏笔）"
-    state_text = state_track if state_track and state_track.strip() else "（无）"
-
-    return f"""你是番茄/起点的资深签约终审编辑。这本书已完稿，请你像审签约稿一样给出最终总评。
-你看到的是全书结构化摘要（逐章指标）+ 关键样本正文（首章/末章/评分最低章），不是全文——
-请基于这些证据判断，不要臆造没出现的问题。
-
-【书籍信息】
-书名：《{outline.get('title', '')}》｜题材：{genre}｜总字数：{total_words}｜章节数：{len(chapters)}
-
-【逐章指标】
-{chapter_table}
-
-【跨章状态清单（最终版）】
-{state_text}
-
-【未收伏笔台账】
-{fs_text}
-
-【样本正文一：第 1 章开头 1200 字】
-{first}
-
-【样本正文二：末章开头 1200 字】
-{last}
-
-【样本正文三：评分最低的第 {worst_idx} 章开头 800 字】
-{worst_text}
-
-【终审要求】
-从签约编辑视角评估六个维度（各 0-100）：开篇钩子、节奏曲线（是否有中期塌陷）、
-人物弧光（主角动机-成长-代价是否完整）、爽点与期待感（追读动力）、
-伏笔回收（结合台账判断悬空风险）、结局力度（末章样本是否给读者交代与余韵）。
-问题要具体到章（引用逐章指标里的证据），修改建议要可执行（改哪章、怎么改）。
-
-只输出 JSON（不要 Markdown 代码块）：
-{{"overall": 0-100总分, "verdict": "高潜可投|可投|需打磨|不建议",
- "dimensions": {{"开篇钩子": n, "节奏曲线": n, "人物弧光": n, "爽点与期待感": n, "伏笔回收": n, "结局力度": n}},
- "top_issues": [{{"chapter": n, "issue": "问题", "evidence": "指标证据"}}],
- "fix_priority": ["修改建议1", "修改建议2", "修改建议3"],
- "对标": "一句话说明这本书对标番茄哪类成功作品/差距在哪"}}"""
-
-
-def chief_rewrite_prompt(chapter_text, issue, evidence, fix_hint):
-    """终审打回重写 prompt：定向修复终审官指出的问题，其余不动。"""
-    issue_text = (issue or {}).get("issue", "") if isinstance(issue, dict) else str(issue or "")
-    evidence_text = (issue or {}).get("evidence", "") if isinstance(issue, dict) else ""
-    return f"""你是资深网文编辑。终审编辑审读全书后，把本章打回重写。请定向修复下述问题：
-
-【终审官指出的问题】{issue_text}
-【指标证据】{evidence_text}
-【修改方向参考】{fix_hint or '（无，按问题自行判断）'}
-
-重写要求：
-- 只修复上述问题，保留原有情节走向、人物、已埋伏笔、章末钩子，不新增不删减剧情
-- 修复处要自然融入上下文，不要出现"补丁感"
-- 反AI腔：全篇「仿佛/似乎/宛如」合计不超过 2 次，禁用万能描写
-- 总字数与原章相当（只多不少）
-
-【本章正文】
-{chapter_text}
-
-只输出重写后的完整正文，不要任何解释或前缀。"""
-
-
-def structure_fix_prompt(outline, chapters, state_track, foreshadow_ledger, genre,
-                         chief_report, max_new):
-    """结构打回 prompt：终审官二审不达标后，交规划官决定是否增补收尾章。
-
-    与写前守门（大纲终审官）互补：守门在动笔前拦结构缺陷，结构打回在收官后
-    补救"伏笔悬空/缺结局"这类修章治不了的病。"""
-    ch_lines = []
-    for c in chapters:
-        ch_lines.append(f"第{c['idx']}章《{c.get('title', '')}》：{str(c.get('goal', ''))[:60]}")
-    ch_table = "\n".join(ch_lines) if ch_lines else "（无）"
-    open_fs = []
-    try:
-        ledger = json.loads(foreshadow_ledger) if foreshadow_ledger else {}
-        for it in ledger.get("foreshadows", []):
-            if it.get("status") == "open":
-                open_fs.append(f"- 第{it.get('planted', '?')}章埋：{str(it.get('desc', ''))[:50]}")
-    except Exception:
-        pass
-    fs_text = "\n".join(open_fs) if open_fs else "（无未收伏笔）"
-    issues = chief_report.get("top_issues") or []
-    issue_text = "\n".join(f"- 第{it.get('chapter', '?')}章：{it.get('issue', '')}" for it in issues[:6]) or "（无）"
-    fixes = "\n".join(f"- {x}" for x in (chief_report.get("fix_priority") or [])[:4]) or "（无）"
-    last_idx = max((c.get("idx", 0) for c in chapters), default=0)
-    return f"""你是网文总规划官。终审编辑审读全书后给出了结构级问题，请你决定：是否增补收尾章。
-
-【全书信息】书名《{outline.get('title', '')}》｜题材：{genre}｜当前 {len(chapters)} 章（第 1~{last_idx} 章）
-
-【已有章节】
-{ch_table}
-
-【未收伏笔台账】
-{fs_text}
-
-【终审官指出的问题】
-{issue_text}
-
-【终审官修改建议】
-{fixes}
-
-【跨章状态清单（最终版）】
-{state_track or '（无）'}
-
-【规划要求】
-1. 若「伏笔悬空/缺结局/主线未收束」确需收尾：输出 1~{max_new} 个收尾章章纲。收尾章必须：
-   - 自然回收上面列出的主要伏笔（goal 里点名回收哪几条、怎么收）
-   - 给主线冲突一个阶段性交代（大典/决战/摊牌），并留续作余韵
-   - idx 从 {last_idx + 1} 顺延；title 不超过 8 字；goal 按四元组
-  （新信息=…｜变化=…｜主角选择=…｜钩子=…，各键值 15~40 字）外加「回收伏笔=…」键，
-  缺任一四元组键视为不合格
-2. 若判定现有章节已能自洽收尾、加章反而注水：输出空数组，并给出一句话理由。
-3. 严格沿用已有世界观、人物与设定，不得新增主角、不改已有设定。
-4. 只输出 JSON（不要 Markdown 代码块）：
-{{"new_chapters": [{{"idx": {last_idx + 1}, "title": "不超过8字", "goal": "新信息=…｜变化=…｜主角选择=…｜钩子=…｜回收伏笔=…", "hook": "章末钩子一句话"}}], "reason": "一句话理由"}}"""
 
 
 def generate_appended_chapter(ch, ctx):
@@ -1129,58 +575,6 @@ def generate_appended_chapter(ch, ctx):
     return record
 
 
-def build_promise_block(ledger_json, max_promises=6, cur_idx=None, stale_after=None):
-    """从伏笔台账提取 open 条目，构造成「本章必兑现清单」硬约束文本。
-
-    治「指令执行衰减」：泛泛的"回收伏笔"会被写手衰减成任意剧情（真书验证中
-    规划官下令回收伏笔，写手却写成了开脉突破悬念）。必须逐条给明确的落地
-    要求——答案以对话/物证/内心揭示落到纸面，不得只暗示或留白。
-
-    两种模式：
-    - 收尾章（cur_idx/stale_after 不传）：取全部 open 前 max_promises 条
-    - 普通章（传 cur_idx + stale_after）：只取「埋设超时未收」的条目
-      （planted ≤ cur_idx - stale_after），每章最多 max_promises 条——
-      普通章只在伏笔快烂时上硬约束，不背全部回收负担。"""
-    items = []
-    try:
-        ledger = json.loads(ledger_json) if ledger_json else {}
-        for it in ledger.get("foreshadows", []):
-            if not (isinstance(it, dict) and it.get("status") == "open" and it.get("desc")):
-                continue
-            if cur_idx is not None and stale_after is not None:
-                planted = it.get("planted", 0)
-                try:
-                    age = int(cur_idx) - int(planted)
-                except (TypeError, ValueError):
-                    continue
-                if age < stale_after:
-                    continue
-            items.append(str(it["desc"])[:60])
-    except Exception:
-        pass
-    items = items[:max_promises]
-    if not items:
-        return ""
-    lines = ["【本章必兑现清单（硬约束：必须逐条写进正文，以对话/物证/内心揭示给出明确答案，不得只暗示或留白）】"]
-    for i, d in enumerate(items, 1):
-        lines.append(f"{i}. {d}——本章必须明确交代其答案（人物对话点破、实物证据呈现、内心揭示皆可，答案必须落到纸面）。")
-    return "\n".join(lines)
-
-
-def verify_promises_prompt(text, promise_lines, chapter_idx):
-    return f"""你是伏笔回收验收员。下面是第 {chapter_idx} 章正文和「必兑现清单」，
-请逐条核验正文是否真的兑现了清单要求（答案是否落到纸面；只暗示/留白/远景铺陈不算兑现）。
-
-【必兑现清单】
-{promise_lines}
-
-【章节正文】
-{text}
-
-只输出 JSON（不要 Markdown 代码块）：
-{{"results": [{{"id": 序号, "fulfilled": true或false, "evidence": "正文证据句，不超过20字（未兑现则填缺失原因，不超过20字）"}}]}}"""
-
-
 def verify_and_repair_promises(final_text, promise_lines, chapter_idx, genre):
     """回收清单打勾校验 + 定向补写（最多 1 轮）。返回 (final_text, results)。
 
@@ -1240,90 +634,6 @@ def verify_and_repair_promises(final_text, promise_lines, chapter_idx, genre):
     return final_text, results
 
 
-def verdict_from_score(overall):
-    """按分数区间本地判档。终审评分跨轮方差大（实测同书 83/68/64/71/64），
-    verdict 改由分数区间决定——同分必同档，模型判词降级为参考。"""
-    try:
-        s = float(overall)
-    except (TypeError, ValueError):
-        return ""
-    if s >= 80:
-        return "高潜可投"
-    if s >= 70:
-        return "可投"
-    if s >= 60:
-        return "需打磨"
-    return "不建议"
-
-
-def _merge_chief_samples(samples):
-    """终审多采样合并：overall 与六维各取中位数（偶数取均值四舍五入），
-    top_issues/fix_priority/对标以首个成功采样为准（跨采样合并去重易引入噪声）。
-    治「评分方差」：实测同书单轮 83/68/64/71/64 波动，双采样中位可显著收敛。"""
-    ok = [s for s in samples if s and s.get("overall") is not None]
-    if not ok:
-        return None
-
-    def median(vals):
-        vals = sorted(float(v) for v in vals if v is not None)
-        if not vals:
-            return None
-        n = len(vals)
-        m = vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2
-        return int(round(m))
-
-    merged = dict(ok[0])
-    merged["overall"] = median([s.get("overall") for s in ok])
-    dim_keys = set()
-    for s in ok:
-        dim_keys.update((s.get("dimensions") or {}).keys())
-    dims = {}
-    for k in dim_keys:
-        vals = [(s.get("dimensions") or {}).get(k) for s in ok]
-        vals = [v for v in vals if v is not None]
-        if vals:
-            dims[k] = median(vals)
-    merged["dimensions"] = dims
-    # 模型判词降级为参考，verdict 由分数区间决定（同分同档）
-    merged["model_verdict"] = ok[0].get("verdict", "")
-    merged["verdict"] = verdict_from_score(merged["overall"])
-    merged["samples"] = len(ok)
-    return merged
-
-
-def apply_promise_closures(ledger_json, promise_results, chapter_idx):
-    """打勾 ✅ 联动台账：校验通过的条目直接标记 closed（证据句作回收凭证）。
-
-    治「台账不闭环」：此前台账更新依赖伏笔官二次提取，限流/截断下易失败，
-    导致正文明明回收了伏笔、台账却仍 open（终审官会误判"伏笔悬空"）。
-    映射关系：清单第 n 条 ↔ 台账 open 列表第 n 个（build_promise_block 同序）。
-    返回 (新台账JSON, closed数量)。"""
-    try:
-        ledger = json.loads(ledger_json) if ledger_json else {}
-    except Exception:
-        return ledger_json or "{}", 0
-    items = ledger.get("foreshadows", []) if isinstance(ledger, dict) else []
-    open_idx = [i for i, it in enumerate(items)
-                if isinstance(it, dict) and it.get("status") == "open"]
-    n_closed = 0
-    for r in promise_results:
-        if r.get("id") == "verify" or not r.get("fulfilled"):
-            continue  # 校验失败标记与未兑现条目不联动
-        try:
-            n = int(r.get("id", 0))
-        except (TypeError, ValueError):
-            continue
-        if 1 <= n <= len(open_idx):
-            item = items[open_idx[n - 1]]
-            item["status"] = "closed"
-            item["recovered"] = chapter_idx
-            item["evidence"] = str(r.get("evidence", ""))[:80]
-            n_closed += 1
-    if n_closed:
-        return json.dumps(ledger, ensure_ascii=False), n_closed
-    return ledger_json or "{}", 0
-
-
 def ensure_complete_ending(final_text, genre, max_rounds=2):
     """末尾完整性检查 + 自动补全（公共函数，主循环与结构补章共用）。
 
@@ -1351,44 +661,6 @@ def ensure_complete_ending(final_text, genre, max_rounds=2):
             print("  [补全] 补全失败，保留原文")
             break
     return final_text, repaired
-
-
-def outline_review_prompt(outline, genre, total_words, max_chapters):
-    """大纲终审官 prompt：写前守门。只查「写进正文后修章治不了」的结构级缺陷。
-    检查清单由真实成书教训沉淀（《断脉逆命诀》：第 1 章 6 条伏笔全悬、末章停"大典前夕"）。"""
-    o = json.dumps(outline, ensure_ascii=False, indent=1)
-    return f"""你是番茄/起点资深内容主编。规划编辑刚交来一部长篇网文的大纲，
-动笔前请你做结构级把关——只看大纲本身，判断这本书"按此大纲写下去"会不会出结构性硬伤。
-
-【书籍信息】题材：{genre}｜目标总字数：{total_words}｜章数上限：{max_chapters}｜实际规划章数：{len(outline.get('chapter_outlines', []))}
-
-【大纲全文】
-{o}
-
-【结构级检查清单（逐项过）】
-1. 伏笔分布：单章新埋伏笔不得超过 2 条；第 1 章只允许埋 1-2 条核心伏笔，
-   严禁把全书伏笔塞进第 1 章（真实教训：某书第 1 章埋 6 条伏笔、全书仅 6 章，终审时全部悬空）。
-   每条伏笔必须在后续章节章纲里有对应的回收/推进安排；伏笔总数不超过章节数 × 0.8。
-2. 末章必须有结局：最后一章章纲必须是决战/收尾/回收型，要写出结果与余韵；
-   严禁停在大典前夕/出发前夜/计划进行中这类"前夕态"（真实教训：某书末章停"大典前夕"，
-   终审官二审以 66 分打回且无法用修章解决）。
-3. 单章信息密度：每章新增设定（新势力/新规则/新人物关系）不超过 2 个，超载章列出来。
-4. 钩子链：每章章纲的"钩子"要素是否存在且类型有变化；连续两章同型钩子（如连续"威胁逼近"）算弱。
-5. 主线闭环：主角动机-目标-障碍-代价在大纲层面是否闭环；金手指是否带代价约束。
-6. 节奏分布：是否存在连续 2 章无冲突推进/纯铺垫的中段塌陷区。
-
-【输出要求】
-只输出 JSON（不要 Markdown 代码块）。发现问题（pass=false）时必须给出修订后的完整大纲：
-结构键与原大纲完全一致（title/blurb/tags/protagonist/world/hook/chapter_outlines），
-只修问题，不改书名/主角名/世界观主干/题材，章节数不得减少：
-
-{{"pass": true或false,
- "overall": 0到100的整数,
- "issues": [{{"chapter": "全局或章号", "issue": "问题", "evidence": "大纲中的证据"}}],
- "advice": ["一句话修改方向1", "方向2"],
- "revised_outline": {{...仅 pass=false 时必填，修订版全量大纲 JSON...}}}}
-
-pass=true 时可省略 revised_outline。"""
 
 
 def review_outline(outline, genre, total_words, max_chapters, output_path):
@@ -1445,108 +717,13 @@ def review_outline(outline, genre, total_words, max_chapters, output_path):
     return rev, rv
 
 
-def load_reviews_from_jsonl(path):
-    """续传恢复：从 jsonl 的 type=review 记录重建 reviews（每章 last-wins，全字段透传）。
-
-    旧格式记录只存 idx/score/verdict/problems（缺 redline/words），读取方须用 .get() 兜底；
-    新格式存完整 rv dict。
-    """
-    out = {}
-    if not os.path.exists(path):
-        return []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            if rec.get("type") == "review":
-                d = rec.get("data", {})
-                if isinstance(d, dict) and d.get("idx") is not None:
-                    out[d["idx"]] = d
-            elif rec.get("type") == "chief_rewrite":
-                # 打回重写的复审分覆盖旧评审（last-wins）：live 路径在打回时已同步
-                # reviews[ri]，续传路径此前只恢复内容不恢复分数，评估卡/终审会拿旧分
-                d = rec.get("data", {})
-                if isinstance(d, dict) and d.get("idx") is not None and d.get("rescore") is not None:
-                    cur = out.get(d["idx"])
-                    if isinstance(cur, dict):
-                        cur["score"] = d["rescore"]
-                    else:
-                        out[d["idx"]] = {"idx": d["idx"], "score": d["rescore"],
-                                         "verdict": "重写复审", "words": d.get("words"),
-                                         "problems": []}
-    return [out[k] for k in sorted(out)]
-
-
-def apply_chief_rewrites(path, state):
-    """续传恢复：回放 type=chief_rewrite 补丁（同章 last-wins），保证重写内容不因断点丢失。"""
-    if not os.path.exists(path):
-        return 0
-    patches = {}
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            if rec.get("type") == "chief_rewrite":
-                d = rec.get("data", {})
-                patches[d.get("idx")] = d
-    n = 0
-    for ch in state.get("chapters", []):
-        p = patches.get(ch.get("idx"))
-        if p and p.get("content"):
-            ch["content"] = p["content"]
-            ch["words"] = p.get("words", ch.get("words", 0))
-            if p.get("has_hook") is not None:
-                ch["_has_hook"] = p["has_hook"]
-            n += 1
-    return n
-
-
 # ============================================================
 # 跨章状态持久化（写入 jsonl 的 type=state_track 行）
-def load_state_track(path):
-    """从进度文件恢复跨章状态清单（无则返回空串）。"""
-    if not os.path.exists(path):
-        return ""
-    latest = ""
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            if rec.get("type") == "state_track":
-                # 同名状态记录按最后一条恢复，避免续跑回退到第一章状态。
-                latest = rec.get("data", "")
-    return latest
-
 
 
 # ============================================================
 # 主线
 # ============================================================
-def _splice_head(text, new_head, min_cut=300, hard_cap=700):
-    """把开头替换成 new_head，切点落在段落边界（避免把句子拦腰剪断）。"""
-    if not new_head or not new_head.strip():
-        return text
-    cut = text.find("\n\n")
-    while cut != -1 and cut < min_cut:
-        cut = text.find("\n\n", cut + 2)
-    if cut == -1 or cut > hard_cap:
-        cut = min(hard_cap, len(text))
-    return new_head.strip() + "\n\n" + text[cut:].lstrip()
 
 
 VAGUE_WORLD_PAT = ("大陆名|朝代名|星域名|主舞台城市|案发城市|城市名|联赛舞台|战场背景"
