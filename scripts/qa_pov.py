@@ -15,7 +15,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from qa_text import strip_dialogue  # noqa: E402
 
-
 FIRST_PRON = ("我", "俺", "咱")
 
 

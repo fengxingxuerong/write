@@ -66,6 +66,7 @@ def probe(slot):
     返回 (ok, chars, sec, note)。**不能用短探针**——短探针对「慢/坏」不可区分。
     """
     import threading
+
     import novel_pipeline as nppl
 
     prompt = (f"请写一个玄幻小说场景，约 {PROBE_CHARS} 字：主角当众击败对手。\n"

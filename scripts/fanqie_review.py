@@ -37,28 +37,28 @@ except Exception:
 try:  # pragma: no cover - 分支取决于调用方式
     from .quality_rules_generated import (
         FIX_MIN_RATIO,
+        INSTRUCTION_MARKS,
         REDLINE_BRAND_CELEBRITY,
         REDLINE_GORE,
         REDLINE_ILLEGAL_DETAIL,
         REDLINE_MINOR_RISK,
         REDLINE_POLITICS,
         REDLINE_RELIGION,
-        INSTRUCTION_MARKS,
-)
+    )
 except ImportError:  # pragma: no cover - 平铺导入（脚本直跑/同目录 import）
     _here = os.path.dirname(os.path.abspath(__file__))
     if _here not in sys.path:
         sys.path.insert(0, _here)
     from quality_rules_generated import (
         FIX_MIN_RATIO,
+        INSTRUCTION_MARKS,
         REDLINE_BRAND_CELEBRITY,
         REDLINE_GORE,
         REDLINE_ILLEGAL_DETAIL,
         REDLINE_MINOR_RISK,
         REDLINE_POLITICS,
         REDLINE_RELIGION,
-        INSTRUCTION_MARKS,
-)
+    )
 
 # ============================================================
 # 兄弟模块转发（2026-10-10 从本文件拆出）
@@ -68,29 +68,60 @@ except ImportError:  # pragma: no cover - 平铺导入（脚本直跑/同目录 
 # 先补 sys.path 使 `python -m scripts.fanqie_review` 与直跑两种入口都能解析平铺同级模块。
 if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fanqie_metrics import (  # noqa: E402,F401
+    ANCIENT_GENRES,
+    BLOCKING_MIN_WORDS,
+    CLICHE_SENTENCES,
+    CONFLICT_WORDS,
+    DRIVE_WORDS,
+    INTRA_REPEAT_GRAM,
+    INTRA_REPEAT_MIN_BLOCK,
+    META_TALK,
+    MODERN_MARKERS,
+    NAME_PAT,
+    PROMPT_LEAK,
+    SURNAMES,
+    TRIAD_END_WORDS,
+    _dup_spans,
+    _long_paras,
+    _para_dup,
+    agency_check,
+    blocking_reasons,
+    cliche_overlap,
+    dedup_intra_repeat,
+    ending_ev_fragment,
+    ending_triad,
+    filler_ratio,
+    first_screen_check,
+    genre_drift,
+    intra_repeat,
+    looks_like_name,
+    meta_talk,
+    name_drift,
+    pacing_stats,
+    prompt_leak,
+    repeat_with_prev,
+    self_repeat_ratio,
+)
 from fanqie_text import (  # noqa: E402,F401
-    CHAPTER_RE, SENT_SPLIT, CHAR_RE, QUOTE_RE,
-    count_words, sentences, paragraphs, dialogue_ratio,
+    CHAPTER_RE,
+    CHAR_RE,
+    QUOTE_RE,
+    SENT_SPLIT,
+    count_words,
+    dialogue_ratio,
+    paragraphs,
+    sentences,
     split_chapters,
 )
-
-from fanqie_metrics import (  # noqa: E402,F401
-    CLICHE_SENTENCES, TRIAD_END_WORDS, DRIVE_WORDS, NAME_PAT,
-    CONFLICT_WORDS, PROMPT_LEAK, META_TALK, MODERN_MARKERS,
-    ANCIENT_GENRES, INTRA_REPEAT_MIN_BLOCK, INTRA_REPEAT_GRAM, BLOCKING_MIN_WORDS,
-    SURNAMES, looks_like_name, ending_triad, ending_ev_fragment,
-    first_screen_check, pacing_stats, filler_ratio, cliche_overlap,
-    repeat_with_prev, agency_check, self_repeat_ratio, name_drift,
-    blocking_reasons, prompt_leak, meta_talk, genre_drift,
-    intra_repeat, dedup_intra_repeat, _dup_spans, _long_paras,
-    _para_dup,
-)
-
 from fanqie_world import (  # noqa: E402,F401
-    _SEP_CHARS, _TERM_OK, _GENERIC_WORLD, extract_world_terms,
-    _term_hit, world_consistency,
+    _GENERIC_WORLD,
+    _SEP_CHARS,
+    _TERM_OK,
+    _term_hit,
+    extract_world_terms,
+    world_consistency,
 )
-
 
 # ============================================================
 # 1) 红线词表（番茄平台审核红线，6 类）

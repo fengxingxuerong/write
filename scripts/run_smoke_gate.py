@@ -40,11 +40,15 @@ OUT_DEFAULT = os.path.join(ROOT, "data", "generated", "smoke_gate.jsonl")
 
 # 复用评审器的正文级检测器：门禁与评审同口径，避免「评审报的硬伤门禁看不见」
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fanqie_review import blocking_reasons, genre_drift, intra_repeat, meta_talk, prompt_leak  # noqa: E402
 from generate_novel import _sidecar_path  # noqa: E402
-from fanqie_review import (blocking_reasons, genre_drift, intra_repeat,  # noqa: E402
-                           meta_talk, prompt_leak)
-from qa_semantic_check import (detect_pov_drift, detect_name_drift,  # noqa: E402
-                               detect_content_drift, detect_relation_drift)
+from qa_semantic_check import (  # noqa: E402
+    detect_content_drift,
+    detect_name_drift,
+    detect_pov_drift,
+    detect_relation_drift,
+)
+
 # 外部效度状态：在 PASS 正下方披露「达线仅为自洽」，见 docs/human-eval-workflow.md
 from quality_validation import caveat_lines  # noqa: E402
 

@@ -9,7 +9,6 @@
 """
 import re
 
-
 DIALOGUE_PATTERNS = [
     re.compile(r"‘[^’]*’"),
     re.compile(r"“[^”]*”"),

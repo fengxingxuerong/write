@@ -50,31 +50,55 @@ CHAPTER_RE = re.compile(r"^\s*(第\s*\d+\s*章[^\n]*)", re.MULTILINE)
 # 先补 sys.path 使 `python -m scripts.qa_semantic_check` 与直跑两种入口都能解析平铺同级模块。
 if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from qa_text import (  # noqa: E402,F401
-    DIALOGUE_PATTERNS, strip_dialogue,
-)
-
-from qa_pov import (  # noqa: E402,F401
-    FIRST_PRON, THIRD_PRON, POV_MIN_NARR_CHARS, POV_MIN_PRON,
-    POV_FIRST_RATIO, POV_THIRD_RATIO, POV_STABLE_RUN, split_blocks,
-    block_pov, detect_pov_drift,
-)
-
-from qa_names import (  # noqa: E402,F401
-    SURNAMES, VERB_CHARS, STOP_NAMES, OBJ_SUFFIX,
-    PLACEHOLDER_RES, NICKNAME_RES, PRON_SUFFIX, MIN_CAND_FREQ,
-    MIN_CLUSTER_FREQ, MIN_MEMBER_FREQ, SPAN_OVERLAP_ALERT, discover_names,
-    cluster_names, detect_name_drift,
-)
-
 from qa_content import (  # noqa: E402,F401
-    GENRE_CONTENT_WORDS, CONTENT_MIN_CHARS, CONTENT_SUSPECT_RATIO, CONTENT_SUSPECT_CAP,
-    _title_keywords, detect_content_drift,
+    CONTENT_MIN_CHARS,
+    CONTENT_SUSPECT_CAP,
+    CONTENT_SUSPECT_RATIO,
+    GENRE_CONTENT_WORDS,
+    _title_keywords,
+    detect_content_drift,
 )
-
+from qa_names import (  # noqa: E402,F401
+    MIN_CAND_FREQ,
+    MIN_CLUSTER_FREQ,
+    MIN_MEMBER_FREQ,
+    NICKNAME_RES,
+    OBJ_SUFFIX,
+    PLACEHOLDER_RES,
+    PRON_SUFFIX,
+    SPAN_OVERLAP_ALERT,
+    STOP_NAMES,
+    SURNAMES,
+    VERB_CHARS,
+    cluster_names,
+    detect_name_drift,
+    discover_names,
+)
+from qa_pov import (  # noqa: E402,F401
+    FIRST_PRON,
+    POV_FIRST_RATIO,
+    POV_MIN_NARR_CHARS,
+    POV_MIN_PRON,
+    POV_STABLE_RUN,
+    POV_THIRD_RATIO,
+    THIRD_PRON,
+    block_pov,
+    detect_pov_drift,
+    split_blocks,
+)
 from qa_relation import (  # noqa: E402,F401
-    REL_WORDS, _REL_ALT, REL_P1_PAT, REL_P2_PAT,
-    _REL_BAD_CHARS, _REL_ADVERBS, _clean_rel_name, detect_relation_drift,
+    _REL_ADVERBS,
+    _REL_ALT,
+    _REL_BAD_CHARS,
+    REL_P1_PAT,
+    REL_P2_PAT,
+    REL_WORDS,
+    _clean_rel_name,
+    detect_relation_drift,
+)
+from qa_text import (  # noqa: E402,F401
+    DIALOGUE_PATTERNS,
+    strip_dialogue,
 )
 
 

@@ -29,13 +29,14 @@ import os
 import re
 import sys
 import time
-from pathlib import Path
+
 # urllib 不是本文件的残留——它是 llm_call 打桩的**注入点**。
 # scripts/test_chain_diversity.py 用 patch.object(np.urllib.request, "urlopen")
 # 截获实发 payload，验证「max_tokens 取调用方传参而非槽位配置」
 # （2026-09-30 规划死循环的根因：诊断打印槽位 8000、实发只有 4000，日志与真实
 # 请求对不上，误导定位半天）。删掉它会让该回归护栏报 AttributeError 而红。
 import urllib.request  # noqa: F401 —— 经 np.urllib.request 动态访问，静态分析看不到
+from pathlib import Path
 
 try:
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -43,37 +44,6 @@ except Exception:
     pass
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from generate_novel import (count_words, parse_json_from_llm, quality_check,
-                            append_state, load_state, export_txt,
-                            planning_prompt_idea, scene_planning_prompt, scene_prompt, hook_for,
-                            has_ending_hook, SYSTEM_PROMPT,
-                            thrill_per_thousand, surge_per_thousand, side_reaction_per_thousand,
-                            release_ev_fragment,
-                            payoff_drought_ev_fragment,
-                            style_fingerprint,
-                            fingerprint_distance, load_style_block,
-                            style_ev_fragment,
-                            registry_block, facts_block, extract_registry_prompt,
-                            merge_registry, merge_facts)  # noqa: E402
-from fanqie_review import (review_chapter, fix_prompt, patch_gate, local_hook_fallback,
-                           extract_world_terms,
-                           ending_ev_fragment)  # noqa: E402
-# 注：原先此处 import quality_rules_generated as _gen，已于2026-10-03 移除——
-# 阈值随 LLM 调用层搬到 pipeline_llm.py 并由下方 from pipeline_llm import 转发，
-# 本文件不再直接引用生成物，留着会触发 ruff F401（CI 的 ruff --select=F 会红）。
-from fanqie_prompts import first_screen_rewrite_prompt, pack_prompt  # noqa: E402
-# 伏笔台账 / 跨章状态清单（2026-10-03 从本文件拆出）。
-# 转发导入而非直接定义，是为了让调用点（generate_appended_chapter / main 等）
-# 与外部测试都无需改动——拆分只降低维护成本，不该顺手制造调用方迁移。
-from foreshadow import (  # noqa: E402,F401
-    foreshadow_extract_prompt,
-    load_foreshadow,
-    save_foreshadow,
-    check_open_foreshadows,
-    scan_used_protagonist_names,
-    save_state_track,
-)
-
 # ============================================================
 # LLM 调用层 + 角色槽位配置（2026-10-03 从本文件拆出）
 # ============================================================
@@ -82,17 +52,91 @@ from foreshadow import (  # noqa: E402,F401
 # ——拆分只降低维护成本，不该顺手制造调用方迁移。槽位常量是**可变对象**，
 # 这里不做任何拷贝，调用方原地改动与拆分前完全一致。
 import pipeline_llm as _llm  # noqa: E402
+
+# 注：原先此处 import quality_rules_generated as _gen，已于2026-10-03 移除——
+# 阈值随 LLM 调用层搬到 pipeline_llm.py 并由下方 from pipeline_llm import 转发，
+# 本文件不再直接引用生成物，留着会触发 ruff F401（CI 的 ruff --select=F 会红）。
+from fanqie_prompts import first_screen_rewrite_prompt, pack_prompt  # noqa: E402
+from fanqie_review import (
+    ending_ev_fragment,  # noqa: E402
+    extract_world_terms,
+    fix_prompt,
+    local_hook_fallback,
+    patch_gate,
+    review_chapter,
+)
+
+# 伏笔台账 / 跨章状态清单（2026-10-03 从本文件拆出）。
+# 转发导入而非直接定义，是为了让调用点（generate_appended_chapter / main 等）
+# 与外部测试都无需改动——拆分只降低维护成本，不该顺手制造调用方迁移。
+from foreshadow import (  # noqa: E402,F401
+    check_open_foreshadows,
+    foreshadow_extract_prompt,
+    load_foreshadow,
+    save_foreshadow,
+    save_state_track,
+    scan_used_protagonist_names,
+)
+from generate_novel import (
+    SYSTEM_PROMPT,
+    append_state,
+    count_words,
+    export_txt,
+    extract_registry_prompt,
+    facts_block,
+    fingerprint_distance,
+    has_ending_hook,
+    hook_for,
+    load_state,
+    load_style_block,
+    merge_facts,
+    merge_registry,  # noqa: E402
+    parse_json_from_llm,
+    payoff_drought_ev_fragment,
+    planning_prompt_idea,
+    quality_check,
+    registry_block,
+    release_ev_fragment,
+    scene_planning_prompt,
+    scene_prompt,
+    side_reaction_per_thousand,
+    style_ev_fragment,
+    style_fingerprint,
+    surge_per_thousand,
+    thrill_per_thousand,
+)
 from pipeline_llm import (  # noqa: E402,F401
-    SENSE, AMD, NVIDIA,
-    PLANNER, PLANNER_CHAIN, WRITER_CHAIN, EDITOR_CHAIN, TITLER,
-    VERIFIER_CHAIN, STATE_EXTRACTOR, READER_PROXY, FORESHADOWER,
-    WORLD_GUARDIAN, THRILL_DIRECTOR, CHIEF_EDITOR_CHAIN,
-    OUTLINE_REVIEWER_CHAIN, THINKING_FLOOR_TOKENS,
-    _key, setup_keys, scene_budget, llm_call, dedup_scene_join,
-    EDITOR_MIN_RATIO, COOLDOWN_SECONDS,
     # 私有符号同样要转发：健康池既是跨函数共享状态（.clear() 复位），
     # 也是测试直接操作的把手（pipeline._HEALTH.clear()）。
-    _HEALTH, _health_key, _mark_fail, _mark_ok, _in_cooldown,
+    _HEALTH,
+    AMD,
+    CHIEF_EDITOR_CHAIN,
+    COOLDOWN_SECONDS,
+    EDITOR_CHAIN,
+    EDITOR_MIN_RATIO,
+    FORESHADOWER,
+    NVIDIA,
+    OUTLINE_REVIEWER_CHAIN,
+    PLANNER,
+    PLANNER_CHAIN,
+    READER_PROXY,
+    SENSE,
+    STATE_EXTRACTOR,
+    THINKING_FLOOR_TOKENS,
+    THRILL_DIRECTOR,
+    TITLER,
+    VERIFIER_CHAIN,
+    WORLD_GUARDIAN,
+    WRITER_CHAIN,
+    _health_key,
+    _in_cooldown,
+    _key,
+    _mark_fail,
+    _mark_ok,
+    dedup_scene_join,
+    llm_call,
+    scene_budget,
+    setup_keys,
 )
 
 # ============================================================
@@ -102,11 +146,26 @@ from pipeline_llm import (  # noqa: E402,F401
 # 及仓库内 16 个 `import novel_pipeline as np` 的测试与探针脚本）零改动——
 # 拆分只降低维护成本，不改对外契约；函数体逐字搬运、未改写。
 from pipeline_prompts import (  # noqa: E402,F401
-    PLANNER_SYS, EDITOR_SYS, TITLER_SYS, VERIFIER_SYS,
-    OUTLINE_REVIEWER_SYS, FACT_CHECK_SYS, editor_prompt, titler_prompt,
-    verifier_prompt, quality_review_prompt, rewrite_prompt, state_extract_prompt,
-    payoff_repair_prompt, fabrication_check_prompt, fact_fix_prompt, chief_editor_prompt,
-    chief_rewrite_prompt, structure_fix_prompt, outline_review_prompt, reader_proxy_prompt,
+    EDITOR_SYS,
+    FACT_CHECK_SYS,
+    OUTLINE_REVIEWER_SYS,
+    PLANNER_SYS,
+    TITLER_SYS,
+    VERIFIER_SYS,
+    chief_editor_prompt,
+    chief_rewrite_prompt,
+    editor_prompt,
+    fabrication_check_prompt,
+    fact_fix_prompt,
+    outline_review_prompt,
+    payoff_repair_prompt,
+    quality_review_prompt,
+    reader_proxy_prompt,
+    rewrite_prompt,
+    state_extract_prompt,
+    structure_fix_prompt,
+    titler_prompt,
+    verifier_prompt,
     verify_promises_prompt,
 )
 
@@ -117,10 +176,22 @@ from pipeline_prompts import (  # noqa: E402,F401
 # 及仓库内 16 个 `import novel_pipeline as np` 的测试与探针脚本）零改动——
 # 拆分只降低维护成本，不改对外契约；函数体逐字搬运、未改写。
 from pipeline_quality import (  # noqa: E402,F401
-    PAYOFF_SCENE_KEYS, extract_chapter_hook, apply_text_patch, dedup_chapter,
-    trailing_drought_len, needs_payoff_repair, accept_payoff_repair, needs_fix,
-    is_payoff_scene, payoff_scene_constraint, fallback_scenes, verdict_from_score,
-    _merge_chief_samples, apply_promise_closures, build_promise_block, _splice_head,
+    PAYOFF_SCENE_KEYS,
+    _merge_chief_samples,
+    _splice_head,
+    accept_payoff_repair,
+    apply_promise_closures,
+    apply_text_patch,
+    build_promise_block,
+    dedup_chapter,
+    extract_chapter_hook,
+    fallback_scenes,
+    is_payoff_scene,
+    needs_fix,
+    needs_payoff_repair,
+    payoff_scene_constraint,
+    trailing_drought_len,
+    verdict_from_score,
 )
 
 # ============================================================
@@ -130,7 +201,10 @@ from pipeline_quality import (  # noqa: E402,F401
 # 及仓库内 16 个 `import novel_pipeline as np` 的测试与探针脚本）零改动——
 # 拆分只降低维护成本，不改对外契约；函数体逐字搬运、未改写。
 from pipeline_state import (  # noqa: E402,F401
-    load_reader_feedback, load_reviews_from_jsonl, apply_chief_rewrites, load_state_track,
+    apply_chief_rewrites,
+    load_reader_feedback,
+    load_reviews_from_jsonl,
+    load_state_track,
 )
 
 

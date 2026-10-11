@@ -17,7 +17,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fanqie_text import count_words  # noqa: E402,F401
 
-
 _SEP_CHARS = set(
     "，。、；：！？（）()《》〈〉“”‘’「」『』【】[]{}\\/\"':;,·—-与和及／｜ \t\r\n"
 )

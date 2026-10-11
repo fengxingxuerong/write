@@ -15,7 +15,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from qa_text import strip_dialogue  # noqa: E402
 
-
 REL_WORDS = ("父亲", "母亲", "师父", "师傅", "丈夫", "妻子", "夫人",
              "儿子", "女儿", "义父", "义母")
 

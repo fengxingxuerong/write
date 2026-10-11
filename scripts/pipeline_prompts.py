@@ -18,9 +18,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from generate_novel import count_words, registry_block, facts_block  # noqa: E402
 from fanqie_review import FIX_MIN_RATIO  # noqa: E402
-
+from generate_novel import count_words, facts_block, registry_block  # noqa: E402
 
 PLANNER_SYS = "你是一位资深网文总编，擅长长篇小说的框架规划。输出严格遵循要求的 JSON 格式。"
 

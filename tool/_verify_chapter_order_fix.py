@@ -15,7 +15,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "..", "scripts"))
-from generate_novel import load_state, export_txt  # noqa: E402
+from generate_novel import export_txt, load_state  # noqa: E402
 
 LEDGER = os.path.join(ROOT, "..", "data", "generated", "novel_10w_pipeline.jsonl")
 

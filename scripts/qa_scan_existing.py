@@ -22,12 +22,19 @@ except Exception:
     pass
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from generate_novel import (has_ending_hook, has_quick_opening, count_words,
-                            thrill_per_thousand, surge_per_thousand, AI_CLICHE,
-                            deep_ai_metrics, release_profile, ending_triad,
-                            side_reaction_per_thousand,
-                            payoff_drought_zones)
-
+from generate_novel import (
+    AI_CLICHE,
+    count_words,
+    deep_ai_metrics,
+    ending_triad,
+    has_ending_hook,
+    has_quick_opening,
+    payoff_drought_zones,
+    release_profile,
+    side_reaction_per_thousand,
+    surge_per_thousand,
+    thrill_per_thousand,
+)
 
 CHAPTER_RE = re.compile(r"^第\s*(\d+)\s*章")
 

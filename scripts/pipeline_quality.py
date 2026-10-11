@@ -23,10 +23,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from fanqie_review import dedup_intra_repeat, patch_gate  # noqa: E402
 from generate_novel import (  # noqa: E402
-    count_words, thrill_per_thousand, surge_per_thousand, side_reaction_per_thousand,
+    count_words,
+    side_reaction_per_thousand,
+    surge_per_thousand,
+    thrill_per_thousand,
 )
-from fanqie_review import patch_gate, dedup_intra_repeat  # noqa: E402
 from pipeline_llm import EDITOR_MIN_RATIO  # noqa: E402
 
 

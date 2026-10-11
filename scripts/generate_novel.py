@@ -43,6 +43,11 @@ for _stream in (sys.stdout, sys.stderr):
 # 写作准则已迁到 fanqie_prompts.py：每一条都能被 fanqie_review.py 量化检查，
 # 避免旧版「准则教套路、质检数词表」的自相矛盾。
 from fanqie_prompts import FANQIE_SYSTEM_PROMPT as SYSTEM_PROMPT  # noqa: E402
+from fanqie_prompts import GOAL_FORMAT as _GOAL_FORMAT
+from fanqie_prompts import GOLDEN3_SPEC as _GOLDEN3  # noqa: E402
+
+# 字数唯一定义在 fanqie_review（下方 count_words 只做薄转发，见该处说明）。
+from fanqie_review import count_words as _count_words  # noqa: E402
 from fanqie_review import (  # noqa: E402
     dialogue_ratio,
     ending_triad,
@@ -52,8 +57,59 @@ from fanqie_review import (  # noqa: E402
     review_chapter,
     self_repeat_ratio,
 )
-# 字数唯一定义在 fanqie_review（下方 count_words 只做薄转发，见该处说明）。
-from fanqie_review import count_words as _count_words  # noqa: E402
+
+# ============================================================
+# 通用流式 LLM 调用 + JSON 解析（2026-10-10 从本文件拆出 -> gen_llm.py）
+# ============================================================
+# 转发导入而非直接定义，是为了让调用点（本文件 main 及仓库内 15+ 个
+# `from generate_novel import ...` / `import generate_novel as gn` 的脚本与测试）
+# 零改动——拆分只降低维护成本，不改对外契约；函数体逐字搬运、未改写。
+from gen_llm import (  # noqa: E402,F401
+    _sanitize_ctrl,
+    call_llm,
+    is_reasoning_model,
+    parse_json_from_llm,
+    repair_json,
+)
+
+# ============================================================
+# 质检指标 + 文本卫生（2026-10-10 从本文件拆出 -> gen_quality.py）
+# ============================================================
+# 转发导入而非直接定义，是为了让调用点（本文件 main 及仓库内 15+ 个
+# `from generate_novel import ...` / `import generate_novel as gn` 的脚本与测试）
+# 零改动——拆分只降低维护成本，不改对外契约；函数体逐字搬运、未改写。
+from gen_quality import (  # noqa: E402,F401
+    AI_ADVERBS,
+    AI_CLICHE,
+    BODY_REACTION_WORDS,
+    GENRE_SURGE_ALL,
+    GENRE_SURGE_EXTRA,
+    GENRE_THRILL_ALL,
+    GENRE_THRILL_EXTRA,
+    METAPHOR_PAT,
+    NEGATION,
+    OPENING_ACTION_WORDS,
+    SENTENCE_CONNECTORS,
+    SINGLE_PARA_MAX_CHARS,
+    STYLE_FP_LIMITS,
+    _split_sentences,
+    _style_fingerprint_metrics,
+    deep_ai_metrics,
+    fingerprint_distance,
+    has_ending_hook,
+    has_quick_opening,
+    load_style_block,
+    payoff_drought_ev_fragment,
+    payoff_drought_zones,
+    release_ev_fragment,
+    release_profile,
+    side_reaction_per_thousand,
+    style_ev_fragment,
+    style_fingerprint,
+    style_fingerprint_block,
+    surge_per_thousand,
+    thrill_per_thousand,
+)
 
 # 词表/阈值单一数据源（rules/quality_rules.json 的生成物，与 Dart QualityRules 同源）。
 # ⚠ 以下词表在 generate_novel 内部已无直接消费点（消费方随拆分迁到 gen_quality），
@@ -68,37 +124,6 @@ from quality_rules_generated import (  # noqa: E402,F401
     SIDE_REACTION_WORDS,
     THRILL_WORDS,
     TRIAD_HOOK_ONLY,
-)
-
-
-from fanqie_prompts import GOLDEN3_SPEC as _GOLDEN3, GOAL_FORMAT as _GOAL_FORMAT  # noqa: E402
-
-# ============================================================
-# 通用流式 LLM 调用 + JSON 解析（2026-10-10 从本文件拆出 -> gen_llm.py）
-# ============================================================
-# 转发导入而非直接定义，是为了让调用点（本文件 main 及仓库内 15+ 个
-# `from generate_novel import ...` / `import generate_novel as gn` 的脚本与测试）
-# 零改动——拆分只降低维护成本，不改对外契约；函数体逐字搬运、未改写。
-from gen_llm import (  # noqa: E402,F401
-    is_reasoning_model, call_llm, repair_json, _sanitize_ctrl,
-    parse_json_from_llm,
-)
-
-# ============================================================
-# 质检指标 + 文本卫生（2026-10-10 从本文件拆出 -> gen_quality.py）
-# ============================================================
-# 转发导入而非直接定义，是为了让调用点（本文件 main 及仓库内 15+ 个
-# `from generate_novel import ...` / `import generate_novel as gn` 的脚本与测试）
-# 零改动——拆分只降低维护成本，不改对外契约；函数体逐字搬运、未改写。
-from gen_quality import (  # noqa: E402,F401
-    AI_CLICHE, NEGATION, OPENING_ACTION_WORDS, GENRE_THRILL_EXTRA,
-    GENRE_THRILL_ALL, thrill_per_thousand, GENRE_SURGE_EXTRA, GENRE_SURGE_ALL,
-    surge_per_thousand, side_reaction_per_thousand, release_profile, payoff_drought_zones,
-    payoff_drought_ev_fragment, release_ev_fragment, AI_ADVERBS, SENTENCE_CONNECTORS,
-    METAPHOR_PAT, BODY_REACTION_WORDS, SINGLE_PARA_MAX_CHARS, _style_fingerprint_metrics,
-    STYLE_FP_LIMITS, _split_sentences, deep_ai_metrics, style_fingerprint,
-    style_fingerprint_block, fingerprint_distance, load_style_block, style_ev_fragment,
-    has_ending_hook, has_quick_opening,
 )
 
 # 题材规格表（新增题材只需在此登记；planning/scene 两处 prompt 自动生效）

@@ -29,8 +29,14 @@ except Exception:
     pass
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from generate_novel import (has_ending_hook, has_quick_opening, count_words,
-                            thrill_per_thousand, surge_per_thousand, AI_CLICHE)
+from generate_novel import (
+    AI_CLICHE,
+    count_words,
+    has_ending_hook,
+    has_quick_opening,
+    surge_per_thousand,
+    thrill_per_thousand,
+)
 from qa_scan_existing import split_chapters
 
 CHAPTER_RE = re.compile(r"^第\s*(\d+)\s*章")

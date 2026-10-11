@@ -17,11 +17,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fanqie_text import count_words, dialogue_ratio, paragraphs, sentences  # noqa: E402,F401
 from quality_rules_generated import (  # noqa: E402,F401
-    ANCIENT_GENRES, CONFLICT_WORDS, INTRA_REPEAT_GRAM, INTRA_REPEAT_MIN_BLOCK,
-    META_TALK, MODERN_MARKERS, PROMPT_LEAK, REVIEW_CLICHE_SENTENCES,
-    TRIAD_END_WINDOW, TRIAD_END_WORDS,
+    ANCIENT_GENRES,
+    CONFLICT_WORDS,
+    INTRA_REPEAT_GRAM,
+    INTRA_REPEAT_MIN_BLOCK,
+    META_TALK,
+    MODERN_MARKERS,
+    PROMPT_LEAK,
+    REVIEW_CLICHE_SENTENCES,
+    TRIAD_END_WINDOW,
+    TRIAD_END_WORDS,
 )
-
 
 CLICHE_SENTENCES = REVIEW_CLICHE_SENTENCES
 

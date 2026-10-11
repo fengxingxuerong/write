@@ -50,7 +50,6 @@ import fanqie_review as fr  # noqa: E402
 import generate_novel as gn  # noqa: E402
 import quality_rules_generated as gen  # noqa: E402
 
-
 # Dart 侧字面量（从 lib/engine/quality/fanqie_gate_checker.dart 与
 # lib/engine/quality/quality_rules.g.dart 抄录）。**刻意手写而非解析 Dart**：
 # Dart 侧那些是 private/生成物常量，解析源码去取字面量脆弱且会绕过类型检查；

@@ -27,11 +27,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fanqie_review import count_words, dialogue_ratio  # noqa: E402,F401
 from quality_rules_generated import (  # noqa: E402,F401
-    AI_ADVERBS, BODY_REACTION_WORDS, HOOK_WORDS, NEGATION, OPENING_STRONG,
-    OPENING_WEAK, POWER_SURGE_WORDS, SENTENCE_CONNECTORS, SIDE_REACTION_WORDS,
-    THRILL_WORDS, TRIAD_HOOK_ONLY,
+    AI_ADVERBS,
+    BODY_REACTION_WORDS,
+    HOOK_WORDS,
+    NEGATION,
+    OPENING_STRONG,
+    OPENING_WEAK,
+    POWER_SURGE_WORDS,
+    SENTENCE_CONNECTORS,
+    SIDE_REACTION_WORDS,
+    THRILL_WORDS,
+    TRIAD_HOOK_ONLY,
 )
-
 
 AI_CLICHE = ['嘴角', '唇角', '眼底', '眼神', '目光', '仿佛', '似乎', '宛如',
              '空气', '心跳', '深吸', '命运', '轨迹', '万语', '舒了一口',
