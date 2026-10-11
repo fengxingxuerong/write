@@ -12,6 +12,7 @@ from generate_novel import (  # noqa: E402
     _quality_repair_candidate,
     _quality_repair_in_chunks,
     _quality_repair_prompt,
+    dedup_chapters_by_idx,
 )
 
 
@@ -193,6 +194,52 @@ class ReleaseProfileTest(unittest.TestCase):
         report = quality_check(chapters)
         self.assertEqual(report[0]['release'], 'front_loaded')
         self.assertEqual(chapters[0]['_release'], 'front_loaded')
+
+
+class DedupChaptersByIdxTest(unittest.TestCase):
+    """按章号去重保最新 + 升序排序的纯函数回归。
+
+    断点续传 / 结构补章会就地 append，导致同 idx 出现新旧两份记录、且顺序
+    可能乱——质检与导出必须同口径基于去重排序后的列表，否则重复统计/乱序导出。
+    """
+
+    @staticmethod
+    def _ch(idx, tag):
+        return {'idx': idx, 'content': f'第{idx}章内容-{tag}'}
+
+    def test_dedup_keeps_latest_record(self):
+        chapters = [self._ch(1, '旧'), self._ch(1, '新')]
+        result = dedup_chapters_by_idx(chapters)
+        self.assertEqual(len(result), 1)
+        self.assertIn('新', result[0]['content'])
+
+    def test_sorts_by_idx_ascending(self):
+        chapters = [self._ch(3, 'c'), self._ch(1, 'a'), self._ch(2, 'b')]
+        result = dedup_chapters_by_idx(chapters)
+        self.assertEqual([c['idx'] for c in result], [1, 2, 3])
+
+    def test_dedup_and_sort_combined(self):
+        # 乱序 + 重复：3章应去重成 1/2/3，且第2章保留后写的新记录
+        chapters = [self._ch(2, '旧'), self._ch(1, 'a'),
+                    self._ch(2, '新'), self._ch(3, 'c')]
+        result = dedup_chapters_by_idx(chapters)
+        self.assertEqual([c['idx'] for c in result], [1, 2, 3])
+        self.assertIn('新', result[1]['content'])
+
+    def test_does_not_mutate_input(self):
+        chapters = [self._ch(2, 'b'), self._ch(1, 'a')]
+        snapshot = [dict(c) for c in chapters]
+        dedup_chapters_by_idx(chapters)
+        self.assertEqual(chapters, snapshot)
+
+    def test_empty_returns_empty(self):
+        self.assertEqual(dedup_chapters_by_idx([]), [])
+
+    def test_single_chapter_unchanged(self):
+        chapters = [self._ch(5, 'only')]
+        result = dedup_chapters_by_idx(chapters)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['idx'], 5)
 
 
 if __name__ == '__main__':

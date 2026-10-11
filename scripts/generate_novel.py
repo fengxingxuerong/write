@@ -849,6 +849,22 @@ def export_txt(path, title, chapters):
     return txt_path
 
 
+def dedup_chapters_by_idx(chapters):
+    """按章号去重（保留**最新**记录）并升序排序，返回新列表（不改入参）。
+
+    背景：断点续传 / 结构补章会就地 append，导致 state["chapters"] 可能
+    乱序或同章号出现多条（重跑同一章会产生新旧两份记录）。质检与导出必须
+    同口径，都基于「去重保最新 + 按章号排序」后的列表，否则：
+      - 质检会重复统计同一章，均分/统计被污染；
+      - 导出会写出重复或乱序章节。
+    后写覆盖先写（dict 赋值语义天然保留最新），排序保证章序正确。
+    """
+    dedup = {}
+    for c in chapters:
+        dedup[c["idx"]] = c  # 后出现的同 idx 记录覆盖先出现的（保留最新）
+    return [dedup[k] for k in sorted(dedup)]
+
+
 # ============================================================
 # 主线
 # ============================================================
@@ -1143,10 +1159,7 @@ def main():
 
     # ====== 第三步：质检汇总 ======
     # 断点续传/补章可能乱序或重复：按章号去重（保留最新记录）并排序，质检与导出同口径
-    _dedup = {}
-    for _c in state["chapters"]:
-        _dedup[_c["idx"]] = _c
-    state["chapters"] = [_dedup[k] for k in sorted(_dedup)]
+    state["chapters"] = dedup_chapters_by_idx(state["chapters"])
     print(f"\n{'=' * 60}")
     print("[质检] 运行一致性检查...")
     quality_check(state["chapters"])  # 副作用：填充各章 _world_conflicts 等质检字段
