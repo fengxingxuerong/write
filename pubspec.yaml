@@ -1,7 +1,10 @@
 name: novel_writer
 description: 墨匠 InkSmith —— 本地优先的一键小说写作工具（默认离线，可选 AI）。
 publish_to: 'none'
-version: 0.1.0+1
+# 语义化版本 MAJOR.MINOR.PATCH+BUILD：首个提交即自称「1.0 全功能版」（2026-08-05），
+# 功能持续演进至今（12 角色多模型协作流水线 / 五大导出格式 / 本地规则质检门禁），
+# 故版本号与项目自我认知对齐至 1.0.0；build 号随每次发版递增。变更见 CHANGELOG.md。
+version: 1.0.0+2
 
 environment:
   # 代码使用 onReorderItem（Flutter 3.41+）/ Color.withValues（3.27+）等新 API，
