@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 import 'package:novel_writer/ai_pipeline/prompts/pipeline_prompts.dart';
+import 'package:novel_writer/ai_pipeline/services/chief_review.dart';
 import 'package:novel_writer/ai_pipeline/services/llm_router.dart';
 import 'package:novel_writer/ai_pipeline/services/outline_text.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
@@ -80,138 +81,11 @@ class AiPipelineService {
     return content;
   }
 
-  /// 拼逐章指标行（终审 prompt 的摘要输入）。
-  ///
-  /// 口径与 Python `chief_editor_prompt` 逐字一致：章号/标题/字数/评审分/
-  /// 钩子有无/AI 味%/问题数。**只拼指标不拼正文**——终审的上下文预算要留给
-  /// 三段样本正文。
-  static String _chiefChapterRows(AiPipelineTask task) {
-    final List<PipelineChapter> chapters = List<PipelineChapter>.from(
-      task.chapters,
-    )..sort((PipelineChapter a, PipelineChapter b) => a.idx.compareTo(b.idx));
-    final StringBuffer b = StringBuffer();
-    for (final PipelineChapter c in chapters) {
-      final ChapterQualityReview? r = c.review;
-      final double echo = PipelineQa.aiEchoPct(c.content);
-      b.writeln('第${c.idx}章《${c.title}》${c.words}字｜'
-          '评审${r != null && r.scored ? r.overall : '-'}分｜'
-          '钩子${PipelineQa.hasEndingHook(c.content) ? '有' : '无'}｜'
-          'AI味${echo.toStringAsFixed(0)}%｜问题${c.issues.length}处');
-    }
-    return b.toString().trim();
-  }
 
-  /// 拼未收伏笔行（终审判「伏笔回收」维度的直接依据）。
-  static String _chiefOpenForeshadows(ForeshadowLedger ledger) {
-    final StringBuffer b = StringBuffer();
-    for (final ForeshadowEntry e in ledger.open.take(12)) {
-      final String d = e.desc.length > 40 ? e.desc.substring(0, 40) : e.desc;
-      b.writeln('第${e.planted}章埋：$d');
-    }
-    return b.toString().trim();
-  }
 
-  /// 取评分最低的章（终审样本三）；无评分时退回第 1 章。
-  static PipelineChapter? _worstScoredChapter(AiPipelineTask task) {
-    PipelineChapter? worst;
-    int worstScore = 101;
-    for (final PipelineChapter c in task.chapters) {
-      final ChapterQualityReview? r = c.review;
-      if (r == null || !r.scored) continue;
-      if (r.overall < worstScore) {
-        worstScore = r.overall;
-        worst = c;
-      }
-    }
-    return worst ??
-        (task.chapters.isEmpty ? null : task.chapters.first);
-  }
 
-  /// 解析六维分（只收数值项，非数值一律跳过而非强转）。
-  static Map<String, int> _chiefDimensions(Map<String, dynamic> parsed) {
-    final Map<String, int> out = <String, int>{};
-    final Map<String, dynamic>? raw =
-        parsed['dimensions'] as Map<String, dynamic>?;
-    raw?.forEach((String k, dynamic v) {
-      if (v is num) out[k] = v.toInt();
-    });
-    return out;
-  }
 
-  /// 解析问题清单。
-  static List<ChiefIssue> _chiefIssues(Map<String, dynamic> parsed) {
-    return (parsed['top_issues'] as List<dynamic>? ?? const [])
-        .whereType<Map<String, dynamic>>()
-        .map(ChiefIssue.fromJson)
-        .where((ChiefIssue e) => e.issue.trim().isNotEmpty)
-        .toList();
-  }
 
-  /// 合并多采样：六维逐项取中位数 + 综合取中位数。
-  ///
-  /// 逐项中位而非「先合并总分再各维取样」——后者在样本数少时会把不同轮次的
-  /// 维度混在一起，凭空造出一个从未被任何一轮打出过的组合。
-  static ChiefReview _mergeChiefSamples(
-    List<ChiefReview> samples,
-    int round,
-  ) {
-    int median(List<int> xs) {
-      final List<int> s = List<int>.from(xs)..sort();
-      return s[s.length ~/ 2];
-    }
-
-    final Set<String> keys = <String>{};
-    for (final ChiefReview r in samples) {
-      keys.addAll(r.dimensions.keys);
-    }
-    final Map<String, int> dims = <String, int>{};
-    for (final String k in keys) {
-      final List<int> vs = samples
-          .map((ChiefReview r) => r.dimensions[k])
-          .where((int? v) => v != null && v >= 0)
-          .map((int? v) => v!)
-          .toList();
-      if (vs.isNotEmpty) dims[k] = median(vs);
-    }
-
-    // 问题清单按「多轮共识」优先：多轮都点名的排前面。
-    final Map<String, int> seen = <String, int>{};
-    for (final ChiefReview r in samples) {
-      for (final ChiefIssue e in r.topIssues) {
-        final String k = '${e.chapter}|${e.issue}';
-        seen[k] = (seen[k] ?? 0) + 1;
-      }
-    }
-    final List<ChiefIssue> issues = <ChiefIssue>[];
-    final List<ChiefReview> ordered = List<ChiefReview>.from(samples)
-      ..sort((ChiefReview a, ChiefReview b) =>
-          b.topIssues.length.compareTo(a.topIssues.length));
-    for (final ChiefReview r in ordered) {
-      for (final ChiefIssue e in r.topIssues) {
-        final bool dup = issues.any((ChiefIssue x) =>
-            x.chapter == e.chapter && x.issue == e.issue);
-        if (!dup) issues.add(e);
-      }
-    }
-    final List<String> fixes = <String>[];
-    for (final ChiefReview r in samples) {
-      for (final String f in r.fixPriority) {
-        if (!fixes.contains(f)) fixes.add(f);
-      }
-    }
-    final int overall =
-        median(samples.map((ChiefReview r) => r.overall).toList());
-    return ChiefReview(
-      round: round,
-      overall: overall,
-      dimensions: dims,
-      // 判档**本地按分数区间**判，模型判词只作参考——同分必同档。
-      verdict: AiPipelineTask.verdictOf(overall),
-      topIssues: issues.take(5).toList(),
-      fixPriority: fixes.take(3).toList(),
-      samples: samples.length,
-    );
-  }
 
   /// 跑一轮终审（多采样取中位数）。
   ///
@@ -233,14 +107,14 @@ class AiPipelineService {
     )..sort((PipelineChapter a, PipelineChapter b) => a.idx.compareTo(b.idx));
     if (chapters.isEmpty) return ChiefReview(round: round, overall: -1);
 
-    final PipelineChapter? worst = _worstScoredChapter(task);
+    final PipelineChapter? worst = worstScoredChapter(task);
     final String prompt = chiefEditorPrompt(
       title: task.title,
       genre: task.config.genre,
       totalWords: task.totalWords,
       chapterCount: chapters.length,
-      rows: _chiefChapterRows(task),
-      openForeshadows: _chiefOpenForeshadows(task.ledger),
+      rows: chiefChapterRows(task),
+      openForeshadows: chiefOpenForeshadows(task.ledger),
       stateTrack: task.stateTrack,
       first: chapters.first.content.length > 1200
           ? chapters.first.content.substring(0, 1200)
@@ -276,9 +150,9 @@ class AiPipelineService {
         samples.add(ChiefReview(
           round: round,
           overall: overall,
-          dimensions: _chiefDimensions(parsed),
+          dimensions: chiefDimensions(parsed),
           verdict: AiPipelineTask.verdictOf(overall),
-          topIssues: _chiefIssues(parsed),
+          topIssues: chiefIssues(parsed),
           // parsed 已在上方判过非空，这里不必再用 ?[]。
           fixPriority:
               ((parsed['fix_priority'] ?? const <dynamic>[]) as List<dynamic>)
@@ -294,7 +168,7 @@ class AiPipelineService {
       task.addLog('  [终审·第$round轮] 全部采样解析失败，本轮无结论');
       return ChiefReview(round: round, overall: -1);
     }
-    final ChiefReview merged = _mergeChiefSamples(samples, round);
+    final ChiefReview merged = mergeChiefSamples(samples, round);
     task.addLog('  [终审·第$round轮] 合并综合 ${merged.overall} 分｜${merged.verdict}'
         '（有效采样 ${merged.samples} 次）');
     final Map<String, int> hard = merged.hardDimensions;
