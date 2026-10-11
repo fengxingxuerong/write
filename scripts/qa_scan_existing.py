@@ -196,17 +196,24 @@ def _sign_verdict(total, flags, unjudged):
     return levels[idx], notes
 
 
-def print_signability_report(rows, chapters, genre=""):
-    """签约可行性报告：五维评分 + 硬伤一票否决。
+def compute_signability(rows, chapters, genre=""):
+    """签约可行性报告的**计算部分**（纯函数，不打印）。
+
+    从扫描行算出五维评分 / 归一化总分 / 硬伤否决项 / 结论，返回结构化 dict，
+    供 print_signability_report 渲染。拆出来是为了能直接单测——报告文本变了
+    无伤大雅，但**打分口径与硬伤判定**一旦漂移必须能离线回归，而这个函数此前
+    完全无覆盖。
 
     genre 为题材。计分口径：
     - 题材不适用的维度（爽点密度、由其推导的节奏）不计分也不送分，
       总分按已评维度归一化到 100；
     - 不足 3 章时「黄金三章」结构上无从失败，同样不评；
     - 钩子覆盖率 / AI 腔 / 爽点密度 / 塌陷区等硬伤一票否决「可直接投稿」。
+
+    返回 None 表示 rows 为空（无正文，无从评估）。
     """
     if not rows:
-        return
+        return None
     n = len(rows)
     thrill_exempt = genre in NON_POWER_FANTASY_GENRES
     g3_rows = [r for r in rows if r["idx"] <= 3]
@@ -277,6 +284,45 @@ def print_signability_report(rows, chapters, genre=""):
 
     verdict, notes = _sign_verdict(total, flags, unjudged)
 
+    return {
+        "n": n, "thrill_exempt": thrill_exempt, "g3_judged": g3_judged,
+        "g3_rows": len(g3_rows), "content_by_idx": content_by_idx,
+        "hook_rate": hook_rate, "g3_pass": g3_pass,
+        "avg_thrill": avg_thrill, "avg_surge": avg_surge,
+        "avg_echo": avg_echo, "avg_deep": avg_deep, "zones": zones,
+        "dims": dims, "scored": scored, "unjudged": unjudged,
+        "gained": gained, "possible": possible, "total": total,
+        "flags": flags, "verdict": verdict, "notes": notes,
+    }
+
+
+def print_signability_report(rows, chapters, genre=""):
+    """签约可行性报告：五维评分 + 硬伤一票否决（渲染层，计算见 compute_signability）。
+
+    本函数只负责把 compute_signability 的结构化结果打印成人读报告，不含任何
+    打分口径——口径漂移的回归在 compute_signability 的单测里把关。
+    """
+    res = compute_signability(rows, chapters, genre=genre)
+    if res is None:
+        return
+    # 从计算结果里取出渲染所需的量（键名见 compute_signability 返回）。
+    dims = res["dims"]
+    scored = res["scored"]
+    possible = res["possible"]
+    gained = res["gained"]
+    total = res["total"]
+    verdict = res["verdict"]
+    notes = res["notes"]
+    hook_rate = res["hook_rate"]
+    avg_thrill = res["avg_thrill"]
+    avg_surge = res["avg_surge"]
+    avg_echo = res["avg_echo"]
+    avg_deep = res["avg_deep"]
+    thrill_exempt = res["thrill_exempt"]
+    g3_judged = res["g3_judged"]
+    g3_pass = res["g3_pass"]
+    content_by_idx = res["content_by_idx"]
+
     print("\n" + "=" * 60)
     print("  📋 签约可行性报告")
     print("=" * 60)
@@ -323,6 +369,7 @@ def print_signability_report(rows, chapters, genre=""):
         if ok is False:
             print(f"        ↳ {tip}")
     print("=" * 60 + "\n")
+
 
 
 def split_chapters(path):
