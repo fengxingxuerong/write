@@ -55,7 +55,7 @@ EXPECTED = {
     # —— 角色配置常量（main 与探针脚本直接读）——
     "PLANNER", "PLANNER_CHAIN", "WRITER_CHAIN", "EDITOR_CHAIN", "TITLER",
     "VERIFIER_CHAIN", "STATE_EXTRACTOR", "READER_PROXY", "FORESHADOWER",
-    "WORLD_GUARDIAN", "THRILL_DIRECTOR", "CHIEF_EDITOR_CHAIN",
+    "WORLD_GUARDIAN", "WORLD_GUARDIAN_CHAIN", "THRILL_DIRECTOR", "CHIEF_EDITOR_CHAIN",
     "OUTLINE_REVIEWER_CHAIN", "THINKING_FLOOR_TOKENS",
     # —— 阈值/词表常量（双端对账会读）——
     "EDITOR_MIN_RATIO", "HOOK_FALLBACK_SIGNALS", "FACT_CHECK_BUDGETS",
@@ -104,7 +104,7 @@ class TestPipelinePublicSurface(unittest.TestCase):
                           f"{name} 被拷贝了，调用方原地改 key 将不生效")
         for name in ("PLANNER_CHAIN", "WRITER_CHAIN", "EDITOR_CHAIN",
                      "VERIFIER_CHAIN", "CHIEF_EDITOR_CHAIN",
-                     "OUTLINE_REVIEWER_CHAIN"):
+                     "OUTLINE_REVIEWER_CHAIN", "WORLD_GUARDIAN_CHAIN"):
             self.assertIs(getattr(np, name), getattr(llm, name),
                           f"{name} 被拷贝了，setup_keys 写入的 key 将不生效")
 

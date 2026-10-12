@@ -127,6 +127,7 @@ from pipeline_llm import (  # noqa: E402,F401
     TITLER,
     VERIFIER_CHAIN,
     WORLD_GUARDIAN,
+    WORLD_GUARDIAN_CHAIN,
     WRITER_CHAIN,
     _health_key,
     _in_cooldown,
@@ -1248,10 +1249,12 @@ def main():
         print(f"  [标题] {title_ok}")
 
         # 5) 每 5 章一致性审校（世界观守护官，只记录）
+        # 2026-10-12：由单槽位 llm_call 改走 call_chain——原 pro 单点在下架后
+        # 返回空即静默失声（连告警都不打印），改链后自动落到 glm 备胎。
         issues = []
         if idx % 5 == 0 and state["chapters"]:
             chap_list = "\n".join(f"第{c['idx']}章《{c.get('title','')}》" for c in state["chapters"][-5:])
-            v = llm_call(WORLD_GUARDIAN, VERIFIER_SYS, verifier_prompt(outline, chap_list), max_tokens=6000)
+            v = call_chain(WORLD_GUARDIAN_CHAIN, VERIFIER_SYS, verifier_prompt(outline, chap_list), max_tokens=6000)
             parsed = parse_json_from_llm(v, repair=False)
             if parsed and parsed.get("issues"):
                 issues = parsed["issues"]

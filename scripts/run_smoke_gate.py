@@ -421,11 +421,19 @@ def check(output, max_chapters, review_pass=78.0, genre="玄幻"):
 def main():
     ap = argparse.ArgumentParser(description="墨匠端到端冒烟门禁")
     ap.add_argument("--output", default=OUT_DEFAULT)
-    ap.add_argument("--total-words", type=int, default=6000)
+    # 目标字数不再写死 6000：流水线主循环是「字数达标即停」（novel_pipeline main 的
+    # `if total_words >= args.total_words: [DONE]`），而门禁硬要求 ≥ max_chapters 章的
+    # 评审/核查样本。6000 字 + 每章约 4000 字（近两版质量调整后章均字数上来了）→
+    # 第 2 章就达标停下、第 3 章永不产出 → 「章节数 ≥ 3」这条断言**永远不可能过**。
+    # v8 实测 FAIL 14/17，三条 FAIL 全是这一个根因。故缺省值改为按章数推算，
+    # 显式传值时仍以用户给的数为准（保留「就想跑短样」的用法）。
+    ap.add_argument("--total-words", type=int, default=None,
+                    help="目标字数（缺省 = max_chapters × 4000，保证每章都写得出来）")
     ap.add_argument("--max-chapters", type=int, default=3)
     ap.add_argument("--check-only", action="store_true", help="只验收已有产物，不跑书")
     ap.add_argument("--genre", default="玄幻", help="题材（题材漂移检测要按题材判定）")
     a = ap.parse_args()
+    total_words = a.total_words if a.total_words else a.max_chapters * 4000
     print("=" * 64)
     print("墨匠端到端冒烟门禁")
     print("=" * 64)
@@ -436,7 +444,7 @@ def main():
         sys.exit(1)
     run_ok = True
     if not a.check_only:
-        _log, run_code = run_book(a.output, a.total_words, a.max_chapters, a.genre)
+        _log, run_code = run_book(a.output, total_words, a.max_chapters, a.genre)
         run_ok = run_code == 0
         if not run_ok:
             print(f"  [FAIL] 流水线进程退出码 {run_code}，禁止使用旧产物继续验收")

@@ -52,7 +52,13 @@ def _key(name):
 # 角色配置（2026-09-12 两轮大 token 探针实测后优化——8 角色协作矩阵 v2）：
 # 可用性矩阵（2026-09-12 实测；2026-09-23 花名册更新见质量日志第十四节）：
 #   商汤 glm-5.2: K1✅K2✅K3✅（三件套 temp=1.0+大token+enable_thinking=False；长场景 prompt 有思考死循环风险）
-#   商汤 deepseek-v4-pro: K1✅K2✅K3✅（思考链重 2000-2900 token，max_tokens≥6000 否则正文必空）
+#   商汤 deepseek-v4-pro: ❌【2026-10-12 实测全线下架】K1/K2/K3 一律 HTTP 404「model is not
+#       found」，且已不在 /v1/models 目录（目录现只剩 7 个模型）。原 4 处 pro 主位（审校 /
+#       世界观守护官 / 终审官 / 大纲守门）改用 deepseek-v4-flash 主 + glm-5.2 备。
+#       接替候选实测均不可用：deepseek-v4.1-flash → 403「model is not available in the
+#       current token plan」（model 级权限，非账号封锁——同 key 跑 glm/dsf 正常）、
+#       sensenova-u1.5-lite → 404、deepseek-flash → 429（仅瞬时，未定论）。
+#       历史（供追溯）：pro 思考链重 2000-2900 token，max_tokens≥6000 否则正文必空。
 #   商汤 kimi-k3: K2✅（K1/K3 上轮 429）；硬约束 temperature 仅允许 1（llm_call 已加守卫）
 #   商汤 deepseek-v4-flash: K1✅K2✅K3✅【本轮复活，上轮 401】（3-4s 快，思维链轻但也会吃 400+ token，需 max_tokens≥1500）
 #   AMD DeepSeek-V4-Flash: ✅（约 30s 偏慢，高峰限流，作末备）
@@ -71,17 +77,17 @@ def _key(name):
 #         → NVIDIA dsf-flash-0731 → AMD 末备（跨 3 端点 2 模型家族，防同质化）
 #   编辑：kimi-k3 K2 主（temp=1 硬约束由 llm_call 守卫保证）→ glm-5.2 K3 备 → AMD 兜底
 #   标题官：商汤 dsf-v4-flash K1 主（快）→ 失败回退章纲标题（现有后置防护）
-#   审校：deepseek-v4-pro K1 主（max_tokens≥6000）→ glm-5.2 K3 备（VERIFIER_CHAIN）
+#   审校：deepseek-v4-flash K1 主（原 pro 位，2026-10-12 pro 下架后接替）→ glm-5.2 K3 备（VERIFIER_CHAIN）
 #   状态提取官：商汤 dsf-v4-flash K3【轻任务换轻模型，修 pro+800 静默空输出 bug】
 #   伏笔官：商汤 dsf-v4-flash K2 主（修 glm 小 token 思考吃满隐患）
-#   世界观守护官：deepseek-v4-pro K2（max_tokens 6000，每 5 章低频调用可承受 pro 时延）
+#   世界观守护官：deepseek-v4-flash K2 主 → glm-5.2 K1 备（原 pro 单点，2026-10-12 改链）
 #   爽点总监：商汤 dsf-v4-flash K2（30 字短答，修 pro+200 必空 bug）
-#   终审官（第 10 角色，2026-09-12 补设）：deepseek-v4-pro K2 → glm-5.2 K1。
+#   终审官（第 10 角色，2026-09-12 补设）：deepseek-v4-flash K2 → glm-5.2 K1（2026-10-12 原 pro 主位接替）。
 #         全书收官后唯一一次通读级总评——此前终局把关只有本地规则评分（签约可行性报告），
 #         节奏曲线/人物弧光/伏笔回收质量/结局力度这类需通读才能判断的维度长期无人把守。
 #         输入为全书结构化摘要（逐章指标 + 状态清单 + 伏笔台账 + 首末章与最低分章样本正文），
 #         输出 JSON 终审报告（总分/六维/问题清单/修改优先级/签约建议）。
-#   大纲终审官（第 11 角色，2026-09-12 补设，写前守门）：deepseek-v4-pro K2 → glm-5.2 K1。
+#   大纲终审官（第 11 角色，2026-09-12 补设，写前守门）：deepseek-v4-flash K2 → glm-5.2 K1（2026-10-12 原 pro 主位接替）。
 #         规划官出大纲后、第 1 章动笔前对大纲做结构级评审——伏笔分布（单章 ≤2 条）、
 #         末章必须有结局（禁"前夕态"收尾）、单章信息密度、钩子链完整性。
 #         终审官《断脉逆命诀》二审实测证明：结构级问题（第 1 章 6 条伏笔全悬、末章停"大典前夕"）
@@ -162,8 +168,8 @@ EDITOR_CHAIN = [
 TITLER = dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=800)  # K1 dsf 主（3-4s）
 # 审校改为故障转移链：pro 主（深推理无死循环风险）→ glm K3 备
 VERIFIER_CHAIN = [
-    dict(url=SENSE, model="deepseek-v4-pro", key="", temp=0.8, max_tokens=8000),   # K1 pro 主
-    dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),           # K3 glm 备
+    dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=8000),  # K1 dsf 主（2026-10-12 接替下架的 pro）
+    dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),            # K3 glm 备
 ]
 STATE_EXTRACTOR = dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=2000)  # K3 轻任务
 # 读者官（第 12 角色，2026-09-12 补设）：每章末尾以「追读读者」视角读完本章，
@@ -172,19 +178,30 @@ STATE_EXTRACTOR = dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, m
 READER_PROXY = dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=500)  # K3 轻任务
 # 新增角色（8 角色协作 v2）
 FORESHADOWER = dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=4000)  # K2 轻任务（台账 JSON 含 6 条长 desc，2000 曾被思考链+输出吃满截断）
-WORLD_GUARDIAN = dict(url=SENSE, model="deepseek-v4-pro", key="", temp=0.8, max_tokens=6000)  # K2 pro（一致性校验需深推理）
+# 世界观守护官（每 5 章一致性校验，只记录、不阻塞）：2026-10-12 由 pro「单点」改为链。
+# 起因：商汤 deepseek-v4-pro 已从模型目录整体下架（K1/K2/K3 全 404「model is not
+# found」），单点槽位会返回空 → parse_json_from_llm 失败 → **连告警都不打印**——
+# 属「静默失声」，比报错更难发现。主位 dsf-flash（快、思考链轻），glm-5.2 顶原 pro
+# 位作备（长 prompt 有思考死循环风险，故居备不居主）。
+WORLD_GUARDIAN_CHAIN = [
+    dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=6000),  # K2 主
+    dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),            # K1 备
+]
+# 兼容别名：既有调用点/探针/护栏测试仍按「单槽位」取用；与链首是**同一对象**，
+# setup_keys 对 WORLD_GUARDIAN["key"] 的写入即落在链首（对象身份由护栏测试钉住）。
+WORLD_GUARDIAN = WORLD_GUARDIAN_CHAIN[0]
 THRILL_DIRECTOR = dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=1000)  # K2 dsf（30 字短答）
 # 终审官（全书收官总评，唯一通读级 LLM 角色）：pro 深推理 → glm K1 备
 CHIEF_EDITOR_CHAIN = [
-    dict(url=SENSE, model="deepseek-v4-pro", key="", temp=0.8, max_tokens=8000),   # K2 pro 主
+    dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=8000),  # K2 dsf 主（2026-10-12 接替下架的 pro）
     dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=8000),           # K1 glm 备（三件套）
 ]
 # 大纲终审官（第 11 角色，写前守门）：规划官出大纲后、第 1 章动笔前跑一次。
 # 低频高价值任务用最强 pro 守最重要的产物（大纲）；pro 挂 → glm-5.2 K1 备。
 # max_tokens 8000：pro 思考链 2000-2900 + 修订版大纲全量 JSON（40 章约 4000-5000 token）。
 OUTLINE_REVIEWER_CHAIN = [
-    dict(url=SENSE, model="deepseek-v4-pro", key="", temp=0.8, max_tokens=12000),  # K2 pro 主（12000：真书实测思考链+修订版大纲全量 JSON 曾吃满 8000 致截断）
-    dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=12000),          # K1 glm 备（三件套）
+    dict(url=SENSE, model="deepseek-v4-flash", key="", temp=0.8, max_tokens=12000),  # K2 dsf 主（2026-10-12 接替下架的 pro；12000：真书实测思考链+修订版大纲全量 JSON 曾吃满 8000 致截断）
+    dict(url=SENSE, model="glm-5.2", key="", temp=1.0, max_tokens=12000),           # K1 glm 备（三件套）
 ]
 
 
@@ -218,8 +235,10 @@ def setup_keys():
     READER_PROXY["key"] = _key("NOVEL_KEY_SENSE_K3")
     # 伏笔官：商汤 dsf-flash K2
     FORESHADOWER["key"] = _key("NOVEL_KEY_SENSE_K2")
-    # 世界观守护官：pro K2；爽点总监：dsf-flash K2
+    # 世界观守护官：dsf-flash K2 主（=链首，与 WORLD_GUARDIAN 同一对象）→ glm-5.2 K1 备；
+    # 爽点总监：dsf-flash K2
     WORLD_GUARDIAN["key"] = _key("NOVEL_KEY_SENSE_K2")
+    WORLD_GUARDIAN_CHAIN[1]["key"] = _key("NOVEL_KEY_SENSE_K1")
     THRILL_DIRECTOR["key"] = _key("NOVEL_KEY_SENSE_K2")
     # 终审官：pro K2 主 → glm K1 备
     CHIEF_EDITOR_CHAIN[0]["key"] = _key("NOVEL_KEY_SENSE_K2")
