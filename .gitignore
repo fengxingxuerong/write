@@ -10,6 +10,10 @@ dist/
 
 # 本地验证日志
 verify-logs/
+# verify-logs-*.txt：verify-logs/ 之外的另一种落点（重定向到仓库根时产生，
+# 例如 verify-logs-cline.txt）。2026-10-13 补：原规则只忽略目录，没盖住
+# 这个变体，导致运行日志以未跟踪文件形式长期留在工作区。
+verify-logs-*.txt
 build-*.log
 test-*.log
 build_run.log
