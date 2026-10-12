@@ -8,8 +8,19 @@
 /// 三者报告结构互不相同，UI 无法并列展示，组合检查要各写一遍。
 /// 本文件定义统一的问题模型（[QualityGateIssue]）、报告模型
 /// （[QualityGateReport]）与网关接口（[QualityGate]）；
-/// 组合实现在 `ai_pipeline/services/composite_quality_gate.dart`
-/// （放在 ai_pipeline 是因为其依赖 `PipelineQa`，保持 engine 不反向依赖）。
+/// 组合实现在 `ai_pipeline/services/composite_quality_gate.dart`。
+///
+/// 分层不变量（2026-10-13 复核后写清，原文只写「保持 engine 不反向依赖」，
+/// 主语含糊到能被读成整个 `engine/`，实际不是这个意思）：
+/// - 受约束的是 **`lib/engine/quality/` 这一层**：该目录下任何文件都不得 import
+///   `ai_pipeline/`，否则纯规则质检会被 LLM 管线拖着走、离线场景直接崩。
+///   组合网关因为要调 `PipelineQa`（商业向指标，实现不在本目录），只能落在 ai_pipeline。
+/// - **不受约束**的是 `lib/engine/` 其余部分：`engine/generation_engine.dart` 与
+///   `engine/multipass/multi_pass_chapter_engine.dart` 确实 import
+///   `ai_pipeline/services/pipeline_qa.dart`，这是**有意设计**——`ChapterPayoff`
+///   等纯数据契约就定义在 pipeline_qa.dart（见其文件头说明），
+///   目的是让 `generation_engine.dart → pipeline_qa.dart` 单向成立。
+/// 全库 import 图无环（`engine/quality/` 不回头依赖 ai_pipeline，故不构成循环）。
 library;
 
 /// 质检来源（哪套检查器报出的问题）。
