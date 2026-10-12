@@ -315,6 +315,10 @@ def fact_check_stage(registry, state_track, final_text, idx, genre):
     - fabs 为 None ⇒ 核查未跑成，调用方记 error（门禁据此判 FAIL，不作通过凭据）；
     - 修复只有在**复检命中数下降**时才采纳，否则回滚保留原文与首轮命中——
       「换了段文字」绝不等于「问题解决了」（与评审修同一验收哲学）。
+    - record 的取证字段：`fabrications` 恒为**生效中**的命中列表（门禁只数它）；
+      采纳时附 `fabrications_before`/`fabrications_after`，回滚时附
+      `fabrications_after`（复检明细，**不参与判分**，只为事后可取证），
+      未过采纳闸时 `fabrications_after=None`（该支没跑复检，别误读成「复检 0 处」）。
     成本：只在命中时多两次调用（1 次修复 + 1 次复检），0 命中章零额外开销。
     """
     fabs = run_fact_check(registry, state_track, final_text, idx)
@@ -336,18 +340,28 @@ def fact_check_stage(registry, state_track, final_text, idx, genre):
     repaired = apply_text_patch(final_text, raw_fix or "", genre, tag="编造修")
     if repaired == final_text:
         print("  [核查] 修复稿未过采纳闸（空产出/过度压缩/补丁卫生），保留原文照记命中")
+        # fabrications_after=None：这一支根本没跑复检，别让读者误以为「复检 0 处」
         return final_text, fabs, {"idx": idx, "fabrications": fabs,
-                                  "error": False, "repaired": False}
+                                  "error": False, "repaired": False,
+                                  "fabrications_after": None}
     fabs2 = run_fact_check(registry, state_track, repaired, idx)
     if fabs2 is not None and len(fabs2) < len(fabs):
         print(f"  [核查] 复检 {len(fabs)} → {len(fabs2)} 处，采纳修复稿"
               f"（{count_words(final_text)} → {count_words(repaired)} 字）")
         return repaired, fabs2, {"idx": idx, "fabrications": fabs2,
-                                 "error": False, "repaired": True}
+                                 "error": False, "repaired": True,
+                                 "fabrications_before": fabs,
+                                 "fabrications_after": fabs2}
     why = "复检未跑成" if fabs2 is None else f"复检仍 {len(fabs2)} 处"
     print(f"  [核查] {why}、未优于首轮，回滚保留原文（首轮命中照记）")
+    # 复检**明细**必须一并落盘（2026-10-12 补）：此前只在采纳分支存 fabs2，
+    # 回滚分支只打印计数 → 事后无法回答「复检究竟多了哪几条、为什么」。
+    # v8b 第 3 章实测「首轮 1 → 复检 4」就是卡在这个盲区上，只能靠代码推断定性。
+    # fabrications 仍记首轮命中（对外口径不变，门禁照旧数它），
+    # fabrications_after 只作取证用，不参与判分。
     return final_text, fabs, {"idx": idx, "fabrications": fabs,
-                              "error": False, "repaired": False}
+                              "error": False, "repaired": False,
+                              "fabrications_after": fabs2}
 
 
 # 外显爽点场景的识别键：规划层 goal 里出现任一即视为爽点场景。

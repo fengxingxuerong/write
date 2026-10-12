@@ -487,5 +487,61 @@ class HookRecheckReviewRefreshTest(unittest.TestCase):
         self.assertEqual([], out["problems"])
 
 
+class FactCheckAuditTrailTest(unittest.TestCase):
+    """编造核查的取证字段：复检明细必须落盘，否则事后无法回答「多了哪几条」。
+
+    事故形态（2026-10-12 门禁 v8b 第 3 章）：首轮 1 处 → 复检 4 处 → 回滚。
+    回滚分支当时只打印计数、不存明细，于是「为什么变多」只能靠代码推断定性。
+    """
+
+    FABS1 = [{"claim": "甲断言", "evidence": "台账无据", "type": "number"}]
+    FABS2 = [{"claim": f"乙断言{i}", "evidence": "台账无据", "type": "fabricated"}
+             for i in range(4)]
+
+    def test_rollback_persists_recheck_details(self):
+        with patch.object(pipeline, 'run_fact_check', side_effect=[self.FABS1, self.FABS2]), \
+                patch.object(pipeline, 'apply_text_patch', return_value='修复后的正文'), \
+                patch('builtins.print'):
+            text, fabs, rec = pipeline.fact_check_stage({}, '', '原文正文', 3, '玄幻')
+        self.assertEqual('原文正文', text, "未改善必须回滚保留原文")
+        self.assertEqual(self.FABS1, rec["fabrications"], "对外口径仍是首轮命中")
+        self.assertEqual(self.FABS2, rec["fabrications_after"], "复检明细必须留存")
+        self.assertFalse(rec["repaired"])
+        self.assertFalse(rec["error"])
+
+    def test_accept_persists_before_and_after(self):
+        before = self.FABS1 * 2  # 2 处 → 复检 1 处，命中数下降才构成「采纳」
+        with patch.object(pipeline, 'run_fact_check',
+                          side_effect=[before, self.FABS2[:1]]), \
+                patch.object(pipeline, 'apply_text_patch', return_value='修复后的正文'), \
+                patch('builtins.print'):
+            text, fabs, rec = pipeline.fact_check_stage({}, '', '原文正文', 3, '玄幻')
+        self.assertEqual('修复后的正文', text)
+        self.assertEqual(self.FABS2[:1], rec["fabrications"], "采纳后以复检为准")
+        self.assertEqual(before, rec["fabrications_before"])
+        self.assertTrue(rec["repaired"])
+
+    def test_rejected_patch_marks_after_as_none(self):
+        """补丁没过采纳闸 ⇒ 根本没跑复检，after 必须显式 None（不是 []）。"""
+        with patch.object(pipeline, 'run_fact_check', return_value=self.FABS1), \
+                patch.object(pipeline, 'apply_text_patch',
+                             side_effect=lambda text, patch_text, genre, tag="": text), \
+                patch('builtins.print'):
+            text, fabs, rec = pipeline.fact_check_stage({}, '', '原文正文', 3, '玄幻')
+        self.assertEqual('原文正文', text)
+        self.assertIsNone(rec["fabrications_after"])
+        self.assertFalse(rec["repaired"])
+
+    def test_gate_still_counts_effective_list_only(self):
+        """新增字段不得影响门禁口径：门禁只读 `fabrications`，回滚时它仍是命中态。"""
+        with patch.object(pipeline, 'run_fact_check', side_effect=[self.FABS1, self.FABS2]), \
+                patch.object(pipeline, 'apply_text_patch', return_value='修复后的正文'), \
+                patch('builtins.print'):
+            _text, _fabs, rec = pipeline.fact_check_stage({}, '', '原文正文', 3, '玄幻')
+        values = rec.get("fabrications")
+        self.assertTrue(isinstance(values, list) and len(values) > 0,
+                        "回滚时门禁必须仍能数到未消除的命中")
+
+
 if __name__ == '__main__':
     unittest.main()
