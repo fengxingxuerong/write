@@ -11,6 +11,15 @@
     py_stylefp.json   —— 三个真实成书的九项文风指纹
     py_payscene.json  —— isPayoffScene 的 240 例矩阵（10 目标 × 4 场景拍 × 6 位置）
 
+2026-10-14 补充（payscene 已可进 CI）：
+    payscene 那份**不依赖任何语料**（纯函数枚举），故已固化为入库基线
+    `rules/payoff_scene_parity.json`，Dart 与 Python 两侧都能在 CI 直接断言。
+    本脚本仍可用 `--only payscene` 重算，用于对比/刷新该入库基线
+    （把 verify-logs/py_payscene.json 拷到 rules/payoff_scene_parity.json）。
+    注意 drought / stylefp 两份仍依赖 data/generated/ 语料（gitignore），
+    只能本地生成，无法进 CI——它们必须在真实成书上才有意义。
+    刷新入库基线后请跑 scripts/test_payoff_scene_parity.py 确认闭环未断。
+
 用法:
     python tool/gen_parity_baselines.py                # 写入 verify-logs/
     python tool/gen_parity_baselines.py --check        # 重算比对（不写文件）

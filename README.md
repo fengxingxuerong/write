@@ -107,9 +107,11 @@ python scripts/quality_validation
 | 双端常量是否被手改 | `test/engine/quality/quality_rules_parity_test.dart` + `scripts/test_quality_rules_parity.py` |
 | 两端词表差在哪、收编影响面多大 | `python scripts/ab_rules_parity`（实测语料出结论，不靠推断） |
 | 指标与人评是否真的相关（该不该用） | `docs/human-eval-workflow.md` + `python scripts/quality_validation` |
-| 真实成书上双端**算法**是否一致 | `tool/verify_*_parity_test.dart`（需本地基线，按需手动跑；基线用 `python tool/gen_parity_baselines.py` 生成，`--check` 可重算比对） |
+| 真实成书上双端**算法**是否一致 | `tool/verify_*_parity_test.dart`；其中 **`isPayoffScene` 那份已可在 CI 跑**——它读入库固化基线 `rules/payoff_scene_parity.json`，Python 侧由 `scripts/test_payoff_scene_parity.py` 守（240 例逐例 + 基线自洽 + 双端词表一致）。另两份（爽点断供、文风指纹）仍依赖 `data/generated/` 语料，需本地跑 `python tool/gen_parity_baselines.py` 生成基线，`--check` 可重算比对 |
 
 > CI 里跑的 `flutter test` **不再**包含「基线缺失即 SKIP 通过」的用例——这类检查已移入 `tool/`，缺依赖时会直接失败，避免「测试全绿但双端口径其实不一致」的假绿。
+>
+> 2026-10-14：`isPayoffScene` 的对账不再受此限制。它是纯函数（10 目标 × 4 场景拍 × 6 位置 = 240 例），枚举口径自持、**不依赖任何语料**，所以把期望值固化成入库基线 `rules/payoff_scene_parity.json`，Dart 与 Python 两侧都能在 CI 直接断言。三处形成闭环：`scripts/test_payoff_scene_parity.py` 钉「JSON == 当前 Python 行为」（含基线过期检测）+ Dart 对账钉「Dart == JSON」+ 手抄期望表自洽钉「期望表 == 规则推导」。另两份仍需语料，因为爽点断供与文风指纹必须在真实成书上才有意义。
 
 ## 本地运行与构建
 
