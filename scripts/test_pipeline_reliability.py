@@ -429,5 +429,63 @@ class ScenePlanReliabilityTest(unittest.TestCase):
         self.assertEqual(lost, [])
 
 
+class HookRecheckReviewRefreshTest(unittest.TestCase):
+    """钩子终检补写后刷新评审记录（零 LLM）——锁住 2026-10-12 门禁 v8b 那个数据矛盾。
+
+    事故形态（用真实记录做样本）：评审在钩子终检之前落盘，补写进了正文却没刷新记录，
+    于是 jsonl 同时写着「正文有钩（has_ending_hook=True）」与
+    「blockers: ['无章末钩子']」，门禁判阻断级硬伤章 FAIL。
+    """
+
+    # 第 1 章真实评审记录（v8b 产物节选，字段逐字照抄）
+    RV = {
+        "idx": 1, "words": 3383, "score": 80.0, "verdict": "需修",
+        "blockers": ["无章末钩子"],
+        "redline": {"veto": [], "warn": []},
+        "problems": [
+            {"type": "钩子",
+             "msg": "本章无章末钩子（本地钩子检测直白+隐喻双通道均未命中）——追读命门，"
+                    "结尾必须收在悬念/变故/威胁上",
+             "action": "重写"},
+            {"type": "对白", "msg": "对话占比仅 13%（建议 25~45%）", "action": "重写"},
+            {"type": "句长", "msg": "19.3% 的句子超 30 字，移动端阅读吃力", "action": "修改"},
+        ],
+    }
+
+    def test_drops_hook_blocker_and_problem_keeps_others(self):
+        out, removed = pipeline.refresh_hook_review(dict(self.RV))
+        self.assertEqual([], out["blockers"], "正文已补钩，钩子阻断项必须摘掉")
+        # 只摘钩子相关问题，对白/句长必须留着（不掩盖真实短板）
+        self.assertEqual(["对白", "句长"], [p["type"] for p in out["problems"]])
+        self.assertEqual(2, len(removed), "被摘掉的原描述要如实返回，便于披露")
+
+    def test_score_and_verdict_untouched(self):
+        """分数/判档是评审当时的实测，补写一轮不构成加分理由（防为过门禁美化分数）。"""
+        out, _ = pipeline.refresh_hook_review(dict(self.RV))
+        self.assertEqual(80.0, out["score"])
+        self.assertEqual("需修", out["verdict"])
+
+    def test_input_not_mutated_in_place(self):
+        """必须返回新对象——调用方还要靠原记录做对照。"""
+        src = {"idx": 2, "blockers": ["无章末钩子"], "problems": [], "score": 78.5}
+        out, _ = pipeline.refresh_hook_review(src)
+        self.assertEqual(["无章末钩子"], src["blockers"], "原记录不应被原地改写")
+        self.assertEqual([], out["blockers"])
+
+    def test_no_hook_entry_is_noop(self):
+        """没有钩子条目时是零操作（removed 为空 → 调用方不重写记录）。"""
+        src = {"idx": 3, "blockers": [], "problems": [{"type": "对白", "msg": "对白偏低"}]}
+        out, removed = pipeline.refresh_hook_review(src)
+        self.assertEqual([], removed)
+        self.assertEqual(src["problems"], out["problems"])
+
+    def test_missing_keys_tolerated(self):
+        """字段缺省（老产物没有 blockers/problems）不能抛异常。"""
+        out, removed = pipeline.refresh_hook_review({"idx": 4, "score": 60.0})
+        self.assertEqual([], removed)
+        self.assertEqual([], out["blockers"])
+        self.assertEqual([], out["problems"])
+
+
 if __name__ == '__main__':
     unittest.main()

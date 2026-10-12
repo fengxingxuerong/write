@@ -191,6 +191,7 @@ from pipeline_quality import (  # noqa: E402,F401
     needs_fix,
     needs_payoff_repair,
     payoff_scene_constraint,
+    refresh_hook_review,
     trailing_drought_len,
     verdict_from_score,
 )
@@ -1419,6 +1420,17 @@ def main():
             if hook_src:
                 issues.append({"type": "hook_recheck",
                                "desc": f"后置修改吃掉钩子，终检补写（{hook_src}）"})
+                # 补写后必须同步刷新评审记录：评审（3.6）早于本节落盘，若不刷新，
+                # jsonl 会留下「正文有钩 / 评审 blockers 说无钩」的矛盾，门禁据此判
+                # 阻断级硬伤章 FAIL（2026-10-12 v8b 实测第 1 章，正文明明是强钩）。
+                # 重新 append 一份 review，靠 load_reviews_from_jsonl 的 last-wins 覆盖。
+                if reviews:
+                    _rv_fixed, _removed = refresh_hook_review(reviews[-1])
+                    if _removed:
+                        reviews[-1] = _rv_fixed
+                        append_state(args.output, "review", dict(_rv_fixed))
+                        print(f"    [钩子终检] 已同步刷新评审记录"
+                              f"（摘除 {len(_removed)} 条钩子结论，分数/判档不动）")
 
         # 7.56) 外显爽点补修（跨章断供口径）：与钩子终检同理放在 record 前——
         #       前面的定点修/首屏强化/评审修都可能把 💥 通道改回去，而断供是**跨章**
@@ -1851,7 +1863,12 @@ def main():
         print(f"[OK] 评估卡：{card}")
 
         first3 = "\n\n".join(c.get("content", "")[:900] for c in state["chapters"][:3])
-        pack_raw = llm_call(PLANNER, PLANNER_SYS, pack_prompt(outline, first3), max_tokens=1500)
+        # 预算不覆盖槽位配置：PLANNER 是 glm-5.2（思考链模型），而上架包输入是大纲 + 前三章
+        # 全文，思考链会先烧掉大量 token。此前此处写死 max_tokens=1500，实测
+        # 「[diag] 思考链有输出但正文为空（实发 1500，槽位配 8000）」→ 上架包生成失败
+        # （2026-10-12 门禁 v8b 的 WARN）。与规划位当年那处「调用点覆盖槽位预算」同族，
+        # 直接不传，让槽位配置（8000）生效。
+        pack_raw = llm_call(PLANNER, PLANNER_SYS, pack_prompt(outline, first3))
         pack = parse_json_from_llm(pack_raw) or {}
         if pack:
             pack_path = os.path.join(os.path.dirname(os.path.abspath(args.output)),

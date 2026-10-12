@@ -376,3 +376,35 @@ def _splice_head(text, new_head, min_cut=300, hard_cap=700):
     if cut == -1 or cut > hard_cap:
         cut = min(hard_cap, len(text))
     return new_head.strip() + "\n\n" + text[cut:].lstrip()
+
+
+def refresh_hook_review(rv):
+    """钩子终检补写成功后就地刷新该章评审记录——摘掉与钩子相关的结论（纯规则，零 LLM）。
+
+    背景（2026-10-12 冒烟门禁 v8b 实测）：评审在主循环 3.6 处就 `append_state` 落盘了，
+    而钩子终检（7.55）发生在其**之后**——补写把钩子放进了正文，却没有任何环节刷新
+    评审记录。结果 jsonl 里同时存在两件互相矛盾的事实：
+        · 最终正文 `has_ending_hook(final_text)` == True（第 1 章结尾是强钩）；
+        · 评审记录 `blockers == ['无章末钩子']`（评审当时看的还是补写前的文本）。
+    门禁按评审记录判「阻断级硬伤章」→ FAIL。这是横切机制只接线了一半的典型症状：
+    改了正文、没改记录，**数据矛盾本身是唯一可观察的信号**。
+
+    本函数只做「摘除已不成立的钩子结论」，**不动分数与判档**——分数是评审当时的实测，
+    补写一轮不构成加分理由（避免为了过门禁而美化分数）。返回 (new_rv, removed)：
+    removed 是被摘掉的原描述列表，供调用方打印披露，绝不静默丢证据。
+    """
+    old_blockers = list(rv.get("blockers") or [])
+    removed = [b for b in old_blockers if "钩子" in str(b)]
+    new_rv = dict(rv)
+    new_rv["blockers"] = [b for b in old_blockers if "钩子" not in str(b)]
+
+    new_problems, removed_problems = [], []
+    for p in (rv.get("problems") or []):
+        is_hook = "钩子" in str(p.get("type", "")) or "章末钩子" in str(p.get("msg", ""))
+        if is_hook:
+            removed_problems.append(str(p.get("msg", ""))[:60])
+        else:
+            new_problems.append(p)
+    new_rv["problems"] = new_problems
+    removed += removed_problems
+    return new_rv, removed
