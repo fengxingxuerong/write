@@ -18,6 +18,7 @@ build_run.log
 # 这类文件内容是终端输出、无参考价值，且会污染工作区与提交候选；
 # 但历史上确实漏进过工作区，故显式忽略而不是靠自觉。
 .tmp_*.txt
+.tmp_*.bak
 *.tmp
 
 # Windows 保留设备名误创建文件
@@ -57,14 +58,25 @@ __pycache__/
 .dumate/
 
 # 密钥与敏感文件（严禁入库，一律走环境变量注入）
+#
+# 注（2026-10-13 修正）：`.env.example` 是**无真值**的密钥模板（各 Key 均留空），
+# 它必须入库——否则新克隆仓库的人拿不到模板，而 README/CHANGELOG 的引导语会
+# 指向一个不存在的文件。此前 `.env.*` 把它一并盖掉，导致「文档声称入库、实际
+# 未入库」的脱节（test_secret_hygiene.py 的 IGNORE_FILES 白名单本就写着它，
+# 即作者本就预期它入库）。
+# 否定规则必须写在 `.env.*` **之后**：gitignore 中后出现的模式覆盖先出现的。
 .env
 .env.*
+!.env.example
 *.key
 
 # 含内置 API Key 的脚本（密钥一律走环境变量注入，不入库）
 # 注：scripts/generate_novel.py 曾在此列，已核实全文无硬编码密钥（只读 --api-key / NOVEL_LLM_API_KEY），
 #     且 novel_pipeline.py / qa_scan_existing.py / ab_compare.py 均 import 它，必须入库。
-scripts/watchdog_pipeline.ps1
+# 注：scripts/watchdog_pipeline.ps1 曾在此列，但同一条判据复核后不成立——全文只写
+#     NOVEL_KEY_* 环境变量名、无任何密钥串（test_secret_hygiene.py 已扫过入库文件），
+#     且 scripts/README.md 第 33/74/164 行、docs/交付文档.md 第 25 行都把它当交付脚本
+#     教用户运行。已移出忽略列表并入库。
 
 
 # 一次性研究/工具产物（不入库）
@@ -72,3 +84,9 @@ research-reports/
 
 # 一次性探测/诊断脚本（与 CI 口径一致：临时探针不入库、不设防）
 scripts/probe/
+
+# 截图草稿目录（`web/` 视觉稿的本地截图产出，不入库）
+.shot/
+
+# 本地手搓的一次性 HTML 视觉稿（`landing.html` 入库、其余草稿不入库）
+pelican-*.html

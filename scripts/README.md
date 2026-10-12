@@ -72,6 +72,10 @@ python -u novel_pipeline.py --total-words 3000 --max-chapters 1 --output test.js
 
 # 守护模式（防崩溃中断，自动拉起续传）
 powershell -ExecutionPolicy Bypass -File watchdog_pipeline.ps1
+
+# 换机/换书时可用参数覆盖（缺省值由脚本自身位置推导仓库根，不再硬编码绝对路径）
+powershell -ExecutionPolicy Bypass -File watchdog_pipeline.ps1 `
+  -TotalWords 15000 -MaxChapters 5
 ```
 
 输出：`--output` 指定 jsonl 进度文件（大纲 + 章节 + 评审卡 + 日志），完成自动导出同名 `.txt`、`.评估卡.txt`、`.上架包.txt`。
