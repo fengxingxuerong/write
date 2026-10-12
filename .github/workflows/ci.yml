@@ -36,6 +36,11 @@ jobs:
           # 规则单一数据源：生成物必须与 rules/quality_rules.json 完全一致
           # （词表/阈值改了 JSON 却忘了跑 rules_codegen 就在此失败）
           python3 scripts/rules_codegen.py --check
+          # 注意：下面这条 discover 也会跑 scripts/test_dart_layering.py——
+          # 它检查的是 **Dart** 的 import 分层（环 + engine/quality 不得依赖 ai_pipeline）。
+          # 放 Python job 是因为它能用纯文本解析 import 边、无需 dart SDK，
+          # 且比 `dart analyze` 更早发现问题（环不会让 analyze 报错）。
+          # 挪它去 Dart job 前先想清楚：那边没有 python3 时的回退是什么。
           python3 -m unittest discover -s scripts -p 'test_*.py' -v
           # compileall 不会发现同目录导入/模块入口错误，补运行时导入回归。
           python3 -m scripts.generate_novel --help >/dev/null

@@ -19,6 +19,16 @@ import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 ///
 /// 依赖说明：`ChapterPayoff`（跨章爽点度量）与 `dialogueRatioOf`（对白占比）仍留在
 /// 上层，这里直接复用，不另起一份口径。
+///
+/// **注意：这让本文件与 `pipeline_qa.dart` 构成 import 环**（pipeline_qa 转调本类，
+/// 本类又回用 `PipelineQa.dialogueRatioOf`）。Dart 允许循环 import，编译与测试全绿，
+/// 环不会以任何报错形式暴露。已按 `scripts/test_dart_layering.py` 登记为已知环
+/// （该脚本是 CI 门禁：**新环一出现就红**）。
+///
+/// 为什么不立刻断掉：`dialogueRatioOf` 有 19 处引用（含 test/ 与 tool/ 双端对账脚本），
+/// 把它挪到本文件的收益远小于破坏面。若要断环，正确做法是把 `dialogueRatioOf`
+/// 与 `ChapterPayoff` 一起下沉到 `engine/quality/`，而不是反向依赖。
+/// 断掉后记得从该脚本的 `KNOWN_CYCLES` 删掉对应条目（它有一条反向断言盯着登记项）。
 class CrossChapterQa {
   const CrossChapterQa._();
   /// 外显爽点断供带（💥 通道枯竭区）：连续 >=[minRun] 章直白爽点低于 [threshold]。
