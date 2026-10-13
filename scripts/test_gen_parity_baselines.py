@@ -64,7 +64,7 @@ class DroughtShapeTest(unittest.TestCase):
     def test_output_shape_matches_dart_reader(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "c.jsonl"
-            # 三章全是高密度爽点词 -> 无断供带；结构仍必须是那三个字段
+            # 三章全是高密度爽点词 -> 无断供带；结构仍必须是那五个字段
             body = "他一拳打脸，全场鸦雀无声，众人惊呼。"
             p.write_text("\n".join(chapter(i, body) for i in range(1, 4)) + "\n",
                          encoding="utf-8")
@@ -76,8 +76,16 @@ class DroughtShapeTest(unittest.TestCase):
                 gen.GEN_DIR = old
             self.assertIn("c", out)
             row = out["c"]
-            self.assertEqual(set(row), {"n", "zones", "in_zone"})
+            # 契约（2026-10-14 扩容）：原 {n, zones, in_zone} 三字段外**增补
+            # thrill/side 输入数组**——入库固化基线（--pinned）需要输入，
+            # Dart 侧才能在无 data/generated 语料的 CI 上从提交的输入重算断供带。
+            # 少了任一字段，tool/verify_payoff_drought_parity_test.dart 会崩
+            # 或静默跳过（读到 null）。本断言即该契约的机器化。
+            self.assertEqual(set(row), {"n", "thrill", "side", "zones", "in_zone"})
             self.assertEqual(row["n"], 3)
+            self.assertEqual(len(row["thrill"]), 3)
+            self.assertEqual(len(row["side"]), 3)
+            self.assertTrue(all(isinstance(x, float) for x in row["thrill"]))
             self.assertIsInstance(row["zones"], list)
             for z in row["zones"]:
                 self.assertEqual(len(z), 3)

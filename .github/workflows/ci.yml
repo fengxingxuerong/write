@@ -90,6 +90,19 @@ jobs:
         # --fatal-infos：任何 info（含 deprecation）都算失败，兑现 README「零告警」承诺
         run: dart analyze --fatal-infos
 
+      - name: Dual-end parity (corpus-free)
+        # 双端算法对账（P1-2：同一指标两套实现，漂移面只能靠机器看住）。
+        # flutter test 默认只收录 test/ 下的用例，而 *_parity_test.dart 在 tool/ 下
+        # （2026-10-01 评审：依赖本地语料的检查移出 test/ 防「基线缺失即 SKIP」的假绿）。
+        # 这两份自 2026-10-14 起读**入库固化基线**（rules/*.json，零语料依赖），
+        # 故可显式纳入 CI：payscene 240 例矩阵、drought 18 本真实成书逐章输入。
+        # Python 侧由 scripts/test_*_parity.py 钉「基线 == 当前 Python 重算」防过期。
+        # 仍需语料的一份（stylefp，输入是整篇正文）不在此列，按需本机手动跑。
+        run: >
+          flutter test
+          tool/verify_payoff_scene_parity_test.dart
+          tool/verify_payoff_drought_parity_test.dart
+
       - name: Flutter test
         run: flutter test --coverage
 

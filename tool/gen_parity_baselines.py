@@ -11,14 +11,17 @@
     py_stylefp.json   —— 三个真实成书的九项文风指纹
     py_payscene.json  —— isPayoffScene 的 240 例矩阵（10 目标 × 4 场景拍 × 6 位置）
 
-2026-10-14 补充（payscene 已可进 CI）：
-    payscene 那份**不依赖任何语料**（纯函数枚举），故已固化为入库基线
-    `rules/payoff_scene_parity.json`，Dart 与 Python 两侧都能在 CI 直接断言。
-    本脚本仍可用 `--only payscene` 重算，用于对比/刷新该入库基线
-    （把 verify-logs/py_payscene.json 拷到 rules/payoff_scene_parity.json）。
-    注意 drought / stylefp 两份仍依赖 data/generated/ 语料（gitignore），
-    只能本地生成，无法进 CI——它们必须在真实成书上才有意义。
-    刷新入库基线后请跑 scripts/test_payoff_scene_parity.py 确认闭环未断。
+2026-10-14 补充（payscene/drought 已可进 CI）：
+    payscene 与 drought 那两份**不依赖语料即可对账**（payscene 是纯函数枚举；
+    drought 的逐章密度输入随基线一起固化），故可用 `--pinned` 固化到 rules/：
+        python tool/gen_parity_baselines.py --pinned --only payscene
+        python tool/gen_parity_baselines.py --pinned --only drought
+    Dart 侧 tool/verify_*_parity_test.dart 读固化基线即可在 CI 无语料对账，
+    Python 侧由 scripts/test_*_parity.py 钉「基线 == 当前 Python 行为」。
+    --pinned --check 用于核对固化基线是否过期（重算比对，不写文件）。
+    注意 stylefp 无法固化（输入是整篇正文，固化即提交生成产物，与 data/ 的
+    gitignore 边界冲突），它的对账仍需本地语料，按需手动跑。
+    刷新固化基线后请跑对应 scripts/test_*_parity.py 确认闭环未断。
 
 用法:
     python tool/gen_parity_baselines.py                # 写入 verify-logs/
@@ -96,6 +99,11 @@ def gen_drought():
     注意 payoff_drought_zones 返回的是 (start, end, chapters) 元组列表，基线里存的是
     **列表**形式且带 n/in_zone 三个字段——Dart 侧 tool/verify_payoff_drought_parity_test.dart
     按 `py[k]['n'] / ['zones'] / ['in_zone']` 取值，包装形状必须一致。
+
+    2026-10-14 增补 `thrill` / `side` **输入数组**（每章密度）：
+    入库固化基线（--pinned）必须含输入，Dart 侧才能在无 data/generated 语料的
+    CI 上从提交的输入重算断供带——否则 Dart 需要读真机 jsonl 才有输入，
+    对账只能留在本机（这正是 drought 这份长期进不了 CI 的原因）。
     """
     out = {}
     if not GEN_DIR.is_dir():
@@ -109,6 +117,8 @@ def gen_drought():
         zones = payoff_drought_zones(t, side_per_k=s)
         out[j.stem] = {
             "n": len(t),
+            "thrill": t,
+            "side": s,
             "zones": [list(z) for z in zones],
             "in_zone": sum(z[2] for z in zones),
         }
@@ -145,9 +155,40 @@ BUILDERS = {
     "payscene": ("py_payscene.json", gen_payscene),
 }
 
+# --pinned：写入/校验**入库固化基线**（rules/），供 CI 侧无语料对账。
+# 文件名用语义名而非 py_*.json——它们是提交进仓库的公共契约，不是本机中间产物。
+# payscene 已于 2026-10-14 固化；drought 同日固化（含逐章输入，见 gen_drought）。
+# stylefp **暂不固化**：它的输入是整篇正文（数十万字），固化即把生成产物
+# 提交进库，与 data/ 的 gitignore 边界冲突；它的双端对账仍是本机手动跑。
+PINNED_NAMES = {
+    "drought": "payoff_drought_parity.json",
+    "payscene": "payoff_scene_parity.json",
+}
+
 
 def describe(data):
     return f"{len(data)} 项" if isinstance(data, dict) else f"{len(data)} 例"
+
+
+def _write_stable_json(data, fh):
+    """以**稳定格式**写基线：保持字段书写序、2 空格缩进、结尾带换行。
+
+    为什么不能用 `json.dump(..., sort_keys=True, indent=1)`（2026-10-14 踩过）：
+    这样写会把 payscene 的字段从 `g/s/i/t/r` 重排成 `g/i/r/s/t`、缩进换挡，
+    于是**逐条内容完全相同**的基线也产生 ~1680 行 diff。后果是致命的——
+    这些基线存在的意义就是「双端算法漂移时 diff 会说话」，而全文件重排
+    恰好把真实漂移埋进 1680 行格式噪声里，人只会看到「格式变了」就跳过。
+
+    故只需去掉 sort_keys：`gen_payscene()` 用字典字面量构造，字段书写序
+    本就是 g/s/i/t/r，`json.dump` 按插入序输出即与手写基线逐字节一致。
+    （曾试过手工逐 record 序列化，结果缩进层级猜错、多出前导空格——
+    能用标准库解决的事不要自己写。）
+
+    `--check` 比对走 json.loads 与格式无关；这里求的是**人工 review diff 时
+    看到的每一行都必然是真变化**。
+    """
+    json.dump(data, fh, ensure_ascii=False, indent=2)
+    fh.write("\n")
 
 
 def _strip_words(fp):
@@ -199,13 +240,38 @@ def main():
                     help="重算并与现有基线比对；不一致则 exit 1（不写文件）")
     ap.add_argument("--only", choices=sorted(BUILDERS), help="只处理其中一份")
     ap.add_argument("--out-dir", default="", help="输出目录（默认 verify-logs/）")
+    ap.add_argument("--pinned", action="store_true",
+                    help="操作入库固化基线（rules/<语义名>.json，供 CI 无语料对账）；"
+                         "须配合 --only（固化基线一份一份地刷新）")
     args = ap.parse_args()
 
-    out_dir = Path(args.out_dir) if args.out_dir else ROOT / "verify-logs"
+    if args.pinned:
+        if not args.only:
+            ap.error("--pinned 必须配合 --only（固化基线是逐份契约，"
+                     "不支持一次性全量写入）")
+        if args.only not in PINNED_NAMES:
+            ap.error(f"{args.only} 尚未固化（见 PINNED_NAMES 注释："
+                     "stylefp 输入是整篇正文，无法在不提交生成产物的前提下固化）")
+        out_dir = Path(args.out_dir) if args.out_dir else ROOT / "rules"
+        pinned_filename = PINNED_NAMES[args.only]
+    else:
+        out_dir = Path(args.out_dir) if args.out_dir else ROOT / "verify-logs"
+        pinned_filename = None
+
     names = [args.only] if args.only else list(BUILDERS)
     bad = []
+    if pinned_filename is None:
+        # 说明性提示，不改变行为：历史上有人以为「直接跑一次就会刷新固化基线」，
+        # 结果只写到了 verify-logs/（gitignore）或 --out-dir 指定的任意目录，
+        # 入库的固化基线悄悄过期而没人发现（2026-10-14 本人就这样错过一次，
+        # 把 payscene 写到了仓库根的 py_payscene.json 而非 rules/ 下）。
+        dest = out_dir / "py_<name>.json"
+        print(f"[提示] 未加 --pinned，将写入 {dest}（不入库）。"
+              "要刷新 CI 用的固化基线请加 --pinned --only <name>。")
     for name in names:
         filename, builder = BUILDERS[name]
+        if pinned_filename:
+            filename = pinned_filename
         data = builder()
         target = out_dir / filename
         if args.check:
@@ -222,7 +288,7 @@ def main():
             continue
         out_dir.mkdir(parents=True, exist_ok=True)
         with target.open("w", encoding="utf-8", newline="\n") as fh:
-            json.dump(data, fh, ensure_ascii=False, sort_keys=True, indent=1)
+            _write_stable_json(data, fh)
         shown = target.relative_to(ROOT) if str(target).startswith(str(ROOT)) else target
         print(f"[WRIT] {shown}（{describe(data)}）")
 
