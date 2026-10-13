@@ -46,6 +46,44 @@ def extract_chapter_hook(ch):
     return (ch.get("hook") or "").strip()
 
 
+# 「产出退化」与「真·过度压缩」的分界。**注意：这是诊断标签的边界，不是质检阈值**，
+# 故刻意**不**放进 rules/quality_rules.json——那里放的是双端共用的质检判据，进它就得
+# 走 codegen + Dart 同步；而这里只决定 Python 日志怎么称呼这件事。
+#
+# 为什么必须分开（2026-10-13 冒烟门禁 v8d 实测）：编辑链主位 kimi-k3 连续 429 进入冷却后，
+# 链上产出了「3397 -> 1 字」的输出，守卫**正确拒绝并保留原文**——但日志把它记成
+# 「过度压缩」，门禁第 4 项据此判 FAIL。**「近乎空产出」是端点/链路故障的表现，
+# 不是「内容被压短」**；两者混为一类，会把环境抖动误报成质量回退（v8d 那次就是）。
+DEGENERATE_MAX_CHARS = 100     # 绝对下限：产出不足 100 字
+DEGENERATE_MAX_RATIO = 0.10    # 相对下限：产出不足原文 10%
+
+
+def is_degenerate_output(orig_text, patch_text):
+    """补丁是否属「近乎空产出」的退化输出（而非把正文压短）。"""
+    n_orig = count_words(orig_text or "")
+    n_patch = count_words(patch_text or "")
+    if n_patch <= 0:
+        return True
+    return n_patch < DEGENERATE_MAX_CHARS or n_patch < n_orig * DEGENERATE_MAX_RATIO
+
+
+def compress_warn_label(orig_text, patch_text, min_ratio=EDITOR_MIN_RATIO):
+    """产出被字数下限拒绝时的**统一告警文案**（同时供日志与门禁计数使用）。
+
+    两种情形分开称呼，避免门禁把端点故障当质量回退：
+      · 退化 → 「⚠ 产出退化 …（近乎空产出，端点/链路故障表现，非内容被压缩）」；
+      · 真压缩 → 「⚠ 过度压缩（…低 {ratio}%），拒绝采纳保留原文」。
+    门禁第 4 项只计后者的字面量（"过度压缩"），退化另计一条 WARN 提示。
+    """
+    n_orig = count_words(orig_text or "")
+    n_patch = count_words(patch_text or "")
+    if is_degenerate_output(orig_text, patch_text):
+        return (f"⚠ 产出退化 {n_orig} -> {n_patch} 字（近乎空产出，"
+                f"端点/链路故障表现，非内容被压缩），拒绝采纳保留原文")
+    return (f"⚠ 过度压缩（{n_orig} -> {n_patch} 字，"
+            f"低于 {int(min_ratio * 100)}%），拒绝采纳保留原文")
+
+
 def apply_text_patch(final_text, patch, genre, min_ratio=EDITOR_MIN_RATIO, tag="补丁"):
     """整章级补丁（扩写/定点修/打勾补写）的通用采纳判定：字数下限 + 补丁卫生。
 
@@ -57,8 +95,7 @@ def apply_text_patch(final_text, patch, genre, min_ratio=EDITOR_MIN_RATIO, tag="
         return final_text
     p = patch.strip()
     if count_words(p) < count_words(final_text) * min_ratio:
-        print(f"  [{tag}] 过度压缩（{count_words(final_text)} -> {count_words(p)} 字，"
-              f"低于 {int(min_ratio * 100)}%），拒绝采纳保留原文")
+        print(f"  [{tag}] {compress_warn_label(final_text, p, min_ratio)}")
         return final_text
     ok, why = patch_gate(p, genre=genre, max_words=10 ** 9)
     if not ok:

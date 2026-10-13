@@ -211,10 +211,17 @@ def check(output, max_chapters, review_pass=78.0, genre="玄幻"):
     chk("日志无 Traceback", tb == 0, f"{tb} 处")
 
     # 4) 编辑守卫未告警（守卫触发=编辑链异常输出，记 WARN 不 FAIL，但要在报告中可见）
-    compress = 0
+    # 2026-10-13 计数粒度拆分：本项只计**真·过度压缩**；「产出退化」（近乎空产出，例如
+    # kimi 连撞 429 冷却后链上产出 3397→1 字）属端点/链路故障表现，单独提示、不拦项——
+    # v8d 实测正是它把本项误判成 FAIL（守卫行为本身完全正确：拒绝并保留原文）。
+    compress = degenerate = 0
     if os.path.exists(log):
         with open(log, encoding="utf-8", errors="replace") as f:
-            compress = f.read().count("过度压缩")
+            _log_text = f.read()
+        compress = _log_text.count("过度压缩")
+        degenerate = _log_text.count("产出退化")
+    if degenerate:
+        print(f"  [WARN] 编辑链产出退化 {degenerate} 次（近乎空产出，端点/链路故障表现，不拦项）")
     chk("编辑链无过度压缩告警", compress == 0, f"{compress} 次（WARN）")
 
     # 5) 每章评审分数有效（0 分=评审静默失效，属回归信号；低分章仅 WARN 不算回归）

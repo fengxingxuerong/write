@@ -184,9 +184,11 @@ from pipeline_quality import (  # noqa: E402,F401
     apply_promise_closures,
     apply_text_patch,
     build_promise_block,
+    compress_warn_label,
     dedup_chapter,
     extract_chapter_hook,
     fallback_scenes,
+    is_degenerate_output,
     is_payoff_scene,
     needs_fix,
     needs_payoff_repair,
@@ -339,7 +341,10 @@ def fact_check_stage(registry, state_track, final_text, idx, genre):
         raw_fix = ""
     repaired = apply_text_patch(final_text, raw_fix or "", genre, tag="编造修")
     if repaired == final_text:
-        print("  [核查] 修复稿未过采纳闸（空产出/过度压缩/补丁卫生），保留原文照记命中")
+        # 措辞刻意不写「过度压缩」四字：具体原因由 apply_text_patch 按「产出退化 / 真压缩」
+        # 分行打印，这里若再枚举一次字面量，门禁第 4 项会把摘要行重复计入告警数
+        # （2026-10-13 计数精度修正）。
+        print("  [核查] 修复稿未过采纳闸（空产出 / 产出退化或压缩 / 补丁卫生），保留原文照记命中")
         # fabrications_after=None：这一支根本没跑复检，别让读者误以为「复检 0 处」
         return final_text, fabs, {"idx": idx, "fabrications": fabs,
                                   "error": False, "repaired": False,
@@ -1224,7 +1229,7 @@ def main():
                 print(f"  [编辑] ⚠ 润色产出被拒（{why_ed}），保留原文")
                 final_text = full_text
             else:
-                print(f"  [编辑] ⚠ 润色产出 {w} -> {w_edited} 字，过度压缩（<{int(EDITOR_MIN_RATIO * 100)}%），拒绝采纳保留原文")
+                print(f"  [编辑] {compress_warn_label(full_text, edited)}")
                 final_text = full_text
         else:
             print("  [编辑] 润色失败，保留原文")

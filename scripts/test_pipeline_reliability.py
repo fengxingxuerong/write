@@ -429,6 +429,52 @@ class ScenePlanReliabilityTest(unittest.TestCase):
         self.assertEqual(lost, [])
 
 
+class OutputDegenerateLabelTest(unittest.TestCase):
+    """「产出退化」与「真·过度压缩」必须分开称呼（2026-10-13 门禁 v8d 实测）。
+
+    事故形态：编辑链主位 kimi 连撞 429 冷却后，链上产出「3397 -> 1 字」，守卫正确拒绝
+    并保留原文——但日志记成「过度压缩」，门禁第 4 项据此判 FAIL，把端点故障误报成质量回退。
+    """
+
+    def test_degenerate_by_absolute_floor(self):
+        self.assertTrue(pipeline.is_degenerate_output("正文" * 1500, "好"))
+        label = pipeline.compress_warn_label("正文" * 1500, "好")
+        self.assertIn("产出退化", label)
+        self.assertNotIn("过度压缩", label, "退化文案不得含门禁计数用字面量")
+
+    def test_degenerate_by_ratio(self):
+        orig = "字" * 3000
+        self.assertTrue(pipeline.is_degenerate_output(orig, "字" * 200))  # 6.7%
+
+    def test_real_compression_keeps_old_label(self):
+        orig = "字" * 3000
+        patch = "字" * 2000  # 66.7%：压缩了但仍是成文
+        self.assertFalse(pipeline.is_degenerate_output(orig, patch))
+        label = pipeline.compress_warn_label(orig, patch)
+        self.assertIn("过度压缩", label)
+        self.assertNotIn("产出退化", label)
+
+    def test_boundary_at_ten_percent_is_compression_not_degenerate(self):
+        """边界写死在这里：正好 10%（且 ≥100 字）算压缩，不算退化。"""
+        orig = "字" * 3000
+        self.assertFalse(pipeline.is_degenerate_output(orig, "字" * 300))
+
+    def test_apply_text_patch_prints_degenerate_for_near_empty(self):
+        orig = "原" * 2000
+        out = io.StringIO()
+        with redirect_stdout(out):
+            kept = pipeline.apply_text_patch(orig, "短", "玄幻", tag="编造修")
+        self.assertEqual(orig, kept, "退化产出必须被拒、保留原文")
+        self.assertIn("产出退化", out.getvalue())
+        self.assertNotIn("过度压缩", out.getvalue())
+
+    def test_gate_counts_only_real_compression(self):
+        """门禁只数「过度压缩」字面量——两套文案必须一个含、一个不含。"""
+        orig = "字" * 3000
+        self.assertNotIn("过度压缩", pipeline.compress_warn_label(orig, "字" * 100))
+        self.assertIn("过度压缩", pipeline.compress_warn_label(orig, "字" * 2500))
+
+
 class HookRecheckReviewRefreshTest(unittest.TestCase):
     """钩子终检补写后刷新评审记录（零 LLM）——锁住 2026-10-12 门禁 v8b 那个数据矛盾。
 
