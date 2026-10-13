@@ -185,6 +185,7 @@ from pipeline_quality import (  # noqa: E402,F401
     apply_text_patch,
     build_promise_block,
     compress_warn_label,
+    count_persisting_claims,
     dedup_chapter,
     extract_chapter_hook,
     fallback_scenes,
@@ -370,13 +371,28 @@ def fact_check_stage(registry, state_track, final_text, idx, genre):
                                   "error": False, "repaired": False,
                                   "fabrications_after": None}
     fabs2 = run_fact_check(registry, state_track, repaired, idx)
+    # 确定性复核（不依赖 LLM 判定）：首轮那几条里，原句仍在修复稿里的有几条。
+    # 2026-10-13 v8d 实证：LLM 复检报 1 处、确定性复核却是 5/7 仍在——两个读数差异大，
+    # 说明「命中数下降」掺了大量判定噪声。这里如实打印，不改变采纳决策（改决策需真机验证）。
+    persisting = count_persisting_claims(final_text, repaired, fabs)
+    # 两个读数量纲不同（确定性=首轮那几条原句仍有几条；LLM=复检报的总命中数，可能含新项），
+    # 故这里只做**量级一致性**提示：数量差得多就说明判定噪声大，读数只能参考。
+    _llm_after = "error" if fabs2 is None else str(len(fabs2))
+    if fabs2 is not None and len(persisting) != len(fabs2):
+        print(f"    [核查] ⚠ 判定不一致：确定性复核显示首轮 {len(fabs)} 条中仍有 "
+              f"{len(persisting)} 条原句在修复稿里，而 LLM 复检报 {_llm_after} 处"
+              f"（核查判定有噪声，读数仅供参考）")
+    else:
+        print(f"    [核查] 确定性复核：首轮 {len(fabs)} 条中仍有 {len(persisting)} 条原句在修复稿里"
+              f"（LLM 复检 {_llm_after} 处）")
     if fabs2 is not None and len(fabs2) < len(fabs):
         print(f"  [核查] 复检 {len(fabs)} → {len(fabs2)} 处，采纳修复稿"
               f"（{count_words(final_text)} → {count_words(repaired)} 字）")
         return repaired, fabs2, {"idx": idx, "fabrications": fabs2,
                                  "error": False, "repaired": True,
                                  "fabrications_before": fabs,
-                                 "fabrications_after": fabs2}
+                                 "fabrications_after": fabs2,
+                                 "persisting_after": persisting}
     why = "复检未跑成" if fabs2 is None else f"复检仍 {len(fabs2)} 处"
     print(f"  [核查] {why}、未优于首轮，回滚保留原文（首轮命中照记）")
     # 复检**明细**必须一并落盘（2026-10-12 补）：此前只在采纳分支存 fabs2，
@@ -386,7 +402,8 @@ def fact_check_stage(registry, state_track, final_text, idx, genre):
     # fabrications_after 只作取证用，不参与判分。
     return final_text, fabs, {"idx": idx, "fabrications": fabs,
                               "error": False, "repaired": False,
-                              "fabrications_after": fabs2}
+                              "fabrications_after": fabs2,
+                              "persisting_after": persisting}
 
 
 # 外显爽点场景的识别键：规划层 goal 里出现任一即视为爽点场景。

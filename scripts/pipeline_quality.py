@@ -415,6 +415,36 @@ def _splice_head(text, new_head, min_cut=300, hard_cap=700):
     return new_head.strip() + "\n\n" + text[cut:].lstrip()
 
 
+def _claim_probe(claim, min_len=6):
+    """从核查命中的断言里挑一段「足够长、够独特」的中文串当探针（找不到返回 None）。"""
+    runs = re.findall(r"[\u4e00-\u9fff]{%d,}" % min_len, str(claim or ""))
+    if not runs:
+        return None
+    return max(runs, key=len)
+
+
+def count_persisting_claims(original_text, repaired_text, fabrications):
+    """确定性复核：首轮命中的断言里，有多少条**原句仍留在修复稿里**。
+
+    为什么必须有它（2026-10-13 门禁 v8d 实证）：第 2 章首轮判 7 处、定点修后 LLM 复检只报
+    1 处，于是按「命中数下降」采纳了修复稿——但逐句核对发现**7 条里有 5 条原句仍在正文里**
+    （「当年谁废了你灵脉」「配给灵石一共四枚」「碎星楼那边传过闲话」「外务殿跑腿」「续骨草」），
+    而复检报的那 1 条还是首轮没出现过的新项。也就是说「命中数下降」主要是 LLM 判定的**噪声**，
+    不是真修好了——**拿有噪声的两个计数比大小，采纳决策会被噪声翻转**。
+
+    本函数只做确定性判断（原句是否还在），给出一个不受模型噪声影响的读数，
+    供日志与产物如实披露「修完还剩几条」。
+    """
+    if not repaired_text:
+        return []
+    persisting = []
+    for fb in (fabrications or []):
+        probe = _claim_probe(fb.get("claim") if isinstance(fb, dict) else fb)
+        if probe and probe in repaired_text:
+            persisting.append(probe)
+    return persisting
+
+
 def refresh_hook_review(rv):
     """钩子终检补写成功后就地刷新该章评审记录——摘掉与钩子相关的结论（纯规则，零 LLM）。
 

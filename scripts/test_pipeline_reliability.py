@@ -429,6 +429,53 @@ class ScenePlanReliabilityTest(unittest.TestCase):
         self.assertEqual(lost, [])
 
 
+class PersistingClaimsDeterministicTest(unittest.TestCase):
+    """确定性复核：LLM 说「修好了」不算数，得看原句是不是真没了。
+
+    2026-10-13 门禁 v8d 实证：第 2 章首轮判 7 处、复检只报 1 处（还是首轮没出现过的新项），
+    但逐句核对发现 **7 条里有 5 条原句仍在正文里**——「命中数下降」掺了大量判定噪声。
+    """
+
+    def test_counts_claims_whose_text_survives(self):
+        fabs = [
+            {"claim": "周执事说‘当年谁废了你灵脉’", "type": "fabricated"},
+            {"claim": "配给灵石一共四枚，内务殿卡着", "type": "number"},
+            {"claim": "残留的残碑与掌心纹路同源共振", "type": "fabricated"},
+        ]
+        repaired = "他想起当年谁废了你灵脉那句话。配给灵石一共四枚，内务殿卡着。"
+        persisting = pipeline.count_persisting_claims("原文", repaired, fabs)
+        self.assertEqual(2, len(persisting), "原句仍在的两条必须被确定性捕获")
+        self.assertFalse(any("同源共振" in p for p in persisting), "已消失的不该计入")
+
+    def test_claim_without_long_cjk_run_is_skipped(self):
+        """断言里没有足够长的中文串（纯数字/短词）时跳过，不制造假命中。"""
+        self.assertEqual([], pipeline.count_persisting_claims("原文", "正文", [{"claim": "4.5"}]))
+
+    def test_record_carries_persisting_on_accept(self):
+        fabs = [{"claim": "残留的通天灵根来历", "type": "fabricated"}]
+        with patch.object(pipeline, "run_fact_check", side_effect=[fabs, []]), \
+                patch.object(pipeline, "apply_text_patch",
+                             return_value="修复稿里仍有残留的通天灵根来历一句"), \
+                patch("builtins.print"):
+            _t, _f, rec = pipeline.fact_check_stage({}, "", "原文正文", 2, "玄幻")
+        self.assertTrue(rec.get("repaired"), "复检 0 处应构成采纳")
+        self.assertIn("persisting_after", rec, "采纳分支也要落盘确定性读数")
+        self.assertEqual(1, len(rec["persisting_after"]),
+                         "首轮那条原句仍在 → 确定性复核应报 1 条未消除")
+
+    def test_mismatch_is_printed_loudly(self):
+        fabs = [{"claim": "残留的通天灵根来历", "type": "fabricated"}]
+        out = io.StringIO()
+        with patch.object(pipeline, "run_fact_check", side_effect=[fabs, []]), \
+                patch.object(pipeline, "apply_text_patch",
+                             return_value="修复稿里仍有残留的通天灵根来历一句"), \
+                redirect_stdout(out):
+            pipeline.fact_check_stage({}, "", "原文正文", 2, "玄幻")
+        text = out.getvalue()
+        self.assertIn("判定不一致", text, "确定性复核与 LLM 复检打架时必须显式提示")
+        self.assertIn("核查判定有噪声", text)
+
+
 class FactCheckFailureReasonTest(unittest.TestCase):
     """失败诊断必须区分「链路全失败」与「格式不对」，不能一律写成思考链吃满。
 
