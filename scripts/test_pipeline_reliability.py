@@ -429,6 +429,35 @@ class ScenePlanReliabilityTest(unittest.TestCase):
         self.assertEqual(lost, [])
 
 
+class FactCheckFailureReasonTest(unittest.TestCase):
+    """失败诊断必须区分「链路全失败」与「格式不对」，不能一律写成思考链吃满。
+
+    2026-10-13 教训（v8c）：本机 DNS 掉线时四端点同时 URLError，诊断却打印
+    「预算 N 未取到合法 JSON（思考链吃满/解析失败）」，把排查带偏到 token 预算上。
+    """
+
+    def test_empty_output_names_link_failure_not_json(self):
+        reason = pipeline.fact_check_failure_reason("")
+        self.assertIn("未取到任何输出", reason)
+        self.assertIn("链路全失败", reason)
+        self.assertIn("[retry]", reason, "必须指向 llm_call 打的端点错误行")
+
+    def test_non_json_output_carries_snippet(self):
+        reason = pipeline.fact_check_failure_reason("  {我觉得本章没问题吧——不是JSON}")
+        self.assertIn("非合法 JSON", reason)
+        self.assertIn("我觉得本章没问题吧", reason, "必须把模型实际返回带出来")
+
+    def test_run_fact_check_prints_reason_and_returns_none(self):
+        out = io.StringIO()
+        with patch.object(pipeline, "call_chain", return_value=""):
+            with redirect_stdout(out):
+                result = pipeline.run_fact_check({"characters": [], "facts": []}, "", "正文", 1)
+        self.assertIsNone(result, "跑不成必须返回 None（不是空列表）")
+        text = out.getvalue()
+        self.assertIn("未取到任何输出", text)
+        self.assertNotIn("（思考链吃满/解析失败）", text, "旧的一刀切措辞必须已消失")
+
+
 class OutputDegenerateLabelTest(unittest.TestCase):
     """「产出退化」与「真·过度压缩」必须分开称呼（2026-10-13 门禁 v8d 实测）。
 

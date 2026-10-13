@@ -286,27 +286,47 @@ def apply_hook_patch(final_text, hook_hint, protagonist, genre, tag=""):
 FACT_CHECK_BUDGETS = (8000, 16000)
 
 
+def fact_check_failure_reason(raw):
+    """把「没取到合法 JSON」的**原因大类**说清楚，并把模型实际返回的片段带出来。
+
+    2026-10-13 教训（冒烟门禁 v8c）：本机 DNS 掉线时四个端点同时 `URLError`
+    `getaddrinfo failed`，但诊断只打印「预算 N 未取到合法 JSON（思考链吃满/解析失败）」——
+    把排查方向直接带偏到 token 预算上（实际是网络层故障）。真实端点错误在 `llm_call`
+    打的 [retry]/[chain] 行里，这里至少不再把两类原因混成一句，并对「有输出但格式不对」
+    附上原文片段（那是最常需要看的一手证据）。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return ("未取到任何输出（链路全失败：限流/网络/超时，或思考链吃满致正文为空；"
+                "具体端点错误见上方 [retry]/[chain] 行）")
+    snippet = text[:80].replace("\n", " ")
+    return f"返回非合法 JSON（模型没按 schema 答，原文前 80 字：{snippet}）"
+
+
 def run_fact_check(registry, state_track, final_text, idx):
     """关卡 5 · 编造核查：规划官 glm 链（与写手 dsf/DeepSeek 异家族）独立核查。
 
     返回 fabrication 列表；核查未跑成（异常/空输出/不合 schema）返回 **None**，
     由调用方记 error——「没跑成」绝不当「没问题」（门禁第 16 项据此判 FAIL）。
     预算按 FACT_CHECK_BUDGETS 逐档重试，防思考型模型吃满 max_tokens 造成静默失效。
+    失败原因按大类打印（见 fact_check_failure_reason），不再把网络故障写成 token 预算问题。
     """
     prompt = fabrication_check_prompt(final_text, registry, state_track, idx)
     for attempt, budget in enumerate(FACT_CHECK_BUDGETS, start=1):
+        raw = ""
         try:
             raw = call_chain(PLANNER_CHAIN, FACT_CHECK_SYS, prompt, max_tokens=budget)
             parsed = parse_json_from_llm(raw)
-        except Exception:
+        except Exception as e:  # noqa: BLE001
             parsed = None
+            print(f"    [核查] 调用异常：{type(e).__name__}: {str(e)[:80]}")
         if isinstance(parsed, dict) and isinstance(parsed.get("fabrications"), list):
             return [item for item in parsed["fabrications"] if isinstance(item, dict)]
+        reason = fact_check_failure_reason(raw)
         if attempt < len(FACT_CHECK_BUDGETS):
-            print(f"    [核查] 预算 {budget} 未取到合法 JSON（思考链吃满/解析失败），"
-                  f"提到 {FACT_CHECK_BUDGETS[attempt]} 重试")
+            print(f"    [核查] 预算 {budget} 失败：{reason}；提到 {FACT_CHECK_BUDGETS[attempt]} 重试")
         else:
-            print(f"    [核查] 预算提到 {budget} 仍未取到合法 JSON，本轮核查放弃")
+            print(f"    [核查] 预算提到 {budget} 仍失败：{reason}，本轮核查放弃")
     return None
 
 
