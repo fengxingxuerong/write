@@ -223,7 +223,11 @@ class PipelineReliabilityTest(unittest.TestCase):
 
 
 class FactCheckStageTest(unittest.TestCase):
-    """关卡5 命中即修：核查 → 定点修 → 复检（复检命中数下降才采纳，否则回滚）。
+    """关卡5 命中即修：核查 → 定点修 → 复检。
+
+    采纳判据 2026-10-13 已改（见交付文档 9.7）：主判据是**确定性读数**——修复稿里首轮
+    命中断言的原文必须真有消失；LLM 复检降级为护栏（不得比首轮劣化）。旧判据拿两个带
+    噪声的 LLM 计数比大小，v8d 第 2 章被噪声放行（复检报 1、实际 4 条原句没动）。
 
     v7 实锤：第 2 章 6 处编造只被「记录」、从无任何处置，门禁第 16 项因此必然 FAIL。
     """
@@ -273,9 +277,14 @@ class FactCheckStageTest(unittest.TestCase):
         self.assertFalse(rec["error"])
         self.assertEqual(rec["fabrications"], [])
 
-    def test_revert_when_recheck_not_better(self):
-        original = "他推开门。" * 100
-        repaired = "他推开门，屋里很暗，纸窗上有一道裂口。" * 90
+    def test_revert_when_no_claim_really_removed(self):
+        """确定性读数无改善 → 回滚（2026-10-13 判据变更后的等价物）。
+
+        旧版用「LLM 复检数未下降」当回滚依据；判据改成「确定性上必须真有原句消失」之后，
+        正确的回滚场景是：LLM 复检看着不劣化（1 处），但首轮那条断言的**原句仍然在**正文里。
+        """
+        original = "他推开门，老周求我宽限三天。" * 60
+        repaired = "他推开门，老周求我宽限三天，屋里很暗。" * 55   # 原句仍在 → 没真消除
         with patch.object(pipeline, "run_fact_check",
                           side_effect=[self.FABS1, self.FABS2]), \
                 patch.object(pipeline, "call_chain", return_value=repaired), \
@@ -283,9 +292,10 @@ class FactCheckStageTest(unittest.TestCase):
                              return_value=repaired), \
                 redirect_stdout(io.StringIO()):
             text, fabs, rec = pipeline.fact_check_stage({}, "", original, 1, "玄幻")
-        self.assertEqual(text, original, "复检未改善必须回滚，不能把换了文字当解决了问题")
+        self.assertEqual(text, original, "首轮原句还在正文里，就不能把「换了段文字」当解决问题")
         self.assertEqual(fabs, self.FABS1)
         self.assertFalse(rec["repaired"])
+        self.assertEqual(1, len(rec["persisting_after"]))
 
     def test_rejected_patch_skips_recheck(self):
         original = "他推开门。" * 100
@@ -429,6 +439,61 @@ class ScenePlanReliabilityTest(unittest.TestCase):
         self.assertEqual(lost, [])
 
 
+class FactCheckAcceptRuleTest(unittest.TestCase):
+    """采纳判据（2026-10-13 改）：主判据换成确定性读数，LLM 复检降级为护栏。
+
+    旧判据 `len(fabs2) < len(fabs)` 拿两个带噪声的 LLM 计数比大小——v8d 第 2 章实测被噪声
+    放行：复检报 1 处（还是首轮没出现过的新项），而首轮 7 条里 4 条原句根本没动。
+    """
+
+    FABS = [{"claim": "残留的通天灵根来历说明", "type": "fabricated"},
+            {"claim": "配给灵石一共四枚的说法", "type": "number"}]
+
+    def _run(self, repaired_text, recheck):
+        with patch.object(pipeline, "run_fact_check", side_effect=[self.FABS, recheck]), \
+                patch.object(pipeline, "apply_text_patch", return_value=repaired_text), \
+                patch("builtins.print"):
+            return pipeline.fact_check_stage({}, "", "原文正文", 2, "玄幻")
+
+    def test_llm_says_better_but_nothing_removed_must_rollback(self):
+        """最关键的回归：LLM 报 0 处、但两条原句一字未动 → 旧判据会误采纳，新判据必须回滚。"""
+        text, _fabs, rec = self._run("修复稿里残留的通天灵根来历说明还在，配给灵石一共四枚的说法也在", [])
+        self.assertEqual("原文正文", text, "确定性显示一条都没消失，不得采纳")
+        self.assertFalse(rec["repaired"])
+        self.assertEqual(2, len(rec["persisting_after"]))
+
+    def test_deterministic_improvement_and_llm_not_worse_accepts(self):
+        text, _fabs, rec = self._run("修复稿里只剩残留的通天灵根来历说明，另一条已删", [])
+        self.assertIn("修复稿", text, "真有一条原句消失且 LLM 不劣化 → 可以采纳")
+        self.assertTrue(rec["repaired"])
+        self.assertEqual(1, len(rec["persisting_after"]))
+
+    def test_llm_recheck_worse_rolls_back_even_if_deterministic_improved(self):
+        text, _fabs, rec = self._run("修复稿里只剩残留的通天灵根来历说明，另一条已删",
+                                     [{"claim": "新引入的无据断言甲"}, {"claim": "新引入的无据断言乙"},
+                                      {"claim": "新引入的无据断言丙"}])
+        self.assertEqual("原文正文", text, "确定性改善但 LLM 复检劣化（新项）→ 回滚")
+        self.assertFalse(rec["repaired"])
+
+    def test_recheck_未跑成_rolls_back(self):
+        text, _fabs, rec = self._run("修复稿里只剩残留的通天灵根来历说明", None)
+        self.assertEqual("原文正文", text, "复检没跑成不得当通过凭据")
+        self.assertIsNone(rec["fabrications_after"])
+
+    def test_v8d_real_shape_accepts(self):
+        """v8d 真实形态：首轮 7 条 → 确定性 4 条仍在（3 条真消失）+ LLM 复检 1 处 → 采纳。"""
+        suffix = "甲乙丙丁戊己庚"          # 纯中文：带数字会被探针的最长中文串切碎而跳过
+        fabs = [{"claim": "残留断言原文片段" + ch} for ch in suffix]
+        repaired = "正文" + "".join("残留断言原文片段" + ch for ch in suffix[:4])
+        with patch.object(pipeline, "run_fact_check", side_effect=[fabs, [{"claim": "新项"}]]), \
+                patch.object(pipeline, "apply_text_patch", return_value=repaired), \
+                patch("builtins.print"):
+            text, _f, rec = pipeline.fact_check_stage({}, "", "原文正文", 2, "玄幻")
+        self.assertTrue(rec["repaired"])
+        self.assertEqual(4, len(rec["persisting_after"]))
+        self.assertIn("正文", text)
+
+
 class PersistingClaimsDeterministicTest(unittest.TestCase):
     """确定性复核：LLM 说「修好了」不算数，得看原句是不是真没了。
 
@@ -451,15 +516,17 @@ class PersistingClaimsDeterministicTest(unittest.TestCase):
         """断言里没有足够长的中文串（纯数字/短词）时跳过，不制造假命中。"""
         self.assertEqual([], pipeline.count_persisting_claims("原文", "正文", [{"claim": "4.5"}]))
 
-    def test_record_carries_persisting_on_accept(self):
+    def test_record_carries_persisting_on_rollback(self):
+        """首轮唯一那条原句仍在 → 确定性无改善 → 回滚，且读数要落盘。"""
         fabs = [{"claim": "残留的通天灵根来历", "type": "fabricated"}]
         with patch.object(pipeline, "run_fact_check", side_effect=[fabs, []]), \
+                patch.object(pipeline, "call_chain", return_value="修复稿"), \
                 patch.object(pipeline, "apply_text_patch",
                              return_value="修复稿里仍有残留的通天灵根来历一句"), \
                 patch("builtins.print"):
             _t, _f, rec = pipeline.fact_check_stage({}, "", "原文正文", 2, "玄幻")
-        self.assertTrue(rec.get("repaired"), "复检 0 处应构成采纳")
-        self.assertIn("persisting_after", rec, "采纳分支也要落盘确定性读数")
+        self.assertFalse(rec.get("repaired"), "原句仍在 → 不得采纳")
+        self.assertIn("persisting_after", rec, "回滚分支也要落盘确定性读数")
         self.assertEqual(1, len(rec["persisting_after"]),
                          "首轮那条原句仍在 → 确定性复核应报 1 条未消除")
 

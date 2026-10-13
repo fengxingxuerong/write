@@ -336,12 +336,17 @@ def fact_check_stage(registry, state_track, final_text, idx, genre):
 
     返回 (final_text, fabs, record)：
     - fabs 为 None ⇒ 核查未跑成，调用方记 error（门禁据此判 FAIL，不作通过凭据）；
-    - 修复只有在**复检命中数下降**时才采纳，否则回滚保留原文与首轮命中——
-      「换了段文字」绝不等于「问题解决了」（与评审修同一验收哲学）。
+    - **采纳判据（2026-10-13 改）**：主判据是**确定性读数**——修复稿里首轮命中断言的原文
+      必须真有消失（`count_persisting_claims` 判，噪声无法伪造）；LLM 复检降级为护栏
+      （不得比首轮劣化）。旧判据「LLM 复检数 < 首轮数」拿两个带噪声的计数比大小，
+      v8d 第 2 章实测被噪声放行（复检报 1、实际 4 条原句没动）。不追求逐条全消——
+      那会退化成恒回滚（见交付文档 9.7）。
+    - 「换了段文字」绝不等于「问题解决了」（与评审修同一验收哲学）。
     - record 的取证字段：`fabrications` 恒为**生效中**的命中列表（门禁只数它）；
       采纳时附 `fabrications_before`/`fabrications_after`，回滚时附
       `fabrications_after`（复检明细，**不参与判分**，只为事后可取证），
-      未过采纳闸时 `fabrications_after=None`（该支没跑复检，别误读成「复检 0 处」）。
+      未过采纳闸时 `fabrications_after=None`（该支没跑复检，别误读成「复检 0 处」）；
+      `persisting_after` = 确定性复核读数（首轮那几条里原句仍在修复稿的），两分支都落盘。
     成本：只在命中时多两次调用（1 次修复 + 1 次复检），0 命中章零额外开销。
     """
     fabs = run_fact_check(registry, state_track, final_text, idx)
@@ -385,16 +390,28 @@ def fact_check_stage(registry, state_track, final_text, idx, genre):
     else:
         print(f"    [核查] 确定性复核：首轮 {len(fabs)} 条中仍有 {len(persisting)} 条原句在修复稿里"
               f"（LLM 复检 {_llm_after} 处）")
-    if fabs2 is not None and len(fabs2) < len(fabs):
-        print(f"  [核查] 复检 {len(fabs)} → {len(fabs2)} 处，采纳修复稿"
-              f"（{count_words(final_text)} → {count_words(repaired)} 字）")
+    # 采纳判据（2026-10-13 改，见交付文档 9.7）：**主判据换成确定性读数**，LLM 复检降级为护栏。
+    #   旧判据 `len(fabs2) < len(fabs)` 拿两个带噪声的 LLM 计数比大小——v8d 第 2 章实测：
+    #   复检报 1 处（还是首轮没出现过的新项），而首轮 7 条里 4 条原句**根本没动**，照样被采纳。
+    #   新判据要求「确定性上真有原句消失」（噪声无法伪造）+「LLM 复检不劣化」（护栏，防新项）。
+    #   注：它比旧判据更严（拦掉「LLM 报少了但其实没改」的假改善），但不追求归零——
+    #   要求逐条全消会退化成恒回滚（该环节的实际可达上限就是「减少」）。
+    deterministic_improved = len(persisting) < len(fabs)
+    llm_not_worse = fabs2 is not None and len(fabs2) <= len(fabs)
+    if deterministic_improved and llm_not_worse:
+        print(f"  [核查] 复检 {len(fabs)} → {len(fabs2)} 处；确定性复核另有 {len(persisting)} 条"
+              f"首轮原句仍存，采纳修复稿（{count_words(final_text)} → {count_words(repaired)} 字）")
         return repaired, fabs2, {"idx": idx, "fabrications": fabs2,
                                  "error": False, "repaired": True,
                                  "fabrications_before": fabs,
                                  "fabrications_after": fabs2,
                                  "persisting_after": persisting}
-    why = "复检未跑成" if fabs2 is None else f"复检仍 {len(fabs2)} 处"
-    print(f"  [核查] {why}、未优于首轮，回滚保留原文（首轮命中照记）")
+    if not deterministic_improved:
+        why = (f"确定性复核显示首轮 {len(fabs)} 条原句一条都没消失"
+               f"（LLM 复检报 {_llm_after} 处——典型判定噪声，不是修好了）")
+    else:
+        why = f"LLM 复检报 {_llm_after} 处，较首轮 {len(fabs)} 处劣化"
+    print(f"  [核查] {why} → 回滚保留原文（首轮命中照记）")
     # 复检**明细**必须一并落盘（2026-10-12 补）：此前只在采纳分支存 fabs2，
     # 回滚分支只打印计数 → 事后无法回答「复检究竟多了哪几条、为什么」。
     # v8b 第 3 章实测「首轮 1 → 复检 4」就是卡在这个盲区上，只能靠代码推断定性。
