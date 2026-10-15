@@ -12,7 +12,10 @@
      与 qa_semantic_check 同口径——机器分抓不住、人工试读才看得见的硬伤进门禁。
      第 15 项人物关系张冠李戴（关卡4，纯规则，同 qa_semantic_check）。
      第 16 项编造核查（关卡5，type=fact_check LLM 记录）；无记录（历史产物或
-     --no-fact-check）降级 WARN 不计入拦截，有记录但存在编造/执行失败即 FAIL。
+     --no-fact-check）降级 WARN 不计入拦截。**口径 2026-10-13 改**：不再要求「残留 0 处」
+     （实测该环节可达上限是「减少」，且残留明细已全部落盘），改为拦硬失败——缺记录/
+     非法记录/执行失败/残留反而高于首轮/有残留却无明细；残留本身降级 WARN 并逐条打印
+     交人工复核（identity/state 类会额外标「结构性矛盾」）。详见 docs/交付文档.md 9.7。
       第 17 项场景规划不得静默降级（chapter.scene_plan == "fallback" 即 FAIL，
       2026-09-26 新增；历史产物无该字段同样降级 WARN，与第 16 项同口径）。
       另在第 1 项检查 JSONL 结构；仅最后一行半截可恢复，中间坏行直接 FAIL。
@@ -26,6 +29,7 @@ import argparse
 import json
 import os
 import py_compile
+import re
 import subprocess
 import sys
 import time
@@ -50,6 +54,7 @@ from qa_semantic_check import (  # noqa: E402
 )
 
 # 外部效度状态：在 PASS 正下方披露「达线仅为自洽」，见 docs/human-eval-workflow.md
+from pipeline_quality import is_degenerate_output  # noqa: E402
 from quality_validation import caveat_lines  # noqa: E402
 
 
@@ -117,6 +122,73 @@ def _read_jsonl_records(path):
                 continue
             records.append(rec)
     return records, malformed_lines, invalid_envelopes, last_line
+
+
+def classify_editor_warns(log_text):
+    """把编辑链的字数告警分成两类，返回 (真过度压缩数, 产出退化数)。
+
+    「产出退化」（近乎空产出，例如 kimi 连撞 429 后链上产出 3397→1 字）是端点/链路故障
+    表现，不是内容被压短——混为一类会把环境抖动误报成质量回退（2026-10-13 v8d 实测）。
+    判据拆分的**之前**产生的老日志里两者都写成「过度压缩」，故这里按行内的 `A -> B 字`
+    用同一个纯函数 `is_degenerate_output` 复核后归类，保证读老日志也不误判。
+    """
+    compress = degenerate = 0
+    for ln in (log_text or "").splitlines():
+        if "产出退化" in ln:
+            degenerate += 1
+            continue
+        if "过度压缩" not in ln:
+            continue
+        m = re.search(r"(\d+)\s*->\s*(\d+)\s*字", ln)
+        if m and is_degenerate_output("字" * int(m.group(1)), "字" * int(m.group(2))):
+            degenerate += 1
+        else:
+            compress += 1
+    return compress, degenerate
+
+
+def fact_check_verdict(fact_recs, expected_idx):
+    """编造核查（关卡5）判定：返回 (bad, detail, residuals)。
+
+    拦项只留**硬失败**：缺记录 / 非法记录 / 执行失败 / 残留反而高于首轮 / 有残留却查不到明细。
+    残留本身降级为 WARN（明细已全部落盘），逐条打印交人工复核——口径见 docs/交付文档.md 9.7：
+    实测该环节的可达上限是「减少」而非归零，硬要求 0 处只会让门禁长期红着，反而掩盖真问题。
+    """
+    missing_facts = sorted(expected_idx - set(fact_recs))
+    invalid_facts = 0
+    fab_n = 0
+    err_idx, over_baseline, no_detail, residuals = [], [], [], []
+    for idx, data in fact_recs.items():
+        values = data.get("fabrications")
+        if isinstance(values, list):
+            fab_n += len(values)
+            residuals += [(idx, v) for v in values if isinstance(v, dict)]
+        else:
+            invalid_facts += 1
+        if data.get("error"):
+            err_idx.append(idx)
+        before = data.get("fabrications_before")
+        if isinstance(before, list) and isinstance(values, list) and len(values) > len(before):
+            over_baseline.append(idx)
+        if isinstance(values, list) and values and data.get("fabrications_after") is None \
+                and data.get("persisting_after") is None and not isinstance(before, list):
+            no_detail.append(idx)
+    bad = (bool(missing_facts) or invalid_facts > 0 or bool(err_idx)
+           or bool(over_baseline) or bool(no_detail))
+    detail = (f"缺核查章 {missing_facts}" if missing_facts else "")
+    if invalid_facts:
+        detail += ("；" if detail else "") + f"非法核查记录 {invalid_facts}"
+    if err_idx:
+        detail += ("；" if detail else "") + f"执行失败章 {err_idx}"
+    if over_baseline:
+        detail += ("；" if detail else "") + f"残留高于首轮章 {over_baseline}"
+    if no_detail:
+        detail += ("；" if detail else "") + f"残留明细缺失章 {no_detail}"
+    if fab_n:
+        detail += ("；" if detail else "") + f"残留 {fab_n} 条（明细见 jsonl，不拦项）"
+    if not detail:
+        detail = f"{len(fact_recs)} 章全部通过"
+    return bad, detail, residuals
 
 
 def _valid_chapter_data(data):
@@ -214,12 +286,11 @@ def check(output, max_chapters, review_pass=78.0, genre="玄幻"):
     # 2026-10-13 计数粒度拆分：本项只计**真·过度压缩**；「产出退化」（近乎空产出，例如
     # kimi 连撞 429 冷却后链上产出 3397→1 字）属端点/链路故障表现，单独提示、不拦项——
     # v8d 实测正是它把本项误判成 FAIL（守卫行为本身完全正确：拒绝并保留原文）。
-    compress = degenerate = 0
+    _log_text = ""
     if os.path.exists(log):
         with open(log, encoding="utf-8", errors="replace") as f:
             _log_text = f.read()
-        compress = _log_text.count("过度压缩")
-        degenerate = _log_text.count("产出退化")
+    compress, degenerate = classify_editor_warns(_log_text)
     if degenerate:
         print(f"  [WARN] 编辑链产出退化 {degenerate} 次（近乎空产出，端点/链路故障表现，不拦项）")
     chk("编辑链无过度压缩告警", compress == 0, f"{compress} 次（WARN）")
@@ -383,27 +454,20 @@ def check(output, max_chapters, review_pass=78.0, genre="玄幻"):
     if not fact_recs and invalid_facts == 0:
         print("  [WARN] 编造核查无记录（历史产物或 --no-fact-check，仅提示不拦截）")
     else:
-        missing_facts = sorted(expected_idx - set(fact_recs))
-        fab_n = 0
-        err_idx = []
-        for idx, data in fact_recs.items():
-            values = data.get("fabrications")
-            if isinstance(values, list):
-                fab_n += len(values)
-            else:
-                invalid_facts += 1
-            if data.get("error"):
-                err_idx.append(idx)
-        bad = bool(missing_facts) or invalid_facts > 0 or fab_n > 0 or bool(err_idx)
-        detail = (f"缺核查章 {missing_facts}" if missing_facts else "")
-        if invalid_facts:
-            detail += ("；" if detail else "") + f"非法核查记录 {invalid_facts}"
-        if fab_n:
-            detail += ("；" if detail else "") + f"编造 {fab_n} 处"
-        if err_idx:
-            detail += ("；" if detail else "") + f"执行失败章 {err_idx}"
-        chk("编造核查通过（关卡5，无编造且无执行失败）", not bad,
-            detail or f"{len(fact_recs)} 章全部通过")
+        # 口径（2026-10-13 改，见交付文档 9.7）：不再要求「残留必须 0 处」——实测该环节的
+        # 可达上限是「减少」，且残留明细已全部落盘（persisting_after / fabrications_after）。
+        # 拦项只留硬失败（缺记录/非法记录/执行失败/反而变差/查不到明细）；残留降级 WARN。
+        bad, detail, residuals = fact_check_verdict(fact_recs, expected_idx)
+        chk("编造核查通过（关卡5，无执行失败、残留不高于首轮且明细可查）", not bad, detail)
+        if residuals:
+            print(f"  [WARN] 编造残留 {len(residuals)} 条（不拦项；明细已落盘，建议人工复核）：")
+            for ridx, rv in residuals[:8]:
+                print(f"        第{ridx}章 [{rv.get('type', '?')}] "
+                      f"{str(rv.get('claim', ''))[:50]}")
+            hard = [x for x in residuals if x[1].get("type") in ("identity", "state")]
+            if hard:
+                print(f"  [WARN] ↑ 其中 {len(hard)} 条属**结构性矛盾**（identity/state："
+                      f"身份/状态与台账冲突，读者能直接看出张冠李戴），请优先复核")
 
     # 17) 场景规划不得静默降级（chapter.scene_plan == "fallback" 即 FAIL，2026-09-26 新增）：
     #  LLM 规划失败退回起承转合兜底骨架时，场景目标失去世界/设定锚点，写手只能脑补，

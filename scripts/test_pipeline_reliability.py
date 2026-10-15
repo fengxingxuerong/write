@@ -439,6 +439,64 @@ class ScenePlanReliabilityTest(unittest.TestCase):
         self.assertEqual(lost, [])
 
 
+class GateEditorWarnAndFactCheckVerdictTest(unittest.TestCase):
+    """门禁两条判据的纯函数部分：编辑链告警分类（第 4 项）与编造核查判定（第 16 项）。
+
+    第 16 项口径 2026-10-13 改：不再要求「残留 0 处」，只拦硬失败（缺记录/非法记录/
+    执行失败/残留反而高于首轮/有残留却查不到明细），残留降级 WARN 交人工复核。
+    """
+
+    def test_editor_warn_classification_old_log(self):
+        """老日志把退化也写成「过度压缩」——按行内 A->B 字数复核后仍要归到退化。"""
+        log = ("  [编辑] ⚠ 润色产出 3397 -> 1 字，过度压缩（<85%），拒绝采纳保留原文\n"
+               "  [编辑] ⚠ 润色产出 3000 -> 2500 字，过度压缩（<85%），拒绝采纳保留原文\n")
+        compress, degenerate = smoke.classify_editor_warns(log)
+        self.assertEqual(1, compress, "3000->2500 是真压缩")
+        self.assertEqual(1, degenerate, "3397->1 是产出退化")
+
+    def test_editor_warn_classification_new_log(self):
+        log = "  [编辑] ⚠ 产出退化 3397 -> 1 字（近乎空产出，端点/链路故障表现，非内容被压缩）\n"
+        compress, degenerate = smoke.classify_editor_warns(log)
+        self.assertEqual(0, compress)
+        self.assertEqual(1, degenerate)
+
+    def test_verdict_passes_with_visible_residual(self):
+        recs = {1: {"idx": 1, "fabrications": [], "error": False},
+                2: {"idx": 2, "fabrications": [{"type": "fabricated", "claim": "残留断言甲"}],
+                    "error": False, "fabrications_before": [{"claim": "甲"}, {"claim": "乙"}],
+                    "fabrications_after": [{"type": "fabricated", "claim": "残留断言甲"}],
+                    "persisting_after": ["残留断言甲"]}}
+        bad, detail, residuals = smoke.fact_check_verdict(recs, {1, 2})
+        self.assertFalse(bad, "残留 + 明细齐全 → 不拦项")
+        self.assertEqual(1, len(residuals))
+        self.assertIn("残留 1 条", detail)
+
+    def test_verdict_blocks_on_execution_failure(self):
+        recs = {1: {"idx": 1, "fabrications": [], "error": True}}
+        bad, detail, _r = smoke.fact_check_verdict(recs, {1})
+        self.assertTrue(bad)
+        self.assertIn("执行失败章 [1]", detail)
+
+    def test_verdict_blocks_when_residual_exceeds_baseline(self):
+        recs = {1: {"idx": 1, "fabrications": [{"claim": "甲"}, {"claim": "乙"}],
+                    "error": False, "fabrications_before": [{"claim": "甲"}]}}
+        bad, detail, _r = smoke.fact_check_verdict(recs, {1})
+        self.assertTrue(bad, "残留反而高于首轮属回归")
+        self.assertIn("残留高于首轮章 [1]", detail)
+
+    def test_verdict_blocks_when_residual_has_no_detail(self):
+        recs = {1: {"idx": 1, "fabrications": [{"claim": "甲"}], "error": False}}
+        bad, detail, _r = smoke.fact_check_verdict(recs, {1})
+        self.assertTrue(bad, "有残留却查不到任何明细 → 无法复核，必须拦")
+        self.assertIn("残留明细缺失章 [1]", detail)
+
+    def test_verdict_blocks_on_missing_or_invalid(self):
+        bad, detail, _r = smoke.fact_check_verdict({1: {"idx": 1, "fabrications": [],
+                                                       "error": False}}, {1, 2})
+        self.assertTrue(bad)
+        self.assertIn("缺核查章 [2]", detail)
+
+
 class FactCheckAcceptRuleTest(unittest.TestCase):
     """采纳判据（2026-10-13 改）：主判据换成确定性读数，LLM 复检降级为护栏。
 
