@@ -15,6 +15,37 @@ class AppTheme {
   /// 由语义色板构建完整主题。
   static ThemeData _build(AppInk ink) {
     final bool isDark = ink.dark;
+
+    // 状态叠加色：hover / pressed / focus 分开给。
+    // 桌面端鼠标与键盘是两套输入，旧实现三态共用一个叠色——鼠标看得见 hover，
+    // 键盘 Tab 到哪却什么都看不出来。
+    final WidgetStateProperty<Color> stateOverlay =
+        WidgetStateProperty.resolveWith<Color>((Set<WidgetState> states) {
+      if (states.contains(WidgetState.pressed)) {
+        return ink.ink.withValues(alpha: isDark ? 0.16 : 0.10);
+      }
+      if (states.contains(WidgetState.focused)) {
+        return ink.primary.withValues(alpha: isDark ? 0.24 : 0.15);
+      }
+      if (states.contains(WidgetState.hovered)) return ink.hoverTint;
+      return Colors.transparent;
+    });
+
+    // 实心按钮叠的是白色（它的底是主色）。
+    final WidgetStateProperty<Color> filledOverlay =
+        WidgetStateProperty.resolveWith<Color>((Set<WidgetState> states) {
+      if (states.contains(WidgetState.pressed)) {
+        return Colors.white.withValues(alpha: isDark ? 0.24 : 0.28);
+      }
+      if (states.contains(WidgetState.focused)) {
+        return Colors.white.withValues(alpha: 0.12);
+      }
+      if (states.contains(WidgetState.hovered)) {
+        return Colors.white.withValues(alpha: isDark ? 0.14 : 0.16);
+      }
+      return Colors.transparent;
+    });
+
     final ColorScheme scheme = ColorScheme(
       brightness: isDark ? Brightness.dark : Brightness.light,
       primary: ink.primary,
@@ -92,7 +123,8 @@ class AppTheme {
       dialogTheme: DialogThemeData(
         backgroundColor: ink.surface,
         surfaceTintColor: Colors.transparent,
-        elevation: 0,
+        elevation: isDark ? 0 : 3,
+        shadowColor: ink.ink.withValues(alpha: isDark ? 0.45 : 0.16),
         alignment: Alignment.center,
         insetPadding: const EdgeInsets.all(AppTokens.s8),
         titleTextStyle: AppFonts.text(
@@ -149,8 +181,7 @@ class AppTheme {
           shape: const WidgetStatePropertyAll<OutlinedBorder>(
               RoundedRectangleBorder(
                   borderRadius: BorderRadius.all(Radius.circular(AppTokens.r2)))),
-          overlayColor: WidgetStatePropertyAll<Color>(
-              Colors.white.withValues(alpha: isDark ? 0.14 : 0.16)),
+          overlayColor: filledOverlay,
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
@@ -171,7 +202,7 @@ class AppTheme {
           shape: const WidgetStatePropertyAll<OutlinedBorder>(
               RoundedRectangleBorder(
                   borderRadius: BorderRadius.all(Radius.circular(AppTokens.r2)))),
-          overlayColor: WidgetStatePropertyAll<Color>(ink.hoverTint),
+          overlayColor: stateOverlay,
         ),
       ),
       textButtonTheme: TextButtonThemeData(
@@ -188,7 +219,7 @@ class AppTheme {
           shape: const WidgetStatePropertyAll<OutlinedBorder>(
               RoundedRectangleBorder(
                   borderRadius: BorderRadius.all(Radius.circular(AppTokens.r2)))),
-          overlayColor: WidgetStatePropertyAll<Color>(ink.selectTint),
+          overlayColor: stateOverlay,
         ),
       ),
       iconButtonTheme: IconButtonThemeData(
@@ -201,7 +232,7 @@ class AppTheme {
           visualDensity: VisualDensity.compact,
           shadowColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
           elevation: const WidgetStatePropertyAll<double>(0),
-          overlayColor: WidgetStatePropertyAll<Color>(ink.hoverTint),
+          overlayColor: stateOverlay,
           shape: const WidgetStatePropertyAll<OutlinedBorder>(
               RoundedRectangleBorder(
                   borderRadius: BorderRadius.all(Radius.circular(AppTokens.r2)))),
@@ -420,6 +451,67 @@ class AppTheme {
         cursorColor: ink.accent,
         selectionColor: ink.selectTint,
         selectionHandleColor: ink.primary,
+      ),
+      // 桌面端浮层：菜单/下拉统一走圆角 + 描边，不用默认的直角浮层。
+      menuTheme: MenuThemeData(
+        style: MenuStyle(
+          backgroundColor: WidgetStatePropertyAll<Color>(ink.surfaceRaised),
+          surfaceTintColor:
+              const WidgetStatePropertyAll<Color>(Colors.transparent),
+          elevation: const WidgetStatePropertyAll<double>(8),
+          shadowColor: WidgetStatePropertyAll<Color>(
+              ink.ink.withValues(alpha: isDark ? 0.50 : 0.14)),
+          padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
+              EdgeInsets.symmetric(vertical: AppTokens.s1)),
+          shape: WidgetStatePropertyAll<OutlinedBorder>(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppTokens.r3),
+              side: BorderSide(color: ink.border, width: AppTokens.hairline),
+            ),
+          ),
+        ),
+      ),
+      dropdownMenuTheme: DropdownMenuThemeData(
+        textStyle: AppFonts.text(ink.ink, size: 13.5, height: 1.5),
+        menuStyle: MenuStyle(
+          backgroundColor: WidgetStatePropertyAll<Color>(ink.surfaceRaised),
+          surfaceTintColor:
+              const WidgetStatePropertyAll<Color>(Colors.transparent),
+          shape: WidgetStatePropertyAll<OutlinedBorder>(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppTokens.r3),
+              side: BorderSide(color: ink.border, width: AppTokens.hairline),
+            ),
+          ),
+        ),
+      ),
+      badgeTheme: BadgeThemeData(
+        backgroundColor: ink.accent,
+        textColor: ink.paper,
+        textStyle: AppFonts.text(ink.paper, size: 11, weight: FontWeight.w600),
+      ),
+      expansionTileTheme: ExpansionTileThemeData(
+        textColor: ink.ink,
+        collapsedTextColor: ink.ink,
+        iconColor: ink.inkSoft,
+        collapsedIconColor: ink.inkFaint,
+        backgroundColor: Colors.transparent,
+        collapsedBackgroundColor: Colors.transparent,
+        shape: const Border(),
+        collapsedShape: const Border(),
+        tilePadding: const EdgeInsets.symmetric(horizontal: AppTokens.s2),
+        childrenPadding: const EdgeInsets.only(left: AppTokens.s2),
+      ),
+      navigationRailTheme: NavigationRailThemeData(
+        backgroundColor: ink.surface,
+        indicatorColor: ink.selectTint,
+        useIndicator: true,
+        minWidth: 68,
+        selectedIconTheme: IconThemeData(color: ink.primary, size: 20),
+        unselectedIconTheme: IconThemeData(color: ink.inkSoft, size: 20),
+        selectedLabelTextStyle:
+            AppFonts.text(ink.primary, size: 12, weight: FontWeight.w600),
+        unselectedLabelTextStyle: AppFonts.text(ink.inkSoft, size: 12),
       ),
     );
   }

@@ -156,16 +156,20 @@ class _Cover extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 92,
+      height: 100,
       padding: const EdgeInsets.fromLTRB(
-          AppTokens.s4, AppTokens.s3, AppTokens.s4, AppTokens.s3),
+          AppTokens.s4, AppTokens.s4, AppTokens.s4, AppTokens.s3),
       decoration: BoxDecoration(
+        // 三停渐变：左上浓、右下淡。原来的两停会让色块显得「平」——
+        // 封面是书架的第一眼，平涂看起来像占位图。
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
+          stops: const <double>[0, 0.55, 1],
           colors: <Color>[
+            color.withValues(alpha: dark ? 0.36 : 0.22),
             tint,
-            color.withValues(alpha: dark ? 0.30 : 0.16),
+            color.withValues(alpha: dark ? 0.16 : 0.07),
           ],
         ),
       ),
@@ -179,9 +183,10 @@ class _Cover extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: AppFonts.text(
                 dark ? const Color(0xFFF2EEE6) : const Color(0xFF241F1B),
-                size: 19,
+                size: 20,
                 weight: FontWeight.w700,
-                height: 1.35,
+                height: 1.32,
+                letterSpacing: 0.2,
                 serifFace: true,
               ),
             ),

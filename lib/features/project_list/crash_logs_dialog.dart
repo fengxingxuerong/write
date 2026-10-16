@@ -241,7 +241,8 @@ class _CrashLogsDialogState extends State<CrashLogsDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: Text('崩溃日志（${_files.length}）'),
-      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(
+          AppTokens.s6, AppTokens.s4, AppTokens.s6, 0),
       content: SizedBox(
         width: 560,
         height: 420,

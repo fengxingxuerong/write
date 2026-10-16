@@ -155,9 +155,15 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       ),
       body: current == null
           ? Center(
-              child: Text(
-                '暂无章节',
-                style: AppFonts.text(fg),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(Icons.menu_book_outlined,
+                      size: 32, color: fg.withValues(alpha: 0.35)),
+                  const SizedBox(height: AppTokens.s3),
+                  Text('暂无章节',
+                      style: AppFonts.text(fg.withValues(alpha: 0.6))),
+                ],
               ),
             )
           : SafeArea(
@@ -169,65 +175,103 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                         horizontal: 24,
                         vertical: 20,
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Text(
-                            current.title,
-                            style: AppFonts.text(
-                              fg,
-                              size: _settings.fontSize + 8,
-                              weight: FontWeight.bold,
-                              height: 1.5,
-                              serifFace: _settings.serif,
-                            ),
+                      // 正文限宽居中：桌面窗口能拉到 2000px+，不限宽一行会到 60+ 字，
+                      // 眼睛回下一行时找不到起点——这是阅读器最要命的一处。
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxWidth: AppTokens.maxWidthReading,
                           ),
-                          const SizedBox(height: AppTokens.s6),
-                          Text.rich(
-                            entityHighlightedSpan(
-                              text: current.content.isEmpty
-                                  ? '（本章暂无内容）'
-                                  : current.content,
-                              baseStyle: AppFonts.text(
-                                fg,
-                                size: _settings.fontSize,
-                                height: _settings.lineHeight,
-                                letterSpacing: 0.5,
-                                serifFace: _settings.serif,
+                          child: Column(
+                            key: const Key('reader-body'),
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Text(
+                                current.title,
+                                style: AppFonts.text(
+                                  fg,
+                                  size: _settings.fontSize + 8,
+                                  weight: FontWeight.bold,
+                                  height: 1.5,
+                                  serifFace: _settings.serif,
+                                ),
                               ),
-                              entityNames: _highlight
-                                  ? widget.novel.characters
-                                      .map((c) => c.name)
-                                  : const <String>[],
-                              highlightColor: _entityTint(_settings.theme),
-                            ),
+                              const SizedBox(height: AppTokens.s2),
+                              // 标题下一条短横线：把「章名」与「正文」分开，
+                              // 不加这条时标题读起来像正文的第一段。
+                              Container(
+                                width: 48,
+                                height: 2,
+                                decoration: BoxDecoration(
+                                  color: fg.withValues(alpha: 0.22),
+                                  borderRadius: BorderRadius.circular(1),
+                                ),
+                              ),
+                              const SizedBox(height: AppTokens.s6),
+                              Text.rich(
+                                entityHighlightedSpan(
+                                  text: current.content.isEmpty
+                                      ? '（本章暂无内容）'
+                                      : current.content,
+                                  baseStyle: AppFonts.text(
+                                    fg,
+                                    size: _settings.fontSize,
+                                    height: _settings.lineHeight,
+                                    letterSpacing: 0.5,
+                                    serifFace: _settings.serif,
+                                  ),
+                                  entityNames: _highlight
+                                      ? widget.novel.characters
+                                          .map((c) => c.name)
+                                      : const <String>[],
+                                  highlightColor: _entityTint(_settings.theme),
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
-                  // 底部导航。
+                  // 底部导航：进度条 + 上一章 / 页码 / 下一章。
                   Container(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
                     color: barBg,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        IconButton(
-                          tooltip: '上一章',
-                          icon: const Icon(Icons.chevron_left),
-                          onPressed: _chapterIndex > 0 ? _prev : null,
+                        // 阅读进度：比「3 / 40 章」更快看出读到哪儿了。
+                        LinearProgressIndicator(
+                          value: _chapters.isEmpty
+                              ? 0
+                              : (_chapterIndex + 1) / _chapters.length,
+                          minHeight: 3,
+                          backgroundColor: fg.withValues(alpha: 0.08),
+                          color: fg.withValues(alpha: 0.32),
                         ),
-                        Text(
-                          '${_chapterIndex + 1} / ${_chapters.length} 章',
-                          style: AppFonts.text(fg),
-                        ),
-                        IconButton(
-                          tooltip: '下一章',
-                          icon: const Icon(Icons.chevron_right),
-                          onPressed: _chapterIndex < _chapters.length - 1
-                              ? _next
-                              : null,
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: <Widget>[
+                              IconButton(
+                                tooltip: '上一章',
+                                icon: const Icon(Icons.chevron_left),
+                                onPressed: _chapterIndex > 0 ? _prev : null,
+                              ),
+                              Text(
+                                '${_chapterIndex + 1} / ${_chapters.length} 章',
+                                style: AppFonts.text(fg),
+                              ),
+                              IconButton(
+                                tooltip: '下一章',
+                                icon: const Icon(Icons.chevron_right),
+                                onPressed:
+                                    _chapterIndex < _chapters.length - 1
+                                        ? _next
+                                        : null,
+                              ),
+                            ],
+                          ),
                         ),
                       ],
                     ),

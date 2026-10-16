@@ -6,6 +6,7 @@ import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/storage/goal_repository.dart';
+import 'package:novel_writer/widgets/app_card.dart';
 
 /// 写作统计面板。
 ///
@@ -28,98 +29,99 @@ class StatisticsPanel extends ConsumerWidget {
     final Chapter? longest = chapters.isEmpty
         ? null
         : chapters.reduce((a, b) => a.wordCount() >= b.wordCount() ? a : b);
-    final ThemeData theme = Theme.of(context);
+    final AppInk ink = AppInk.of(context);
 
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Padding(
-        padding: const EdgeInsets.all(AppTokens.s3),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Icon(Icons.insights, size: 18, color: theme.colorScheme.primary),
-                const SizedBox(width: 6),
-                Text('写作统计', style: theme.textTheme.titleSmall),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: <Widget>[
-                _statItem(context, '总字数', '$total'),
-                _statItem(context, '章节', '$count'),
-                _statItem(context, '平均/章', '$avg'),
-              ],
-            ),
-            if (longest != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                '最长章节：${longest.title}（${longest.wordCount()} 字）',
-                style: theme.textTheme.bodySmall,
-                overflow: TextOverflow.ellipsis,
-              ),
+    return AppCard(
+      title: '写作统计',
+      icon: Icons.insights,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              _statItem(context, '总字数', '$total'),
+              _statItem(context, '章节', '$count'),
+              _statItem(context, '平均/章', '$avg'),
             ],
-            if (chapters.isNotEmpty) ...<Widget>[
-              const SizedBox(height: 8),
-              Text('各章字数', style: theme.textTheme.bodySmall),
-              const SizedBox(height: 4),
-              ...chapters.asMap().entries.map((entry) {
-                final int i = entry.key;
-                final Chapter c = entry.value;
-                final double ratio = total == 0 ? 0 : c.wordCount() / total;
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 1),
-                  child: Row(
-                    children: <Widget>[
-                      SizedBox(
-                        width: 28,
-                        child: Text(
-                          '${i + 1}',
-                          style: theme.textTheme.bodySmall,
-                        ),
-                      ),
-                      Expanded(
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(2),
-                          child: LinearProgressIndicator(
-                            value: ratio,
-                            minHeight: 6,
-                          ),
-                        ),
-                      ),
-                      SizedBox(
-                        width: 52,
-                        child: Text(
-                          '${c.wordCount()}',
-                          textAlign: TextAlign.right,
-                          style: theme.textTheme.bodySmall,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }),
-            ],
-            const SizedBox(height: 8),
-            _GoalCard(novelId: novel.id, chapters: chapters),
+          ),
+          if (longest != null) ...<Widget>[
+            const SizedBox(height: AppTokens.s2),
+            Text(
+              '最长章节：${longest.title}（${longest.wordCount()} 字）',
+              style: AppFonts.text(ink.inkSoft, size: 12.5, height: 1.5),
+              overflow: TextOverflow.ellipsis,
+            ),
           ],
-        ),
+          if (chapters.isNotEmpty) ...<Widget>[
+            const SizedBox(height: AppTokens.s3),
+            Text('各章字数',
+                style: AppFonts.text(ink.inkFaint,
+                    size: 11.5, weight: FontWeight.w600, height: 1.3)),
+            const SizedBox(height: AppTokens.s2 - 2),
+            ...chapters.asMap().entries.map((entry) {
+              final int i = entry.key;
+              final Chapter c = entry.value;
+              final double ratio = total == 0 ? 0 : c.wordCount() / total;
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 1.5),
+                child: Row(
+                  children: <Widget>[
+                    SizedBox(
+                      width: 26,
+                      child: Text(
+                        '${i + 1}',
+                        style: AppFonts.text(ink.inkFaint,
+                            size: 11.5, height: 1.3, monoFace: true),
+                      ),
+                    ),
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: LinearProgressIndicator(
+                          value: ratio,
+                          minHeight: 6,
+                          backgroundColor: ink.divider,
+                          color: ink.primary,
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 54,
+                      child: Text(
+                        '${c.wordCount()}',
+                        textAlign: TextAlign.right,
+                        style: AppFonts.text(ink.inkSoft,
+                            size: 11.5, height: 1.3, monoFace: true),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
+          const SizedBox(height: AppTokens.s2),
+          _GoalCard(novelId: novel.id, chapters: chapters),
+        ],
       ),
     );
   }
 
   Widget _statItem(BuildContext context, String label, String value) {
-    final ThemeData theme = Theme.of(context);
+    final AppInk ink = AppInk.of(context);
     return Expanded(
       child: Column(
         children: <Widget>[
           Text(
             value,
-            style: theme.textTheme.titleMedium
-                ?.copyWith(fontWeight: FontWeight.bold),
+            style: AppFonts.text(ink.ink,
+                size: 15,
+                weight: FontWeight.w700,
+                height: 1.25,
+                monoFace: true),
           ),
-          Text(label, style: theme.textTheme.bodySmall),
+          const SizedBox(height: 2),
+          Text(label,
+              style: AppFonts.text(ink.inkFaint, size: 11.5, height: 1.3)),
         ],
       ),
     );
@@ -315,18 +317,23 @@ class _GoalCardState extends ConsumerState<_GoalCard> {
 
   Widget _goalStat(BuildContext context, String label, String value,
       {bool highlight = false}) {
-    final ThemeData theme = Theme.of(context);
+    final AppInk ink = AppInk.of(context);
     return Expanded(
       child: Column(
         children: <Widget>[
           Text(
             value,
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: highlight ? AppInk.of(context).accent : null,
+            style: AppFonts.text(
+              highlight ? ink.accent : ink.ink,
+              size: 15,
+              weight: FontWeight.w700,
+              height: 1.25,
+              monoFace: true,
             ),
           ),
-          Text(label, style: theme.textTheme.bodySmall),
+          const SizedBox(height: 2),
+          Text(label,
+              style: AppFonts.text(ink.inkFaint, size: 11.5, height: 1.3)),
         ],
       ),
     );

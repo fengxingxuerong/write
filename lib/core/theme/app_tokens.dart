@@ -99,6 +99,9 @@ class AppTokens {
   /// 16px——卡片内边距、区块间隔（默认档）。
   static const double s4 = 16;
 
+  /// 20px——卡片网格间距（比 s4 松、比 s6 紧，补齐 4 的倍数栅格）。
+  static const double s5 = 20;
+
   /// 24px——区块之间的呼吸。
   static const double s6 = 24;
 
@@ -160,6 +163,16 @@ class AppTokens {
   /// 统一的减速曲线（进场自然、不弹）。
   static const Curve curve = Curves.easeOutCubic;
 
+  /// 强调曲线：起步更快、收尾更稳。面积较大的进场（侧栏、区块浮现）用它，
+  /// 与 [curve] 形成「小控件快、大区域稳」的两档节奏。
+  static const Curve emphasized = Curves.easeOutQuint;
+
+  /// 键盘焦点环宽度（桌面端 Tab 走到哪必须看得见——这是可用性，不是装饰）。
+  static const double focusRingWidth = 2;
+
+  /// 键盘焦点环的叠色透明度（叠在描边上，不盖住内容）。
+  static const double focusRingAlpha = 0.55;
+
   // ---------------------------------------------------------------- 字号（编辑器/阅读器用）
 
   /// 编辑器正文最小可读字号。
@@ -208,6 +221,12 @@ class AppInk {
   /// 卡片描边。
   final Color border;
 
+  /// 强描边（hover / 选中 / 分区边界），比 [border] 明显一档。
+  ///
+  /// 分层描边是「纸墨」体系里唯一的层级手段（不靠重投影），有三档才立得住：
+  /// [divider] 最弱（列表内分隔）→ [border] 常规（卡片）→ 本值最强（要抢视线处）。
+  final Color borderStrong;
+
   /// 主色（墨青）——主按钮、选中态、焦点环。
   final Color primary;
 
@@ -235,6 +254,9 @@ class AppInk {
   /// 代码/统计数字底纹。
   final Color codeTint;
 
+  /// 骨架屏 / 占位块底色（加载态专用，别拿 [divider] 顶替——观感差一档）。
+  final Color skeleton;
+
   /// 是否深色模式（组件里偶尔需要区分描边强度）。
   final bool dark;
 
@@ -248,6 +270,7 @@ class AppInk {
     required this.inkFaint,
     required this.divider,
     required this.border,
+    required this.borderStrong,
     required this.primary,
     required this.onPrimary,
     required this.accent,
@@ -257,6 +280,7 @@ class AppInk {
     required this.selectTint,
     required this.hoverTint,
     required this.codeTint,
+    required this.skeleton,
     required this.dark,
   });
 
@@ -270,6 +294,7 @@ class AppInk {
     inkFaint: Color(0xFF716B5B),
     divider: Color(0xFFE3DDD1),
     border: Color(0xFFE0DACC),
+    borderStrong: Color(0xFFCEC5B2),
     primary: Color(0xFF2F5D62),
     onPrimary: Color(0xFFF6F3EC),
     accent: Color(0xFFB23A2C),
@@ -279,19 +304,21 @@ class AppInk {
     selectTint: Color(0x142F5D62),
     hoverTint: Color(0x0A23211E),
     codeTint: Color(0x0F23211E),
+    skeleton: Color(0xFFEDE6D8),
     dark: false,
   );
 
   /// 深色：墨底 + 淡纸字（夜间长时间写作不刺眼）。
   static const AppInk darkMode = AppInk(
     paper: Color(0xFF17191C),
-    surface: Color(0xFF1E2126),
-    surfaceRaised: Color(0xFF252A30),
+    surface: Color(0xFF21252B),
+    surfaceRaised: Color(0xFF2A3038),
     ink: Color(0xFFE8E4DB),
     inkSoft: Color(0xFFA9A49A),
     inkFaint: Color(0xFF8C877E),
-    divider: Color(0xFF313640),
-    border: Color(0xFF343A44),
+    divider: Color(0xFF333944),
+    border: Color(0xFF3D444F),
+    borderStrong: Color(0xFF4B5361),
     primary: Color(0xFF7FB7B2),
     onPrimary: Color(0xFF12171A),
     accent: Color(0xFFE0705C),
@@ -301,6 +328,7 @@ class AppInk {
     selectTint: Color(0x1F7FB7B2),
     hoverTint: Color(0x0FE8E4DB),
     codeTint: Color(0x14E8E4DB),
+    skeleton: Color(0xFF2B3037),
     dark: true,
   );
 
@@ -318,9 +346,9 @@ class AppInk {
     if (dark) return const <BoxShadow>[];
     return <BoxShadow>[
       BoxShadow(
-        color: Color.fromRGBO(35, 33, 30, raised ? 0.10 : 0.05),
-        blurRadius: raised ? 22 : 10,
-        offset: Offset(0, raised ? 8 : 2),
+        color: Color.fromRGBO(35, 33, 30, raised ? 0.13 : 0.06),
+        blurRadius: raised ? 26 : 12,
+        offset: Offset(0, raised ? 6 : 2),
       ),
     ];
   }

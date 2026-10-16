@@ -37,6 +37,79 @@
   `docs/交付文档.md` 的 `unittest discover 65 例` → 440 例。
 
 ### 变更（Changed）
+- **界面「纸墨」体系精致化（第一轮·全局）**：在既有设计语言上做统一提升，
+  **不改任何功能逻辑与既有 UI 契约**（`ui_kit_test` / `app_tokens_test` /
+  书架 golden 版式体检全绿，全量 1282 用例零回归）。
+  - **令牌**（`lib/core/theme/app_tokens.dart`）：补 `s5=20` 栅格档、`emphasized`
+    强调曲线、`focusRing` 规格；`AppInk` 新增 `borderStrong`（描边正式分三档：
+    `divider` → `border` → `borderStrong`）与 `skeleton`；深色模式提亮
+    `surface/surfaceRaised/border/borderStrong`——原先卡面与纸底几乎糊在一起，
+    描边层次立不住（`surface` 与 `paper` 对比度仍 ≥1.03，`paper` 亮度仍 <0.02）。
+  - **主题**（`lib/core/theme/app_theme.dart`）：按钮叠加色由「三态共用一个」改为
+    hover / pressed / focus 分别解析——桌面端鼠标与键盘是两套输入，旧实现键盘
+    Tab 走到哪都看不出焦点；补齐菜单 / 下拉 / 徽标 / 折叠面板 / 导航栏主题；
+    对话框在浅色下加一档层次阴影（深色仍纯描边，与「纸墨不靠重投影」一致）。
+  - **组件**（`lib/widgets/app_card.dart`）：`Hoverable` 新增 `onHoverChanged`
+    回调（父级据此改描边 / 底色）；`AppCard` 改为可感知悬浮，hover 时描边提亮一档，
+    比单纯上浮更容易被看见。
+  - **页面**：作品卡封面改三停渐变 + 书名排版（原两停渐变偏「平」，像占位图）；
+    新建卡换圆底图标 + 副文案；书架网格 16→20 且卡片 200→212；排序控件补描边容器，
+    看起来是控件而不是一行文字；    设置面板统计卡从原生 `Card` + 默认主题收编进
+    `AppCard` + 令牌，数字统一等宽。
+- **界面「纸墨」体系精致化（第二轮·工具栏 / 弹窗 / 加载态）**：继续按
+  「组件 → 页面」推进，仍不动功能与既有 UI 契约（全量 1283 用例零回归）。
+  - **编辑器工具栏**（`lib/features/editor/editor_toolbar.dart` +
+    `lib/widgets/page_shell.dart`）：`ToolButton` 新增 `solid` 实心淡底，把
+    「AI 续写」这个第一动作从一排图标里拎出来；**只加底色与描边、不加宽**——
+    工具栏在窄视口会横向滚动，加宽会把后面的按钮挤出视口（会被测试的
+    `tester.tap` 直接抓住）。
+  - **左栏章节列表**：行内边距 6→8 更舒展，选中态左侧色条 2→3px 更明确。
+  - **右栏设置面板**：角色 / 世界观空态从「一行灰字」改为弱色图标 + 说明行，
+    统一走新增的 `_emptyHint`。
+  - **弹窗统一**：删掉 3 处硬编码 `insetPadding`（续写 / 修改 / 校对）交由
+    `dialogTheme` 统一；4 处 `contentPadding` 魔法数（`24/16/24/0`、`24/20/32/8`）
+    换成 token；编辑器对话框内边距 `s4 + 4` → `s5`。
+  - **加载态（新增骨架屏）**：新增 `lib/widgets/app_skeleton.dart`
+    （`Skeleton` / `SkeletonList` / `SkeletonParagraph`）。类设计上刻意
+    **默认不动画**——无限 `repeat` 动画会让 `pumpAndSettle()` 永不返回，而本项目
+    widget 测试大量用它收尾；需要呼吸感时显式传 `animate: true`。「打开项目」与
+    「书架冷启动」两处转圈换成骨架，加载时就能看到结构。
+- **界面「纸墨」体系精致化（第三轮·阅读器 / AI 流水线 / 骨架铺开）**：全量 1283
+  用例零回归。
+  - **阅读器**（`lib/features/reader/reader_page.dart`）：正文**限宽居中**
+    （`maxWidthReading`）——原先桌面窗口拉到 2000px+ 时一行 60+ 字，眼睛回下一行
+    找不到起点，这是阅读器最要命的一处；章名与正文之间加一条短横线分层；底部导航加
+    **阅读进度条**；空态由一行灰字改为图标 + 说明。
+  - **AI 流水线首页**（`lib/features/ai_pipeline/ai_pipeline_pages.dart`）：任务卡从
+    原生 `Card` + `ListTile` + 自制状态胶囊，改为 `AppCard`（左侧状态色条）+
+    `TintBadge`（与全应用状态色口径一致）；空态改用 `EmptyState`（保留
+    「还没有生成任务」文案，有测试依赖它）；加载态改骨架；列表在宽屏下夹到面板宽度。
+  - **编辑器加载态**：转圈 → 正文骨架，与「纸面」布局同宽同构，加载完成不跳版。
+  - **修一处既有隐患**：`AppCard` 的 `accent` 色条原先用
+    `CrossAxisAlignment.stretch`，在高度无界的父级（典型是 `ListView` 的 item）
+    会抛 `BoxConstraints forces an infinite height`——本次在 AI 首页用 accent 才踩到；
+    补 `IntrinsicHeight` 先把行高确定下来，色条才能真正通高。
+- **界面「纸墨」体系精致化（第四轮·深色 / 键盘 / 动效 / 视觉回归）**：全量 1287
+  用例零回归，另新增阅读器 golden 回归（三主题）。
+  - **深色模式专项**：角色头像圆点原先写死白字，而深色模式的语义色偏亮
+    （`primary` 是 `#7FB7B2`）→ 白字直接糊在底上；改为按底色亮度选前景。
+    全书体检弹窗的底部分隔线原先写死「黑色 10%」，深色模式下等于没有 → 改走
+    `ink.divider`。
+  - **键盘可达性**：`Hoverable`（所有可点卡片 / 列表行 / 工具按钮的底座）原先
+    「鼠标能点、键盘 Tab 走不到」，补 `Focus` + 焦点环；焦点环用 `spreadRadius`
+    画在外圈而**不用 border**（border 会让内容缩 2px），Enter/Space 可触发。
+    新增测试钉住「Tab 可达 + 回车可触发」。
+  - **动效统一**：5 处魔法时长 / 曲线（250 / 260 / 200ms、`Curves.easeOut` 等）
+    收敛到 `AppTokens.normal` / `AppTokens.curve` / `AppTokens.emphasized`。
+  - **视觉回归补全**：新增 `test/golden/reader_golden_test.dart`——阅读器三主题
+    （白 / 米黄 / 夜间）各有版式体检 + 本地截图基线，并把「正文限宽」钉成断言。
+- **界面「纸墨」体系精致化（第五轮·回归扩容 / 打包验证）**：全量 1291 用例零回归。
+  - **工具栏 golden**：新增 `test/golden/editor_toolbar_golden_test.dart`——亮 / 暗 ×
+    宽 / 窄视口，把全应用**元素密度最高**的一条纳入回归。这一条是横向滚动的，
+    「随手加个东西把后面的按钮挤出视口」这类事故只有溢出断言 + 截图能抓到。
+  - **打包验证**：`flutter build windows --release` 通过（63.8s），产物 32MB；
+    启动冒烟（起 6 秒确认不崩、再按精确 PID 收掉）通过——四轮 UI 改动在真实
+    Windows 产物上无问题。
 - **`quality_gate.dart` 分层不变量注释写清主语**：原文「保持 engine 不反向依赖」
   主语含糊到能被读成整个 `engine/`。复核后确认受约束的是 **`lib/engine/quality/`**
   这一层（该目录确实零 `ai_pipeline` import，全库 import 图无环）；

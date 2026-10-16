@@ -55,7 +55,8 @@ class _SearchDialogState extends State<SearchDialog> {
     final ThemeData theme = Theme.of(context);
     return AlertDialog(
       title: const Text('全文搜索'),
-      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(
+          AppTokens.s6, AppTokens.s4, AppTokens.s6, 0),
       content: SizedBox(
         width: 520,
         height: 420,

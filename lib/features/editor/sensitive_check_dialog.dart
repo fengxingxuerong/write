@@ -146,7 +146,8 @@ class _SensitiveCheckDialogState extends ConsumerState<SensitiveCheckDialog> {
         .toList();
     return AlertDialog(
       title: Text('内容安全检查（${r.count} 处命中）'),
-      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(
+          AppTokens.s6, AppTokens.s4, AppTokens.s6, 0),
       content: SizedBox(
         width: 520,
         child: Column(

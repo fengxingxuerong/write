@@ -225,6 +225,7 @@ class ToolButton extends StatelessWidget {
     this.showLabel = false,
     this.active = false,
     this.tone,
+    this.solid = false,
   });
 
   /// 图标。
@@ -248,11 +249,17 @@ class ToolButton extends StatelessWidget {
   /// 强调色（默认主色）。
   final Color? tone;
 
+  /// 实心淡底：给「第一动作」（如 AI 续写）用，让它从一排图标里跳出来。
+  ///
+  /// 只加底色与描边、不动内边距——加宽会把横向工具条后面的按钮挤出视口。
+  final bool solid;
+
   @override
   Widget build(BuildContext context) {
     final AppInk ink = AppInk.of(context);
-    final Color c = active ? (tone ?? ink.primary) : ink.inkSoft;
-    final Widget child = showLabel
+    final Color toneColor = tone ?? ink.primary;
+    final Color c = active || solid ? toneColor : ink.inkSoft;
+    Widget child = showLabel
         ? Padding(
             padding: const EdgeInsets.symmetric(
                 horizontal: AppTokens.s3, vertical: 7),
@@ -273,6 +280,16 @@ class ToolButton extends StatelessWidget {
             padding: const EdgeInsets.all(8),
             child: Icon(icon, size: 18, color: c),
           );
+    if (solid) {
+      child = DecoratedBox(
+        decoration: BoxDecoration(
+          color: toneColor.withValues(alpha: ink.dark ? 0.18 : 0.10),
+          borderRadius: BorderRadius.circular(AppTokens.r2 - 1),
+          border: Border.all(color: toneColor.withValues(alpha: 0.28)),
+        ),
+        child: child,
+      );
+    }
     return Tooltip(
       message: tooltip ?? label,
       child: Hoverable(

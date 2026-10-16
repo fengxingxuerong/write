@@ -23,7 +23,7 @@ class WorldBookDialog extends ConsumerStatefulWidget {
       barrierDismissible: true,
       barrierLabel: MaterialLocalizations.of(context).dialogLabel,
       barrierColor: Colors.black54,
-      transitionDuration: const Duration(milliseconds: 250),
+      transitionDuration: AppTokens.normal,
       pageBuilder: (_, __, ___) => Dialog(
         insetPadding: const EdgeInsets.all(AppTokens.s6),
         child: SizedBox(
@@ -36,8 +36,8 @@ class WorldBookDialog extends ConsumerStatefulWidget {
       transitionBuilder: (context, animation, secondaryAnimation, child) {
         final curved = CurvedAnimation(
           parent: animation,
-          curve: Curves.easeOutCubic,
-          reverseCurve: Curves.easeInQuint,
+          curve: AppTokens.curve,
+          reverseCurve: AppTokens.emphasized,
         );
         return SlideTransition(
           position: Tween<Offset>(
@@ -638,14 +638,20 @@ class _NodeChipState extends State<_NodeChip> {
   @override
   Widget build(BuildContext context) {
     final color = _colorForRole(widget.role);
+    // 头像底色来自语义色板：深色模式的语义色偏亮（primary 是 #7FB7B2），
+    // 写死白字会直接糊在底上。按底色亮度选前景，两套主题都可读。
+    final Color fg =
+        ThemeData.estimateBrightnessForColor(color) == Brightness.dark
+            ? Colors.white
+            : const Color(0xFF1A1A1A);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovering = true),
       onExit: (_) => setState(() => _hovering = false),
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
+          duration: AppTokens.normal,
+          curve: AppTokens.curve,
           transform: Matrix4.identity()
             ..scaleByDouble(_hovering ? 1.2 : 1.0, _hovering ? 1.2 : 1.0, 1.0, 1.0),
           child: Container(
@@ -655,7 +661,7 @@ class _NodeChipState extends State<_NodeChip> {
               color: color,
               shape: BoxShape.circle,
               border: Border.all(
-                color: _hovering ? Colors.white : Colors.transparent,
+                color: _hovering ? fg : Colors.transparent,
                 width: 2,
               ),
               boxShadow: _hovering
@@ -665,7 +671,7 @@ class _NodeChipState extends State<_NodeChip> {
             child: Center(
               child: Text(
                 widget.name.isNotEmpty ? widget.name[0] : '?',
-                style: AppFonts.text(Colors.white, size: 11, weight: FontWeight.bold),
+                style: AppFonts.text(fg, size: 11, weight: FontWeight.bold),
               ),
             ),
           ),

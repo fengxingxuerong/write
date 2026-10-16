@@ -166,8 +166,9 @@ class _BookQaReportDialogState extends State<BookQaReportDialog> {
         // 底部操作。
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: const BoxDecoration(
-            border: Border(top: BorderSide(color: Color(0x1A000000))),
+          // 分隔线走语义色：原先写死黑色 10%，深色模式下等于没有。
+          decoration: BoxDecoration(
+            border: Border(top: BorderSide(color: ink.divider)),
           ),
           child: Row(
             children: <Widget>[

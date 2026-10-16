@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:novel_writer/core/theme/app_tokens.dart';
 
@@ -20,6 +21,7 @@ class Hoverable extends StatefulWidget {
     this.selectedColor,
     this.tooltip,
     this.lift = false,
+    this.onHoverChanged,
   });
 
   /// 子内容。
@@ -52,6 +54,10 @@ class Hoverable extends StatefulWidget {
   /// 是否在悬浮时轻微上浮并抬升投影（卡片类内容用；工具条按钮不要开）。
   final bool lift;
 
+  /// hover 状态变化回调（父级据此改描边 / 底色：卡片悬浮时描边提亮一档，
+  /// 比单纯上浮更容易被看见）。
+  final ValueChanged<bool>? onHoverChanged;
+
   @override
   State<Hoverable> createState() => _HoverableState();
 }
@@ -59,6 +65,20 @@ class Hoverable extends StatefulWidget {
 class _HoverableState extends State<Hoverable> {
   bool _hover = false;
   bool _pressed = false;
+
+  /// 键盘焦点（桌面端 Tab 顺序里的「我在这儿」）。
+  bool _focus = false;
+
+  void _setHover(bool value) {
+    if (_hover == value) return;
+    setState(() => _hover = value);
+    widget.onHoverChanged?.call(value);
+  }
+
+  void _setLeave() {
+    if (_pressed) setState(() => _pressed = false);
+    _setHover(false);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -83,7 +103,16 @@ class _HoverableState extends State<Hoverable> {
       decoration: BoxDecoration(
         color: bg,
         borderRadius: radius,
-        boxShadow: lifted ? ink.shadow(raised: true) : null,
+        // 焦点环用 spreadRadius 画在外圈，不占布局空间（用 border 会让内容缩 2px）。
+        boxShadow: <BoxShadow>[
+          if (_focus)
+            BoxShadow(
+              color: ink.primary.withValues(alpha: AppTokens.focusRingAlpha),
+              spreadRadius: AppTokens.focusRingWidth,
+              blurRadius: 0,
+            ),
+          if (lifted) ...ink.shadow(raised: true),
+        ],
       ),
       child: widget.child,
     );
@@ -95,30 +124,39 @@ class _HoverableState extends State<Hoverable> {
     if (!tappable) {
       return MouseRegion(
         cursor: SystemMouseCursors.basic,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() {
-          _hover = false;
-          _pressed = false;
-        }),
+        onEnter: (_) => _setHover(true),
+        onExit: (_) => _setLeave(),
         child: body,
       );
     }
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() {
-        _hover = false;
-        _pressed = false;
-      }),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTapDown: (_) => setState(() => _pressed = true),
-        onTapUp: (_) => setState(() => _pressed = false),
-        onTapCancel: () => setState(() => _pressed = false),
-        onTap: widget.onTap,
-        onSecondaryTap: widget.onSecondaryTap,
-        child: body,
+      onEnter: (_) => _setHover(true),
+      onExit: (_) => _setLeave(),
+      child: Focus(
+        // 桌面端键盘可达：Tab 能走到、Enter/Space 能触发、焦点看得见。
+        onFocusChange: (bool v) => setState(() => _focus = v),
+        onKeyEvent: (FocusNode node, KeyEvent event) {
+          if (event is! KeyDownEvent) return KeyEventResult.ignored;
+          final LogicalKeyboardKey k = event.logicalKey;
+          if (k == LogicalKeyboardKey.enter ||
+              k == LogicalKeyboardKey.numpadEnter ||
+              k == LogicalKeyboardKey.space) {
+            widget.onTap?.call();
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => setState(() => _pressed = true),
+          onTapUp: (_) => setState(() => _pressed = false),
+          onTapCancel: () => setState(() => _pressed = false),
+          onTap: widget.onTap,
+          onSecondaryTap: widget.onSecondaryTap,
+          child: body,
+        ),
       ),
     );
   }
@@ -200,7 +238,7 @@ enum BadgeTone { neutral, primary, accent, success, warn, danger }
 /// 内容卡片：描边 + 可选标题栏 + 可选左侧色条。
 ///
 /// 替代裸 [Card]：统一圆角、边框、内边距和标题节奏，避免每页各写一套 padding。
-class AppCard extends StatelessWidget {
+class AppCard extends StatefulWidget {
   /// 构造。
   const AppCard({
     super.key,
@@ -255,8 +293,29 @@ class AppCard extends StatelessWidget {
   final bool fill;
 
   @override
+  State<AppCard> createState() => _AppCardState();
+}
+
+class _AppCardState extends State<AppCard> {
+  bool _hover = false;
+
+  @override
   Widget build(BuildContext context) {
     final AppInk ink = AppInk.of(context);
+    // 局部别名：沿用旧实现的字段名写法，build 内部不必大改。
+    final Widget child = widget.child;
+    final String? title = widget.title;
+    final String? subtitle = widget.subtitle;
+    final IconData? icon = widget.icon;
+    final List<Widget>? actions = widget.actions;
+    final VoidCallback? onTap = widget.onTap;
+    final Color? accent = widget.accent;
+    final EdgeInsetsGeometry? padding = widget.padding;
+    final bool dense = widget.dense;
+    final bool selected = widget.selected;
+    final Widget? footer = widget.footer;
+    final bool fill = widget.fill;
+
     final double pad = dense ? AppTokens.s3 : AppTokens.s4;
     const BorderRadius radius = AppTokens.radiusCard;
 
@@ -280,7 +339,7 @@ class AppCard extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
                       Text(
-                        title!,
+                        title,
                         style: AppFonts.text(
                           ink.ink,
                           size: 14.5,
@@ -292,7 +351,7 @@ class AppCard extends StatelessWidget {
                         Padding(
                           padding: const EdgeInsets.only(top: 2),
                           child: Text(
-                            subtitle!,
+                            subtitle,
                             style: AppFonts.text(ink.inkSoft,
                                 size: 12.5, height: 1.5),
                           ),
@@ -302,30 +361,35 @@ class AppCard extends StatelessWidget {
                 ),
                 if (actions != null) ...<Widget>[
                   const SizedBox(width: AppTokens.s2),
-                  Row(mainAxisSize: MainAxisSize.min, children: actions!),
+                  Row(mainAxisSize: MainAxisSize.min, children: actions),
                 ],
               ],
             ),
-            SizedBox(height: title != null ? (dense ? AppTokens.s2 : AppTokens.s3) : 0),
+            SizedBox(height: dense ? AppTokens.s2 : AppTokens.s3),
           ],
           if (fill) Expanded(child: child) else child,
           if (footer != null) ...<Widget>[
             const SizedBox(height: 6),
             const Divider(height: AppTokens.hairline, thickness: AppTokens.hairline),
             const SizedBox(height: 2),
-            footer!,
+            footer,
           ],
         ],
       ),
     );
 
     if (accent != null) {
-      content = Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Container(width: 3, decoration: BoxDecoration(color: accent)),
-          Expanded(child: content),
-        ],
+      // IntrinsicHeight 是必须的：`stretch` 在「高度无界」的父级下（典型是
+      // ListView 的 item）会把无限高传给色条，直接抛 BoxConstraints 断言。
+      // 它先把行高确定下来，色条才能真正通高。
+      content = IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Container(width: 3, decoration: BoxDecoration(color: accent)),
+            Expanded(child: content),
+          ],
+        ),
       );
     }
 
@@ -334,7 +398,9 @@ class AppCard extends StatelessWidget {
         color: ink.surface,
         borderRadius: radius,
         border: Border.all(
-          color: selected ? ink.primary.withValues(alpha: 0.55) : ink.border,
+          color: selected
+              ? ink.primary.withValues(alpha: 0.55)
+              : (_hover ? ink.borderStrong : ink.border),
           width: selected ? 1.4 : AppTokens.cardBorder,
         ),
         boxShadow: ink.shadow(),
@@ -347,7 +413,8 @@ class AppCard extends StatelessWidget {
     return Hoverable(
       onTap: onTap,
       borderRadius: radius,
-      // 可点卡片悬浮时轻微抬升（与 web 端书卡 hover 一致）。
+      onHoverChanged: (bool v) => setState(() => _hover = v),
+      // 可点卡片悬浮时轻微抬升 + 描边提亮一档（与 web 端书卡 hover 一致）。
       lift: true,
       child: card,
     );

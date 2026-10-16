@@ -24,6 +24,7 @@ import 'package:novel_writer/services/sensitive_words.dart';
 import 'package:novel_writer/storage/chapter_repository.dart';
 import 'package:novel_writer/widgets/app_card.dart';
 import 'package:novel_writer/widgets/app_feedback.dart';
+import 'package:novel_writer/widgets/app_skeleton.dart';
 import 'package:novel_writer/widgets/common.dart';
 
 /// 中间栏：章节正文编辑器。
@@ -303,11 +304,16 @@ class _EditorPageState extends ConsumerState<EditorPage>
       );
     }
     if (_loading) {
-      return const Center(
-        child: SizedBox(
-          width: 22,
-          height: 22,
-          child: CircularProgressIndicator(strokeWidth: 2.2),
+      // 正文骨架：与加载完成后的「纸面」布局同宽同构，不会先转一圈再突然变样。
+      return Center(
+        child: ConstrainedBox(
+          constraints:
+              const BoxConstraints(maxWidth: AppTokens.maxWidthReading),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(
+                horizontal: AppTokens.s4, vertical: AppTokens.s6),
+            child: SkeletonParagraph(lines: 10),
+          ),
         ),
       );
     }

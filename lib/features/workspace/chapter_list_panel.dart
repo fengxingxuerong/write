@@ -238,16 +238,16 @@ class _ChapterRow extends StatelessWidget {
                     top: 8,
                     bottom: 8,
                     child: Container(
-                      width: 2,
+                      width: 3,
                       decoration: BoxDecoration(
                         color: ink.primary,
-                        borderRadius: BorderRadius.circular(1),
+                        borderRadius: BorderRadius.circular(2),
                       ),
                     ),
                   ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
-                      AppTokens.s3, 6, AppTokens.s2, 6),
+                      AppTokens.s3, 8, AppTokens.s2, 8),
                   child: Row(
                     children: <Widget>[
                       SizedBox(

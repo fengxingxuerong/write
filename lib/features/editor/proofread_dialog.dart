@@ -120,11 +120,11 @@ class _ProofreadDialogState extends ConsumerState<ProofreadDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+      // 内边距与圆角/描边统一走 dialogTheme，不在这里再写一套。
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 640, maxHeight: 680),
         child: Padding(
-          padding: const EdgeInsets.all(AppTokens.s4 + 4),
+          padding: const EdgeInsets.all(AppTokens.s5),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,

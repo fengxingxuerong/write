@@ -1,4 +1,6 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:novel_writer/core/theme/app_theme.dart';
@@ -531,6 +533,47 @@ void main() {
         find.ancestor(of: find.text('x'), matching: find.byType(MouseRegion)),
       );
       expect(region.cursor, SystemMouseCursors.click);
+    });
+
+    testWidgets('onHoverChanged 在进入/离开时各回调一次', (WidgetTester tester) async {
+      final List<bool> events = <bool>[];
+      await tester.pumpWidget(
+        wrap(Hoverable(
+          onTap: () {},
+          onHoverChanged: events.add,
+          child: const Text('x'),
+        )),
+      );
+
+      final TestGesture gesture =
+          await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.addPointer(location: Offset.zero);
+      addTearDown(gesture.removePointer);
+
+      await gesture.moveTo(tester.getCenter(find.text('x')));
+      await tester.pump();
+      expect(events, <bool>[true], reason: '进入应回调 true');
+
+      await gesture.moveTo(const Offset(400, 400));
+      await tester.pump();
+      expect(events, <bool>[true, false], reason: '离开应回调 false');
+    });
+
+    testWidgets('可点元素参与键盘焦点：Tab 可达、回车可触发', (WidgetTester tester) async {
+      int taps = 0;
+      await tester.pumpWidget(
+        wrap(Hoverable(onTap: () => taps++, child: const Text('卡'))),
+      );
+
+      // 桌面端「能用鼠标点、却 Tab 走不到」是可用性缺陷，这里把可达性钉住。
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      expect(tester.binding.focusManager.primaryFocus, isNotNull,
+          reason: 'Tab 后应有一个元素拿到焦点');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(taps, 1, reason: '回车应触发 onTap');
     });
   });
 }

@@ -17,6 +17,7 @@ import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/storage/app_database.dart';
 import 'package:novel_writer/widgets/app_card.dart';
 import 'package:novel_writer/widgets/app_feedback.dart';
+import 'package:novel_writer/widgets/app_skeleton.dart';
 import 'package:novel_writer/widgets/common.dart';
 import 'package:novel_writer/widgets/page_shell.dart';
 
@@ -84,7 +85,7 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
           Container(height: AppTokens.hairline, color: ink.divider),
           Expanded(
             child: state.isLoading && state.novels.isEmpty
-                ? const Center(child: CircularProgressIndicator(strokeWidth: 2.2))
+                ? const _ShelfSkeleton()
                 : _Bookshelf(
                     state: state,
                     sort: _sort,
@@ -395,6 +396,7 @@ class _SortMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final AppInk ink = AppInk.of(context);
     return PopupMenuButton<String>(
       tooltip: '排序',
       onSelected: onSort,
@@ -420,21 +422,69 @@ class _SortMenu extends StatelessWidget {
             ),
           )
           .toList(),
-      child: Padding(
+      child: Container(
         padding: const EdgeInsets.symmetric(
             horizontal: AppTokens.s3, vertical: 9),
+        decoration: BoxDecoration(
+          color: ink.surfaceRaised.withValues(alpha: ink.dark ? 0.6 : 0.8),
+          borderRadius: BorderRadius.circular(AppTokens.r2),
+          border: Border.all(color: ink.border, width: AppTokens.hairline),
+        ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Icon(Icons.swap_vert, size: 16, color: AppInk.of(context).inkSoft),
+            Icon(Icons.swap_vert, size: 16, color: ink.inkSoft),
             const SizedBox(width: AppTokens.s2 - 2),
             Text(
               _labels[sort] ?? '排序',
-              style: AppFonts.text(AppInk.of(context).inkSoft,
-                  size: 13, height: 1.3),
+              style: AppFonts.text(ink.inkSoft, size: 13, height: 1.3),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 书架冷启动骨架：几张作品卡轮廓，比一个转圈更早知道「这里会有东西」。
+class _ShelfSkeleton extends StatelessWidget {
+  const _ShelfSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final AppInk ink = AppInk.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppTokens.s6, AppTokens.s4, AppTokens.s4, AppTokens.s8),
+      child: Wrap(
+        spacing: AppTokens.s5,
+        runSpacing: AppTokens.s5,
+        children: <Widget>[
+          for (int i = 0; i < 4; i++)
+            SizedBox(
+              width: 296,
+              height: 212,
+              child: Container(
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  color: ink.surface,
+                  borderRadius: AppTokens.radiusCard,
+                  border:
+                      Border.all(color: ink.border, width: AppTokens.cardBorder),
+                ),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    Skeleton(height: 104, radius: 0),
+                    Padding(
+                      padding: EdgeInsets.all(AppTokens.s4),
+                      child: SkeletonParagraph(lines: 2, spacing: AppTokens.s3),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -489,8 +539,8 @@ class _Bookshelf extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints c) {
-        const double gap = AppTokens.s4;
-        const double cardH = 200;
+        const double gap = AppTokens.s5;
+        const double cardH = 212;
         final double avail = c.maxWidth - AppTokens.s6 - AppTokens.s4;
         final int columns = (avail / (296 + gap)).floor().clamp(1, 5);
         final double cardW =
@@ -565,19 +615,32 @@ class _NewHereCard extends StatelessWidget {
       onTap: onTap,
       borderRadius: AppTokens.radiusCard,
       child: Container(
-        height: 200,
+        height: 212,
         decoration: BoxDecoration(
+          color: ink.surface.withValues(alpha: ink.dark ? 0.35 : 0.5),
           borderRadius: AppTokens.radiusCard,
           border: Border.all(color: ink.border, width: AppTokens.cardBorder),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            Icon(Icons.add_circle_outline, size: 26, color: ink.inkFaint),
-            const SizedBox(height: AppTokens.s2),
+            Container(
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: ink.primary.withValues(alpha: ink.dark ? 0.16 : 0.09),
+                border: Border.all(color: ink.primary.withValues(alpha: 0.22)),
+              ),
+              child: Icon(Icons.add, size: 22, color: ink.primary),
+            ),
+            const SizedBox(height: AppTokens.s3),
             Text('新建一部作品',
-                style: AppFonts.text(ink.inkSoft,
-                    size: 13.5, weight: FontWeight.w500, height: 1.4)),
+                style: AppFonts.text(ink.ink,
+                    size: 13.5, weight: FontWeight.w600, height: 1.4)),
+            const SizedBox(height: 2),
+            Text('从一个名字开始',
+                style: AppFonts.text(ink.inkFaint, size: 12, height: 1.4)),
           ],
         ),
       ),

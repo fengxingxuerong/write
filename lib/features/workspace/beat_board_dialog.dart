@@ -165,7 +165,7 @@ class _BeatBoardDialogState extends ConsumerState<BeatBoardDialog> {
                   final double elevation = Tween<double>(begin: 0, end: 6)
                       .animate(CurvedAnimation(
                         parent: animation,
-                        curve: Curves.easeInOut,
+                        curve: AppTokens.curve,
                       ))
                       .value;
                   return Material(

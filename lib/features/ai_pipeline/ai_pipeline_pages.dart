@@ -16,7 +16,10 @@ import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/models/llm_config.dart';
+import 'package:novel_writer/widgets/app_card.dart';
 import 'package:novel_writer/widgets/app_feedback.dart';
+import 'package:novel_writer/widgets/app_skeleton.dart';
+import 'package:novel_writer/widgets/common.dart';
 
 /// 流水线存储 provider（应用支持目录 /ai_pipeline）。
 final Provider<PipelineStorage> pipelineStorageProvider =
@@ -98,18 +101,25 @@ class _AiPipelineHomePageState extends ConsumerState<AiPipelineHomePage> {
         builder:
             (BuildContext context, AsyncSnapshot<List<AiPipelineTask>> snap) {
               if (snap.connectionState != ConnectionState.done) {
-                return const Center(child: CircularProgressIndicator());
+                // 骨架占位，比转圈更早知道「这里会有几张卡」。
+                return const SkeletonList(rows: 5, rowHeight: 56);
               }
               final List<AiPipelineTask> tasks =
                   snap.data ?? <AiPipelineTask>[];
               if (tasks.isEmpty) {
                 return _buildEmpty(context);
               }
-              return ListView.builder(
-                padding: const EdgeInsets.all(AppTokens.s3),
-                itemCount: tasks.length,
-                itemBuilder: (BuildContext context, int index) =>
-                    _TaskCard(task: tasks[index], onChanged: _reload),
+              // 宽屏下把任务列表夹到面板宽度，避免卡片被拉到整屏。
+              return Center(
+                child: SizedBox(
+                  width: AppTokens.maxWidthPanel,
+                  child: ListView.builder(
+                    padding: const EdgeInsets.all(AppTokens.s4),
+                    itemCount: tasks.length,
+                    itemBuilder: (BuildContext context, int index) =>
+                        _TaskCard(task: tasks[index], onChanged: _reload),
+                  ),
+                ),
               );
             },
       ),
@@ -117,24 +127,12 @@ class _AiPipelineHomePageState extends ConsumerState<AiPipelineHomePage> {
   }
 
   Widget _buildEmpty(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: <Widget>[
-          Icon(
-            Icons.auto_stories_outlined,
-            size: 64,
-            color: AppInk.of(context).inkFaint,
-          ),
-          const SizedBox(height: AppTokens.s3),
-          const Text('还没有生成任务'),
-          const SizedBox(height: 4),
-          Text(
-            '配置多模型角色，一键生成完整长篇小说',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ],
-      ),
+    return EmptyState(
+      icon: Icons.auto_stories_outlined,
+      message: '还没有生成任务',
+      hint: '配置多模型角色，一键生成完整长篇小说',
+      actionLabel: '新建生成任务',
+      onAction: () => context.push('/ai-pipeline/config'),
     );
   }
 }
@@ -146,6 +144,15 @@ class _TaskCard extends ConsumerWidget {
 
   final AiPipelineTask task;
   final VoidCallback onChanged;
+
+  /// 任务状态 → 语义色调（与全应用 TintBadge 口径一致）。
+  BadgeTone _statusTone(PipelineTaskStatus s) => switch (s) {
+        PipelineTaskStatus.running => BadgeTone.primary,
+        PipelineTaskStatus.done => BadgeTone.success,
+        PipelineTaskStatus.failed => BadgeTone.danger,
+        PipelineTaskStatus.cancelled => BadgeTone.warn,
+        PipelineTaskStatus.idle => BadgeTone.neutral,
+      };
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -165,28 +172,42 @@ class _TaskCard extends ConsumerWidget {
       _ => ink.inkFaint,
     };
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: AppTokens.s2),
-      child: ListTile(
-        title: Text(task.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-        subtitle: Text(
-          '${task.chapterCount} 章 · ${task.totalWords} 字 · '
-          '${task.createdAt.toLocal().toString().substring(0, 16)}',
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppTokens.s2),
+      child: AppCard(
+        accent: statusColor,
+        onTap: () async {
+          await context.push('/ai-pipeline/run/${task.id}');
+          onChanged();
+        },
+        padding: const EdgeInsets.fromLTRB(
+            AppTokens.s4, AppTokens.s3, AppTokens.s2, AppTokens.s3),
+        child: Row(
           children: <Widget>[
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: statusColor.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(AppTokens.r3),
-              ),
-              child: Text(
-                statusText,
-                style: AppFonts.text(statusColor, size: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text(task.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppFonts.text(ink.ink,
+                          size: 14.5,
+                          weight: FontWeight.w600,
+                          height: 1.4)),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${task.chapterCount} 章 · ${task.totalWords} 字 · '
+                    '${task.createdAt.toLocal().toString().substring(0, 16)}',
+                    style: AppFonts.text(ink.inkFaint,
+                        size: 12, height: 1.4, monoFace: true),
+                  ),
+                ],
               ),
             ),
+            const SizedBox(width: AppTokens.s2),
+            TintBadge(statusText, tone: _statusTone(task.status), dense: true),
             PopupMenuButton<String>(
               onSelected: (String v) async {
                 final PipelineStorage storage = ref.read(
@@ -265,10 +286,6 @@ class _TaskCard extends ConsumerWidget {
             ),
           ],
         ),
-        onTap: () async {
-          await context.push('/ai-pipeline/run/${task.id}');
-          onChanged();
-        },
       ),
     );
   }
@@ -930,8 +947,8 @@ class _AiPipelineRunPageState extends ConsumerState<AiPipelineRunPage> {
       if (_scrollCtrl.hasClients) {
         _scrollCtrl.animateTo(
           _scrollCtrl.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
+          duration: AppTokens.normal,
+          curve: AppTokens.curve,
         );
       }
     });

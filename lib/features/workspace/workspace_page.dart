@@ -25,6 +25,7 @@ import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/services/search_service.dart';
 import 'package:novel_writer/widgets/app_card.dart';
 import 'package:novel_writer/widgets/app_feedback.dart';
+import 'package:novel_writer/widgets/app_skeleton.dart';
 import 'package:novel_writer/widgets/common.dart';
 import 'package:novel_writer/widgets/page_shell.dart';
 
@@ -208,7 +209,8 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
       context: context,
       builder: (BuildContext ctx) => AlertDialog(
         title: const Text('快捷键'),
-        contentPadding: const EdgeInsets.fromLTRB(24, 20, 32, 8),
+        contentPadding: const EdgeInsets.fromLTRB(
+            AppTokens.s6, AppTokens.s5, AppTokens.s8, AppTokens.s2),
         content: SizedBox(
           width: 320,
           child: Column(
@@ -285,18 +287,29 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
+      // 打开项目时先给结构（左栏列表 + 正文段落），比一个转圈更早知道
+      // 「这里会有什么」。骨架默认不动画，pumpAndSettle 不受影响。
       return const Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+        body: Padding(
+          padding: EdgeInsets.all(AppTokens.s4),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(strokeWidth: 2.2),
+              SizedBox(width: 260, child: SkeletonList(rows: 7)),
+              SizedBox(width: AppTokens.s6),
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(top: AppTokens.s2),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Skeleton(width: 200, height: 16),
+                      SizedBox(height: AppTokens.s6),
+                      SkeletonParagraph(lines: 8),
+                    ],
+                  ),
+                ),
               ),
-              SizedBox(height: AppTokens.s3),
-              Text('正在打开作品…', style: TextStyle(fontSize: 13)),
             ],
           ),
         ),

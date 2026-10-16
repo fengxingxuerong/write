@@ -174,6 +174,7 @@ class EditorToolbar extends StatelessWidget {
                 label: 'AI 续写',
                 tone: ink.accent,
                 showLabel: true,
+                solid: true,
                 onPressed: onContinueWrite,
               ),
               ToolButton(

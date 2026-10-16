@@ -33,6 +33,7 @@ class SettingPanel extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // settingRepositoryProvider 是 Provider（非 StateNotifier），值不会变，用 read 即可
     final SettingRepository repo = ref.read(settingRepositoryProvider);
+    final AppInk ink = AppInk.of(context);
     return SizedBox(
       width: 320,
       child: ListView(
@@ -51,7 +52,7 @@ class SettingPanel extends ConsumerWidget {
               ),
             ],
             children: novel.characters.isEmpty
-                ? const <Widget>[Text('还没有角色，点击 + 添加')]
+                ? <Widget>[_emptyHint(ink, '还没有角色，点击 + 添加')]
                 : novel.characters
                     .map((c) => _characterTile(context, ref, repo, c))
                     .toList(),
@@ -66,10 +67,30 @@ class SettingPanel extends ConsumerWidget {
               ),
             ],
             children: novel.worldSettings.isEmpty
-                ? const <Widget>[Text('还没有世界观设定，点击 + 添加')]
+                ? <Widget>[_emptyHint(ink, '还没有世界观设定，点击 + 添加')]
                 : novel.worldSettings
                     .map((w) => _worldTile(context, ref, repo, w))
                     .toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 面板内空态的统一样式：弱色图标 + 一句「怎么做」，别只丢一行灰字。
+  Widget _emptyHint(AppInk ink, String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: AppTokens.s2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Icon(Icons.add_circle_outline, size: 15, color: ink.inkFaint),
+          const SizedBox(width: AppTokens.s2),
+          Expanded(
+            child: Text(
+              text,
+              style: AppFonts.text(ink.inkFaint, size: 12.5, height: 1.5),
+            ),
           ),
         ],
       ),

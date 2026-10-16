@@ -252,8 +252,8 @@ class ThinProgress extends StatelessWidget {
                 : TweenAnimationBuilder<double>(
                     tween: Tween<double>(
                         begin: 0, end: value.clamp(0.0, 1.0).toDouble()),
-                    duration: const Duration(milliseconds: 260),
-                    curve: Curves.easeOutCubic,
+                    duration: AppTokens.normal,
+                    curve: AppTokens.curve,
                     builder: (BuildContext context, double v, Widget? _) {
                       return Stack(
                         children: <Widget>[
