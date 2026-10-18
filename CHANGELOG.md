@@ -11,6 +11,26 @@
 
 ## [未发布] - 2026-10-13
 
+### 新增（Added）
+- **网页关系引导图（`web/relations.html`）**：纯前端零依赖的单文件页面，用于梳理
+  **人物关系 / 情节线 / 伏笔**。三类节点（角色 / 情节 / 伏笔，伏笔区分「埋设中 /
+  已回收」）与带说明的有向连线；拖动节点、空白平移、滚轮缩放、纯 JS 力导向
+  「自动布局」；节点与连线增删改、按类型过滤、选中详情。数据存独立 localStorage
+  键 `inksmith.relations.v1`（与工作台作品数据 `inksmith.web.v1` 隔离），
+  支持导出 JSON 备份与导出 SVG。工作台（`web/index.html`）头部新增「关系图」
+  按钮：新标签页打开并把当前作品的角色、世界观（含伏笔账本）、章节大纲自动
+  播种成节点，角色「关系」文本中出现其他角色名的片段自动生成连线；
+  「导入」亦支持桌面端项目 JSON（单本或备份数组），按「类型 + 名称」去重合并。
+  验证：`node scripts/verify_relations.cjs`（headless Chrome 冒烟：自动播种
+  5 节点 / 2 连线、重进去重、手动增删、刷新恢复、类型过滤、自动布局、
+  320–1440px 响应式、无运行时异常）。
+- **1 万字量级离线长文验证（`tool/write_long_novel.dart` +
+  `test/smoke/write_long_novel_test.dart`）**：与三章 demo 同一条链路
+  （TemplateEngine + NovelQualityChecker + FanqieGateChecker），但验的是
+  **长篇幅下的稳定性**——跨章承接是否漂移、相邻章 8-gram 重复与节奏失衡是否
+  随章节数恶化、番茄闸门是否逐章稳定达线。零网络、零 API 费，实测五章 10181
+  汉字、逐章达线（文笔 90 / 闸门 96.8 均分）、产物落 `verify-logs/`（已 ignore）。
+
 ### 修复（Fixed）
 - **`.env.example` 密钥模板实际未入库**：`.gitignore` 的 `.env.*` 把它一并忽略，
   而 README / CHANGELOG / `scripts/test_secret_hygiene.py` 的 `IGNORE_FILES` 白名单
@@ -117,6 +137,16 @@
   import `ai_pipeline/services/pipeline_qa.dart` 是**有意设计**（`ChapterPayoff`
   等纯数据契约定义在那里）。仅改注释，未动代码——原先若按字面「重构」反而会破坏
   既有的单向设计。
+- **CI 浏览器回归从 3 套扩到 4 套**：`scripts/verify_relations.cjs` 纳入
+  `verify-web` 任务的 Browser regression 步骤（原只跑 `verify_web` /
+  `verify_ai_failure` / `verify_web_ai`），关系引导图自此有 CI 门禁。
+- **更正一处文档失实**：`test/smoke/write_long_novel_test.dart` 原注释称
+  「本测试不进 CI 默认路径」，但该文件位于 `test/` 下，而 CI 的
+  `flutter test --coverage` 会递归收 `test/` 全部 `*_test.dart`——实测
+  `verify-logs/desktop-coverage.log` 里确实跑过 `test/smoke/write_demo_novel_test.dart`
+  可证。已改为如实说明（该步骤同时也是 1 万字写作能力的 CI 门禁），
+  并在 `ci.yml` 对应步骤写明两条命令的关系，避免后续有人误删显式步骤或
+  误判覆盖率任务的耗时来源。
 
 ## [1.0.0] - 2026-10-11
 

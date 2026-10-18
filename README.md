@@ -83,7 +83,7 @@ lib/
 └── widgets/                        # 通用组件
 ```
 
-> 辅助目录：`scripts/`（Python 辅助脚本：`generate_novel.py` 长篇小说 LLM 批量生成、`novel_pipeline.py` 多角色协作流水线（已拆为 `pipeline_llm` / `pipeline_prompts` / `pipeline_quality` / `pipeline_state` 兄弟模块，见 `scripts/README.md`）、`demo_novel_gen.py` 模板引擎演示、`rules_codegen.py` 规则代码生成、`human_eval_sample.py` 人评取样器、`human_eval_correlation.py` 人评相关性实验）、`tool/`（Dart 工具：`write_demo_novel.dart` 离线三章成书 + 番茄过审双质检端到端演示，支持 `DEMO_RANDOM_LEVEL` 抽样——⚠️ 因生成链路传递依赖 package:flutter，**不能用 `dart run` 跑**，改由 `flutter test test/smoke/write_demo_novel_test.dart` 驱动；`verify_*_parity_test.dart` 依赖本地基线的**手动**双端对账）、`data/`（本地语料数据，已 gitignore）、`verify-logs/`（本地验证日志，已被 .gitignore 忽略）、`.env.example`（密钥模板，入库；真值放 `.env.local`，不入库）。
+> 辅助目录：`scripts/`（Python 辅助脚本：`generate_novel.py` 长篇小说 LLM 批量生成、`novel_pipeline.py` 多角色协作流水线（已拆为 `pipeline_llm` / `pipeline_prompts` / `pipeline_quality` / `pipeline_state` 兄弟模块，见 `scripts/README.md`）、`demo_novel_gen.py` 模板引擎演示、`rules_codegen.py` 规则代码生成、`human_eval_sample.py` 人评取样器、`human_eval_correlation.py` 人评相关性实验）、`tool/`（Dart 工具：`write_demo_novel.dart` 离线三章成书 + 番茄过审双质检端到端演示，支持 `DEMO_RANDOM_LEVEL` 抽样——⚠️ 因生成链路传递依赖 package:flutter，**不能用 `dart run` 跑**，改由 `flutter test test/smoke/write_demo_novel_test.dart` 驱动、`write_long_novel.dart` 离线五章约 1 万字连写（验跨章承接与质量不随篇幅衰减，由 `flutter test test/smoke/write_long_novel_test.dart` 驱动，随 CI 覆盖率任务一并执行）；`verify_*_parity_test.dart` 依赖本地基线的**手动**双端对账）、`data/`（本地语料数据，已 gitignore）、`verify-logs/`（本地验证日志，已被 .gitignore 忽略）、`.env.example`（密钥模板，入库；真值放 `.env.local`，不入库）。
 
 ### 质检判据与阈值（单一数据源）
 
@@ -138,7 +138,7 @@ flutter pub get
 flutter run -d windows # Windows 桌面（主力平台）
 ```
 
-> 另有独立网页工作台：`web/index.html` + `web/app.js` + `web/ai.js`，直接用浏览器打开即可；它不是 Flutter Web 构建产物，功能与桌面端不完全一致。
+> 另有独立网页工作台：`web/index.html` + `web/app.js` + `web/ai.js`，直接用浏览器打开即可；它不是 Flutter Web 构建产物，功能与桌面端不完全一致。工作台内可进入**关系引导图**（`web/relations.html`，亦可单独打开）：梳理人物关系 / 情节 / 伏笔的可视化画布，支持从作品设定自动播种与桌面项目 JSON 导入。
 
 > Android / iOS / macOS / Linux 运行器未随仓库提供，也未在 CI 验证；如需支持请自行 `flutter create .` 生成运行器后适配（见下节）。
 
@@ -186,7 +186,7 @@ flutter test
 
 当前测试与覆盖率以 CI 实际输出为准；CI 要求已采集生产文件的行覆盖率不低于 **80%**，并校验 12 个关键安全/存储/质检文件必须进入 LCOV（`secret_store` / `llm_config` / `novel` / `pipeline_storage` / `composite_quality_gate` / `app_database` / `chapter_repository` / `chapter_snapshot_service` / `novel_repository` / `setting_repository` / `novel_quality_checker` / `fanqie_gate_checker`）。测试覆盖模型序列化、模板生成、存储可靠性、导出、AI 流水线、断点续传、导入幂等、隐私文案、Windows DPAPI 通道，以及**质检词表/阈值的双端对账**（`quality_rules_parity_test`）。
 
-**写作能力下限护栏**（`test/engine/quality/writing_ability_test.dart`）：不再只验「引擎跑得通」，而是断言**引擎真实产出的小说达到质量下限**——5 题材 × 2 章连写，逐章钉住番茄闸门达线（≥80 分且无阻断项/否决）、文笔卫生分、AI 味密度、相邻段落重复率、对白占比与成章字数；全书钉住敏感词干净、跨章一致性（世界观/剧情/主角连续性为 0）与主角真实落地。同文件另带**负样本对照**（注水稿、AI 味堆砌稿必须跌破能力线），确保这些分数断言不是「质检器坏了也照样绿」的恒真命题。阈值全部取自实测基线并留余量，只拦能力塌陷级退化；离线冒烟（`test/smoke/write_demo_novel_test.dart`）与全链路 E2E（`test/features/full_novel_e2e_test.dart`）同口径校验分数下限。
+**写作能力下限护栏**（`test/engine/quality/writing_ability_test.dart`）：不再只验「引擎跑得通」，而是断言**引擎真实产出的小说达到质量下限**——5 题材 × 2 章连写，逐章钉住番茄闸门达线（≥80 分且无阻断项/否决）、文笔卫生分、AI 味密度、相邻段落重复率、对白占比与成章字数；全书钉住敏感词干净、跨章一致性（世界观/剧情/主角连续性为 0）与主角真实落地。同文件另带**负样本对照**（注水稿、AI 味堆砌稿必须跌破能力线），确保这些分数断言不是「质检器坏了也照样绿」的恒真命题。阈值全部取自实测基线并留余量，只拦能力塌陷级退化；离线冒烟（三章 `test/smoke/write_demo_novel_test.dart`、1 万字长文 `test/smoke/write_long_novel_test.dart`）与全链路 E2E（`test/features/full_novel_e2e_test.dart`）同口径校验分数下限。
 
 ### CI 流水线
 

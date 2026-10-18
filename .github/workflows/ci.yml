@@ -104,6 +104,11 @@ jobs:
           tool/verify_payoff_drought_parity_test.dart
 
       - name: Flutter test
+        # ⚠️ 无参数 `flutter test` 会递归收 test/ 下**全部** *_test.dart，含
+        # test/smoke/（三章冒烟 + 1 万字长文冒烟，后者约 1 分钟、零网络零 API 费）。
+        # 也就是说下面这条覆盖率命令本身就是「长文写作能力」的 CI 门禁；
+        # 上面那条显式 `flutter test test/smoke/...` 只是让 demo 冒烟的失败信息
+        # 单独成步、便于定位。改动 smoke 用例的耗时/依赖前先看这两条的关系。
         run: flutter test --coverage
 
       - name: Enforce coverage threshold
@@ -214,11 +219,16 @@ jobs:
           echo "CHROME_PATH=$BIN" >> "$GITHUB_ENV"
           echo "Usable Chrome: $BIN"
 
-      - name: Browser regression (3 suites)
+      - name: Browser regression (4 suites)
+        # 第 4 套（verify_relations.cjs，2026-10-18 纳入）：关系引导图
+        # web/relations.html 的独立冒烟——自动播种 / 去重 / 增删 / 刷新恢复 /
+        # 类型过滤 / 自动布局 / 主题切换 / 320–1440px 无溢出 / 零运行时异常。
+        # 与前三套同口径：只用 CHROME_PATH 指定的 headless Chrome，无 npm 依赖。
         run: |
           node scripts/verify_web.cjs
           node scripts/verify_ai_failure.cjs
           node scripts/verify_web_ai.cjs
+          node scripts/verify_relations.cjs
 
   build-windows:
     name: Build Windows Release
