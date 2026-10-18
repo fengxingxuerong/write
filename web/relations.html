@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>关系引导图 · 墨匠 InkSmith</title>
+<style>
+:root{color-scheme:light dark;--paper:#f6f3ec;--panel:#fffdf8;--raised:#ffffff;--line:#e0dacc;--muted:#6a655c;--faint:#716b5b;--ink:#23211e;--primary:#2f5d62;--on-primary:#f6f3ec;--accent:#b23a2c;--success:#2f6b49;--warn:#8f5f0e;--danger:#b0342e;--tint:#142f5d62;--hover:#0a23211e;--shadow:0 1px 2px #23211e0d,0 8px 24px #23211e0f;--char:#2f5d62;--plot:#b23a2c;--foresh:#8f5f0e;--edge:#8f8676}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--paper:#17191c;--panel:#1e2126;--raised:#252a30;--line:#343a44;--muted:#a9a49a;--faint:#8c877e;--ink:#e8e4db;--primary:#7fb7b2;--on-primary:#12171a;--accent:#e0705c;--success:#6fb189;--warn:#d1a24c;--danger:#e0776f;--tint:#1f7fb7b2;--hover:#0fe8e4db;--shadow:none;--char:#7fb7b2;--plot:#e0705c;--foresh:#d1a24c;--edge:#6f6a60}}
+:root[data-theme="dark"]{--paper:#17191c;--panel:#1e2126;--raised:#252a30;--line:#343a44;--muted:#a9a49a;--faint:#8c877e;--ink:#e8e4db;--primary:#7fb7b2;--on-primary:#12171a;--accent:#e0705c;--success:#6fb189;--warn:#d1a24c;--danger:#e0776f;--tint:#1f7fb7b2;--hover:#0fe8e4db;--shadow:none;--char:#7fb7b2;--plot:#e0705c;--foresh:#d1a24c;--edge:#6f6a60}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.65 "Segoe UI",system-ui,"Microsoft YaHei",sans-serif;overflow:hidden}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--panel);transition:background .15s ease,border-color .15s ease,transform .12s ease}
+button:hover{background:var(--tint);border-color:var(--primary)}
+button:active{transform:translateY(1px)}
+button:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.primary{background:var(--primary);color:var(--on-primary);font-weight:700;border-color:var(--primary)}
+.danger{color:var(--danger)}
+input,select,textarea{display:block;width:100%;background:var(--raised);border:1px solid var(--line);border-radius:9px;padding:10px 12px;transition:border-color .15s ease,box-shadow .15s ease}
+input:focus,textarea:focus,select:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--tint);outline:none}
+textarea{resize:vertical}
+label{display:block;color:var(--muted);font-size:13px}
+label input,label textarea,label select{margin-top:6px}
+.check{display:flex;gap:8px;align-items:center}
+.check input{width:auto;margin:0}
+.topbar{height:56px;padding:0 4vw;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:16px;background:var(--panel)}
+.brand{font-weight:700;font-size:17px}
+.brand span{background:var(--primary);color:var(--on-primary);padding:5px 8px;border-radius:8px;margin-right:8px}
+.brand small{font-size:10px;letter-spacing:2px;color:var(--muted);margin-left:6px}
+.topbar .spacer{flex:1}
+.topbar button,.topbar a{padding:7px 12px}
+a{color:inherit;text-decoration:none;border:1px solid var(--line);border-radius:9px}
+a:hover{background:var(--tint);border-color:var(--primary)}
+#notice{font-size:13px;padding:8px 4vw;border-bottom:1px solid var(--line);min-height:36px;color:var(--success);background:var(--panel)}
+#notice[data-error="true"]{color:var(--danger);background:#b0342e14}
+.layout{display:grid;grid-template-columns:300px minmax(0,1fr);height:calc(100vh - 93px)}
+.sidebar{border-right:1px solid var(--line);background:var(--panel);overflow-y:auto;padding:18px}
+.sidebar h2{font-size:14px;margin:20px 0 10px;color:var(--muted);font-weight:600}
+.sidebar h2:first-child{margin-top:0}
+.graph-switch{display:flex;gap:8px;align-items:center}
+.graph-switch select{flex:1;min-width:0}
+.stats{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.stat-chip{font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.stat-chip b{color:var(--ink);font-variant-numeric:tabular-nums;margin-left:4px}
+.filters{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.toolbar button{padding:7px 10px;font-size:13px}
+.node-list,.edge-list{display:flex;flex-direction:column;gap:6px}
+.node-row,.edge-row{display:flex;gap:6px;align-items:center}
+.node-row>button,.edge-row>button:first-child{flex:1;text-align:left;overflow-wrap:anywhere;font-size:13.5px;padding:7px 10px}
+.node-row>button[aria-current="true"],.edge-row>button[aria-current="true"]{background:var(--tint);border-color:var(--primary);color:var(--primary)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;flex:none}
+.dot.character{background:var(--char)}
+.dot.plot{background:var(--plot)}
+.dot.foreshadow{background:var(--foresh)}
+.mini{padding:5px 8px;font-size:12px;flex:none}
+.empty-hint{font-size:12.5px;color:var(--faint);line-height:1.8}
+.map-pane{display:flex;flex-direction:column;min-width:0;background:var(--paper)}
+.map-toolbar{display:flex;gap:8px;flex-wrap:wrap;padding:12px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+.map-toolbar button{padding:6px 11px;font-size:13px}
+.map-toolbar .hint{margin-left:auto;font-size:12px;color:var(--faint);align-self:center}
+#canvas{flex:1;min-height:0;touch-action:none;cursor:grab;display:block}
+#canvas.panning{cursor:grabbing}
+.edge-line{stroke:var(--edge);stroke-width:1.6;fill:none}
+.edge-line.selected{stroke:var(--primary);stroke-width:2.6}
+.edge-line.dim{opacity:.25}
+.edge-hit{stroke:transparent;stroke-width:14;fill:none;cursor:pointer}
+.edge-label-bg{fill:var(--panel);stroke:var(--line);stroke-width:1}
+.edge-label-text{font-size:11.5px;fill:var(--muted);text-anchor:middle;dominant-baseline:middle;pointer-events:none}
+.node-rect{stroke-width:1.5;cursor:grab}
+.node-rect.type-character{fill:var(--raised);stroke:var(--char)}
+.node-rect.type-plot{fill:var(--raised);stroke:var(--plot)}
+.node-rect.type-foreshadow{fill:var(--raised);stroke:var(--foresh);stroke-dasharray:5 3}
+.node.selected .node-rect{stroke-width:3;stroke:var(--ink)}
+.node.dim{opacity:.28}
+.node-text{font-size:13px;fill:var(--ink);text-anchor:middle;dominant-baseline:middle;pointer-events:none;user-select:none}
+.node-sub{font-size:10.5px;fill:var(--faint);text-anchor:middle;dominant-baseline:middle;pointer-events:none;user-select:none}
+dialog{width:min(92vw,460px);background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:18px;padding:26px;max-height:90vh;box-shadow:var(--shadow)}
+dialog::backdrop{background:#23211e66;backdrop-filter:blur(4px)}
+dialog h2{margin:0 0 4px;font-size:17px}
+dialog label{margin:14px 0}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:22px}
+.detail-box{background:var(--raised);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:13px;line-height:1.9;white-space:pre-wrap;overflow-wrap:anywhere}
+.detail-box .row-actions{display:flex;gap:8px;margin-top:10px}
+:focus-visible{outline:2px solid var(--primary);outline-offset:3px}
+[hidden]{display:none!important}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:5px;border:2px solid var(--panel)}
+::-webkit-scrollbar-thumb:hover{background:var(--faint)}
+@media(max-width:860px){.layout{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr);height:auto}body{overflow:auto}.sidebar{border-right:0;border-bottom:1px solid var(--line)}.sidebar .toolbar button{flex:1}#canvas{min-height:60vh}.map-pane{min-height:70vh}.map-toolbar .hint{display:none}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html"><span>墨</span>关系引导图<small>RELATION MAP</small></a>
+  <div class="spacer"></div>
+  <button id="theme-toggle" title="切换浅色 / 深色主题">🌓 主题</button>
+  <a href="index.html">← 返回工作台</a>
+</header>
+<div id="notice" role="status" aria-live="polite">准备就绪</div>
+<main class="layout">
+<aside class="sidebar">
+  <h2>关系图</h2>
+  <div class="graph-switch">
+    <select id="graph-select" aria-label="选择关系图"></select>
+    <button id="new-graph" title="新建空白关系图">＋</button>
+  </div>
+  <div class="stats" id="stats"></div>
+  <div class="filters">
+    <label class="check"><input type="checkbox" data-filter="character" checked>角色</label>
+    <label class="check"><input type="checkbox" data-filter="plot" checked>情节</label>
+    <label class="check"><input type="checkbox" data-filter="foreshadow" checked>伏笔</label>
+  </div>
+  <div class="toolbar">
+    <button id="add-character">＋ 角色</button>
+    <button id="add-plot">＋ 情节</button>
+    <button id="add-foreshadow">＋ 伏笔</button>
+    <button id="add-edge">＋ 连线</button>
+  </div>
+  <div class="toolbar">
+    <button id="auto-layout">自动布局</button>
+    <button id="fit-view">适配视图</button>
+    <button id="import-open">导入</button>
+    <button id="export-json">导出 JSON</button>
+    <button id="export-svg">导出 SVG</button>
+    <button id="clear-all" class="danger">清空</button>
+  </div>
+  <h2>节点 <span id="node-count" class="empty-hint"></span></h2>
+  <div id="node-list" class="node-list"></div>
+  <h2>连线 <span id="edge-count" class="empty-hint"></span></h2>
+  <div id="edge-list" class="edge-list"></div>
+  <h2>选中详情</h2>
+  <div id="detail"><p class="empty-hint">点击画布中的节点或连线查看详情；拖动节点可微调位置，滚轮缩放、拖动空白处平移画布。</p></div>
+  <p class="empty-hint" style="margin-top:18px">数据只保存在当前浏览器、当前站点的 localStorage（键 <code>inksmith.relations.v1</code>），与工作台作品数据隔离；清理浏览器数据会丢失，请定期导出 JSON 备份。桌面端项目可先导出项目 JSON，再在「导入」中选择该文件。</p>
+</aside>
+<section class="map-pane">
+  <div class="map-toolbar">
+    <button id="zoom-in">＋ 放大</button>
+    <button id="zoom-out">－ 缩小</button>
+    <span class="hint">拖动节点移动 · 拖动空白平移 · 滚轮缩放 · Delete 删除选中 · Esc 取消选中</span>
+  </div>
+  <svg id="canvas" aria-label="关系图画布">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--edge)"></path>
+      </marker>
+      <marker id="arrow-selected" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--primary)"></path>
+      </marker>
+    </defs>
+    <g id="viewport"></g>
+  </svg>
+</section>
+<dialog id="node-dialog" aria-labelledby="node-dialog-title">
+  <form id="node-form">
+    <h2 id="node-dialog-title">新增节点</h2>
+    <label>类型<select id="node-type"><option value="character">角色</option><option value="plot">情节</option><option value="foreshadow">伏笔</option></select></label>
+    <label>名称<input id="node-name" required maxlength="40" placeholder="例如：林深 / 第三章反转 / 古剑来历"></label>
+    <label>备注<textarea id="node-note" rows="4" maxlength="600" placeholder="身份、性格、冲突要点、悬念指向…"></textarea></label>
+    <label id="node-status-row" hidden>状态<select id="node-status"><option value="open">埋设中</option><option value="resolved">已回收</option></select></label>
+    <div class="modal-actions">
+      <button type="button" id="node-cancel">取消</button>
+      <button type="submit" class="primary">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="edge-dialog" aria-labelledby="edge-dialog-title">
+  <form id="edge-form">
+    <h2 id="edge-dialog-title">新增连线</h2>
+    <label>起点<select id="edge-from" required></select></label>
+    <label>终点<select id="edge-to" required></select></label>
+    <label>关系说明<input id="edge-label" maxlength="30" placeholder="例如：师徒 / 敌对 / 伏笔指向"></label>
+    <div class="modal-actions">
+      <button type="button" id="edge-cancel">取消</button>
+      <button type="submit" class="primary">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="import-dialog" aria-labelledby="import-dialog-title">
+  <form id="import-form">
+    <h2 id="import-dialog-title">导入设定</h2>
+    <label>从网页工作台导入<select id="import-book"></select></label>
+    <label class="check"><input type="checkbox" id="import-outlines" checked>把各章「章节大纲」导入为情节节点</label>
+    <label>或选择桌面项目 JSON 文件<input type="file" id="import-file" accept=".json,application/json"></label>
+    <p class="empty-hint">导入按「类型 + 名称」去重合并，不会删除已有节点；角色的「关系」文本中出现其他角色名的片段会自动生成连线。</p>
+    <div class="modal-actions">
+      <button type="button" id="import-cancel">取消</button>
+      <button type="submit" class="primary">开始导入</button>
+    </div>
+  </form>
+</dialog>
+
+<noscript>此页面需要启用 JavaScript。</noscript>
+<script>
+'use strict';
+/* 墨匠 InkSmith · 关系引导图：人物关系 / 情节 / 伏笔 的可视化梳理（纯前端零依赖）。 */
+(() => {
+  const $ = id => document.getElementById(id);
+  const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const download = (name, text, type) => {
+    const url = URL.createObjectURL(new Blob(['\uFEFF', text], { type }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: name });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  let noticeTimer;
+  const notify = (text, error = false) => {
+    $('notice').textContent = text; $('notice').dataset.error = String(error);
+    clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { $('notice').textContent = '准备就绪'; $('notice').dataset.error = 'false'; }, 4000);
+  };
+
+  /* ===== 数据层：localStorage 独立键，与工作台作品数据（inksmith.web.v1）隔离 ===== */
+  const KEY = 'inksmith.relations.v1';
+  const WORK_KEY = 'inksmith.web.v1';
+  const TYPES = { character: '角色', plot: '情节', foreshadow: '伏笔' };
+  const newGraph = title => ({ title: title || '未命名关系图', updatedAt: new Date().toISOString(), nodes: [], edges: [] });
+  let store = { graphs: {} };            // bookId -> graph
+  let currentId = 'standalone';          // 当前关系图 key
+  let storageBlocked = false;
+  let selection = null;                  // { kind: 'node' | 'edge', id }
+  const view = { x: 0, y: 0, scale: 1 }; // 画布视口变换
+  const filters = { character: true, plot: true, foreshadow: true };
+
+  const graph = () => store.graphs[currentId];
+  const save = () => {
+    if (storageBlocked) { notify('本地存储不可用，已暂停写入；请先导出 JSON 备份。', true); return; }
+    try { localStorage.setItem(KEY, JSON.stringify(store)); }
+    catch { storageBlocked = true; notify('本地存储写入失败，请立即导出 JSON 备份。', true); }
+  };
+  const touch = () => { if (graph()) graph().updatedAt = new Date().toISOString(); save(); };
+  const load = () => {
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (!data || typeof data.graphs !== 'object' || !data.graphs) throw Error('invalid');
+      for (const [id, g] of Object.entries(data.graphs)) {
+        if (!g || !Array.isArray(g.nodes) || !Array.isArray(g.edges)) throw Error('invalid');
+        g.nodes = g.nodes.filter(n => n && typeof n.id === 'string' && typeof n.name === 'string' && TYPES[n.type]);
+        g.edges = g.edges.filter(e => e && typeof e.id === 'string' && typeof e.from === 'string' && typeof e.to === 'string');
+      }
+      store = data;
+    } catch { storageBlocked = true; notify('本地数据无法读取，未覆盖原始数据；请排查后重试。', true); }
+  };
+  const workspaceBooks = () => {
+    try {
+      const data = JSON.parse(localStorage.getItem(WORK_KEY) || 'null');
+      return (data && Array.isArray(data.books)) ? data.books : [];
+    } catch { return []; }
+  };
+
+  /* ===== 侧栏渲染 ===== */
+  const typeCounts = () => {
+    const c = { character: 0, plot: 0, foreshadow: 0 };
+    for (const n of graph().nodes) c[n.type]++;
+    return c;
+  };
+  const renderGraphSelect = () => {
+    const sel = $('graph-select'); sel.replaceChildren();
+    for (const [id, g] of Object.entries(store.graphs)) {
+      const op = document.createElement('option');
+      op.value = id; op.textContent = g.title || '未命名关系图';
+      sel.append(op);
+    }
+    sel.value = currentId;
+  };
+  const renderStats = () => {
+    const c = typeCounts();
+    const entries = Object.entries(TYPES).map(([type, label]) => [label, c[type]]);
+    entries.push(['连线', graph().edges.length]);
+    $('stats').replaceChildren(...entries.map(([label, count]) => {
+      const chip = document.createElement('span'); chip.className = 'stat-chip';
+      chip.innerHTML = `${label}<b>${count}</b>`;
+      return chip;
+    }));
+    $('node-count').textContent = `共 ${graph().nodes.length}`;
+    $('edge-count').textContent = `共 ${graph().edges.length}`;
+  };
+  const nodeById = id => graph().nodes.find(n => n.id === id);
+  const renderLists = () => {
+    const listBox = $('node-list'); listBox.replaceChildren();
+    for (const n of graph().nodes) {
+      const row = document.createElement('div'); row.className = 'node-row';
+      const btn = document.createElement('button');
+      btn.setAttribute('aria-current', String(!!selection && selection.kind === 'node' && selection.id === n.id));
+      btn.innerHTML = `<span class="dot ${n.type}"></span>${esc(n.name)}`;
+      btn.onclick = () => select({ kind: 'node', id: n.id }, true);
+      btn.ondblclick = () => openNodeDialog(n);
+      const edit = document.createElement('button'); edit.className = 'mini'; edit.textContent = '编辑';
+      edit.onclick = () => openNodeDialog(n);
+      const del = document.createElement('button'); del.className = 'mini danger'; del.textContent = '删除';
+      del.onclick = () => removeNode(n.id);
+      row.append(btn, edit, del); listBox.append(row);
+    }
+    if (!graph().nodes.length) listBox.innerHTML = '<p class="empty-hint">暂无节点。从上方新增，或点「导入」播种工作台/项目设定。</p>';
+    const eBox = $('edge-list'); eBox.replaceChildren();
+    for (const e of graph().edges) {
+      const a = nodeById(e.from), b = nodeById(e.to);
+      const row = document.createElement('div'); row.className = 'edge-row';
+      const btn = document.createElement('button');
+      btn.setAttribute('aria-current', String(!!selection && selection.kind === 'edge' && selection.id === e.id));
+      btn.textContent = `${a ? a.name : '?'} → ${b ? b.name : '?'}${e.label ? `（${e.label}）` : ''}`;
+      btn.onclick = () => select({ kind: 'edge', id: e.id }, true);
+      btn.ondblclick = () => openEdgeDialog(e);
+      const edit = document.createElement('button'); edit.className = 'mini'; edit.textContent = '编辑';
+      edit.onclick = () => openEdgeDialog(e);
+      const del = document.createElement('button'); del.className = 'mini danger'; del.textContent = '删除';
+      del.onclick = () => removeEdge(e.id);
+      row.append(btn, edit, del); eBox.append(row);
+    }
+    if (!graph().edges.length) eBox.innerHTML = '<p class="empty-hint">暂无连线。点「＋ 连线」连接两个节点。</p>';
+  };
+  const renderDetail = () => {
+    const box = $('detail');
+    if (!selection) { box.innerHTML = '<p class="empty-hint">点击画布中的节点或连线查看详情；拖动节点可微调位置，滚轮缩放、拖动空白处平移画布。</p>'; return; }
+    if (selection.kind === 'node') {
+      const n = nodeById(selection.id);
+      if (!n) { selection = null; return renderDetail(); }
+      const status = n.type === 'foreshadow' ? (n.status === 'resolved' ? '已回收' : '埋设中') : '';
+      box.innerHTML = `<div class="detail-box"><b>${esc(TYPES[n.type])} · ${esc(n.name)}</b>${status ? `　· ${status}` : ''}${n.note ? `\n${esc(n.note)}` : ''}
+        <div class="row-actions"><button class="mini" data-act="edit">编辑</button><button class="mini danger" data-act="del">删除</button></div></div>`;
+      box.querySelector('[data-act="edit"]').onclick = () => openNodeDialog(n);
+      box.querySelector('[data-act="del"]').onclick = () => removeNode(n.id);
+    } else {
+      const e = graph().edges.find(x => x.id === selection.id);
+      if (!e) { selection = null; return renderDetail(); }
+      const a = nodeById(e.from), b = nodeById(e.to);
+      box.innerHTML = `<div class="detail-box"><b>${esc(a ? a.name : '?')} → ${esc(b ? b.name : '?')}</b>${e.label ? `　${esc(e.label)}` : ''}
+        <div class="row-actions"><button class="mini" data-act="edit">编辑</button><button class="mini danger" data-act="del">删除</button></div></div>`;
+      box.querySelector('[data-act="edit"]').onclick = () => openEdgeDialog(e);
+      box.querySelector('[data-act="del"]').onclick = () => removeEdge(e.id);
+    }
+  };
+  const renderSidebar = () => { renderGraphSelect(); renderStats(); renderLists(); renderDetail(); };
+
+  /* ===== 画布渲染（SVG，纯手写） ===== */
+  const svg = $('canvas');
+  const viewport = $('viewport');
+  const NODE_H = 34;
+  const nodeWidth = n => clamp(String(n.name).length * 13 + 30, 72, 190);
+  const svgEl = (tag, attrs = {}) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    return el;
+  };
+  const isDim = n => !filters[n.type];
+  const connectedIds = new Set();
+  const computeConnected = () => {
+    connectedIds.clear();
+    if (!selection || selection.kind !== 'node') return;
+    connectedIds.add(selection.id);
+    for (const e of graph().edges) if (e.from === selection.id || e.to === selection.id) { connectedIds.add(e.from); connectedIds.add(e.to); }
+  };
+  const renderCanvas = () => {
+    viewport.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.scale})`);
+    viewport.replaceChildren();
+    computeConnected();
+    const g = graph();
+    const hasSel = !!selection;
+    const frag = document.createDocumentFragment();
+    for (const e of g.edges) {
+      const a = nodeById(e.from), b = nodeById(e.to);
+      if (!a || !b || isDim(a) || isDim(b)) continue;
+      const selected = selection && selection.kind === 'edge' && selection.id === e.id;
+      const related = !hasSel || (selection.kind === 'node' && (e.from === selection.id || e.to === selection.id));
+      const x1 = a.x, y1 = a.y, x2 = b.x, y2 = b.y;
+      const hit = svgEl('path', { d: `M ${x1} ${y1} L ${x2} ${y2}`, class: 'edge-hit', 'data-edge': e.id });
+      const line = svgEl('path', {
+        d: `M ${x1} ${y1} L ${x2} ${y2}`,
+        class: `edge-line${selected ? ' selected' : ''}${related ? '' : ' dim'}`,
+        'marker-end': selected ? 'url(#arrow-selected)' : 'url(#arrow)',
+      });
+      frag.append(hit, line);
+      if (e.label) {
+        const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+        const w = String(e.label).length * 12 + 12;
+        const bg = svgEl('rect', { x: mx - w / 2, y: my - 9, width: w, height: 18, rx: 6, class: 'edge-label-bg' });
+        const text = svgEl('text', { x: mx, y: my + 1, class: 'edge-label-text' });
+        text.textContent = e.label;
+        frag.append(bg, text);
+      }
+    }
+    for (const n of g.nodes) {
+      if (isDim(n)) continue;
+      const selected = selection && selection.kind === 'node' && selection.id === n.id;
+      const dimmed = hasSel && !connectedIds.has(n.id);
+      const w = nodeWidth(n);
+      const wrap = svgEl('g', {
+        transform: `translate(${n.x},${n.y})`,
+        class: `node${selected ? ' selected' : ''}${dimmed ? ' dim' : ''}`,
+        'data-node': n.id,
+      });
+      const rect = svgEl('rect', { x: -w / 2, y: -NODE_H / 2, width: w, height: NODE_H, rx: 9, class: `node-rect type-${n.type}` });
+      const text = svgEl('text', { y: 1, class: 'node-text' });
+      const label = String(n.name).length > 11 ? `${String(n.name).slice(0, 10)}…` : String(n.name);
+      text.textContent = n.type === 'foreshadow' ? `${n.status === 'resolved' ? '✓' : '◆'} ${label}` : label;
+      const title = svgEl('title');
+      title.textContent = `${TYPES[n.type]}：${n.name}${n.note ? `\n${n.note}` : ''}`;
+      wrap.append(rect, text, title);
+      frag.append(wrap);
+    }
+    viewport.append(frag);
+  };
+  const renderAll = () => { renderSidebar(); renderCanvas(); };
+
+  /* ===== 选择与增删 ===== */
+  const select = (sel, center = false) => {
+    selection = sel;
+    renderAll();
+    if (center && sel && sel.kind === 'node') centerOnNode(sel.id);
+  };
+  const removeNode = id => {
+    const n = nodeById(id); if (!n) return;
+    if (!confirm(`删除「${n.name}」及其全部连线？`)) return;
+    const g = graph();
+    g.nodes = g.nodes.filter(x => x.id !== id);
+    g.edges = g.edges.filter(e => e.from !== id && e.to !== id);
+    if (selection && selection.id === id) selection = null;
+    touch(); renderAll();
+  };
+  const removeEdge = id => {
+    graph().edges = graph().edges.filter(e => e.id !== id);
+    if (selection && selection.id === id) selection = null;
+    touch(); renderAll();
+  };
+
+  /* ===== 力导向布局：纯 JS，无外部库 ===== */
+  let layoutToken = 0;
+  const seedPositions = nodes => {
+    const rect = svg.getBoundingClientRect();
+    const cx = rect.width / 2, cy = rect.height / 2;
+    nodes.forEach((n, i) => {
+      if (typeof n.x === 'number' && typeof n.y === 'number') return;
+      const a = (i / Math.max(1, nodes.length)) * Math.PI * 2;
+      const r = 140 + (i % 5) * 45;
+      n.x = cx + Math.cos(a) * r - view.x;
+      n.y = cy + Math.sin(a) * r - view.y;
+    });
+  };
+  const layoutStep = (nodes, edges, alpha) => {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 1) { dx = (Math.random() - 0.5) * 2; dy = (Math.random() - 0.5) * 2; d2 = 4; }
+        const d = Math.sqrt(d2);
+        const rep = Math.min(90, 6500 / d2) * alpha;
+        const fx = (dx / d) * rep, fy = (dy / d) * rep;
+        a.x -= fx; a.y -= fy; b.x += fx; b.y += fy;
+      }
+    }
+    const byId = new Map(nodes.map(n => [n.id, n]));
+    for (const e of edges) {
+      const a = byId.get(e.from), b = byId.get(e.to);
+      if (!a || !b) continue;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.max(1, Math.hypot(dx, dy));
+      const pull = (d - 210) * 0.05 * alpha;
+      const fx = (dx / d) * pull, fy = (dy / d) * pull;
+      a.x += fx; a.y += fy; b.x -= fx; b.y -= fy;
+    }
+    const cx = svg.getBoundingClientRect().width / 2, cy = svg.getBoundingClientRect().height / 2;
+    for (const n of nodes) { n.x += (cx - view.x - n.x) * 0.015 * alpha; n.y += (cy - view.y - n.y) * 0.015 * alpha; }
+  };
+  const autoLayout = () => {
+    const g = graph();
+    if (!g.nodes.length) { notify('画布为空，先添加或导入节点。', true); return; }
+    seedPositions(g.nodes);
+    const token = ++layoutToken;
+    const total = 240;
+    let done = 0;
+    const finish = () => { touch(); renderAll(); };
+    const chunk = () => {
+      if (token !== layoutToken) return;
+      const end = Math.min(total, done + 20);
+      for (; done < end; done++) layoutStep(g.nodes, g.edges, Math.pow(0.985, done));
+      renderCanvas();
+      if (done < total) requestAnimationFrame(chunk); else finish();
+    };
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      for (; done < total; done++) layoutStep(g.nodes, g.edges, Math.pow(0.985, done));
+      finish();
+    } else requestAnimationFrame(chunk);
+  };
+  const fitView = () => {
+    const g = graph();
+    const rect = svg.getBoundingClientRect();
+    if (!g.nodes.length) { view.x = 0; view.y = 0; view.scale = 1; renderCanvas(); return; }
+    const xs = g.nodes.map(n => n.x), ys = g.nodes.map(n => n.y);
+    const minX = Math.min(...xs) - 90, maxX = Math.max(...xs) + 90;
+    const minY = Math.min(...ys) - 40, maxY = Math.max(...ys) + 40;
+    view.scale = clamp(Math.min(rect.width / (maxX - minX), rect.height / (maxY - minY)), 0.3, 1.6);
+    view.x = (rect.width - (maxX - minX) * view.scale) / 2 - minX * view.scale;
+    view.y = (rect.height - (maxY - minY) * view.scale) / 2 - minY * view.scale;
+    renderCanvas();
+  };
+  const centerOnNode = id => {
+    const n = nodeById(id); if (!n) return;
+    const rect = svg.getBoundingClientRect();
+    view.x = rect.width / 2 - n.x * view.scale;
+    view.y = rect.height / 2 - n.y * view.scale;
+    renderCanvas();
+  };
+
+  /* ===== 画布交互：拖节点 / 平移 / 滚轮缩放 / 键盘 ===== */
+  let drag = null; // { kind:'node'|'pan', id?, startX, startY, origX, origY, moved }
+  const toWorld = (clientX, clientY) => {
+    const rect = svg.getBoundingClientRect();
+    return { x: (clientX - rect.left - view.x) / view.scale, y: (clientY - rect.top - view.y) / view.scale };
+  };
+  svg.addEventListener('pointerdown', e => {
+    const nodeEl = e.target.closest('[data-node]');
+    const edgeEl = e.target.closest('[data-edge]');
+    if (nodeEl) {
+      const n = nodeById(nodeEl.dataset.node); if (!n) return;
+      const p = toWorld(e.clientX, e.clientY);
+      drag = { kind: 'node', id: n.id, startX: p.x, startY: p.y, origX: n.x, origY: n.y, moved: false };
+    } else if (edgeEl) {
+      select({ kind: 'edge', id: edgeEl.dataset.edge });
+      return;
+    } else {
+      drag = { kind: 'pan', startX: e.clientX, startY: e.clientY, origX: view.x, origY: view.y, moved: false };
+      svg.classList.add('panning');
+    }
+    svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener('pointermove', e => {
+    if (!drag) return;
+    if (drag.kind === 'node') {
+      const n = nodeById(drag.id); if (!n) { drag = null; return; }
+      const p = toWorld(e.clientX, e.clientY);
+      if (Math.abs(p.x - drag.startX) > 2 || Math.abs(p.y - drag.startY) > 2) drag.moved = true;
+      n.x = drag.origX + (p.x - drag.startX);
+      n.y = drag.origY + (p.y - drag.startY);
+      renderCanvas();
+    } else {
+      view.x = drag.origX + (e.clientX - drag.startX);
+      view.y = drag.origY + (e.clientY - drag.startY);
+      if (Math.abs(e.clientX - drag.startX) > 3 || Math.abs(e.clientY - drag.startY) > 3) drag.moved = true;
+      renderCanvas();
+    }
+  });
+  const endDrag = e => {
+    if (!drag) return;
+    const was = drag; drag = null;
+    svg.classList.remove('panning');
+    if (svg.hasPointerCapture(e.pointerId)) svg.releasePointerCapture(e.pointerId);
+    if (was.kind === 'node') {
+      if (was.moved) { touch(); select({ kind: 'node', id: was.id }); }
+      else select({ kind: 'node', id: was.id });
+    } else if (!was.moved && selection) {
+      select(null); // 点击空白取消选中
+    }
+  };
+  svg.addEventListener('pointerup', endDrag);
+  svg.addEventListener('pointercancel', endDrag);
+  svg.addEventListener('dblclick', e => {
+    const nodeEl = e.target.closest('[data-node]');
+    if (nodeEl) { const n = nodeById(nodeEl.dataset.node); if (n) openNodeDialog(n); }
+  });
+  const zoomBy = (factor, cx, cy) => {
+    const rect = svg.getBoundingClientRect();
+    const px = cx ?? rect.width / 2, py = cy ?? rect.height / 2;
+    const next = clamp(view.scale * factor, 0.25, 3);
+    view.x = px - (px - view.x) * (next / view.scale);
+    view.y = py - (py - view.y) * (next / view.scale);
+    view.scale = next;
+    renderCanvas();
+  };
+  svg.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    zoomBy(Math.exp(-e.deltaY * 0.0016), e.clientX - rect.left, e.clientY - rect.top);
+  }, { passive: false });
+  document.addEventListener('keydown', e => {
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    if (e.key === 'Escape') { select(null); }
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && selection) {
+      e.preventDefault();
+      if (selection.kind === 'node') removeNode(selection.id); else removeEdge(selection.id);
+    }
+  });
+
+  /* ===== 节点 / 连线弹窗 ===== */
+  let editingNodeId = null;
+  let editingEdgeId = null;
+  const nodeDialog = $('node-dialog');
+  const edgeDialog = $('edge-dialog');
+  const syncStatusRow = () => { $('node-status-row').hidden = $('node-type').value !== 'foreshadow'; };
+  $('node-type').onchange = syncStatusRow;
+  const openNodeDialog = (node = null, presetType = 'character') => {
+    editingNodeId = node ? node.id : null;
+    $('node-dialog-title').textContent = node ? '编辑节点' : `新增${TYPES[presetType]}`;
+    $('node-type').value = node ? node.type : presetType;
+    $('node-name').value = node ? node.name : '';
+    $('node-note').value = node ? (node.note || '') : '';
+    $('node-status').value = node && node.status ? node.status : 'open';
+    $('node-type').disabled = !!node; // 编辑时不改类型，避免已有连线语义漂移
+    syncStatusRow();
+    nodeDialog.showModal();
+    $('node-name').focus();
+  };
+  $('node-cancel').onclick = () => nodeDialog.close();
+  $('node-form').onsubmit = e => {
+    e.preventDefault();
+    const name = $('node-name').value.trim();
+    if (!name) return;
+    const g = graph();
+    if (editingNodeId) {
+      const n = nodeById(editingNodeId);
+      Object.assign(n, { name, note: $('node-note').value.trim(), status: $('node-status').value });
+      notify('节点已更新');
+    } else {
+      const n = { id: uid(), type: $('node-type').value, name, note: $('node-note').value.trim(), status: $('node-status').value };
+      seedPositionsFor(n, g.nodes.length);
+      g.nodes.push(n);
+      selection = { kind: 'node', id: n.id };
+      notify(`已添加${TYPES[n.type]}「${name}」`);
+    }
+    nodeDialog.close();
+    touch(); renderAll();
+  };
+  const seedPositionsFor = (n, index) => {
+    const rect = svg.getBoundingClientRect();
+    const a = (index / 6) * Math.PI * 2;
+    n.x = rect.width / 2 - view.x + Math.cos(a) * (120 + (index % 3) * 30);
+    n.y = rect.height / 2 - view.y + Math.sin(a) * (120 + (index % 3) * 30);
+  };
+  const fillEdgeSelects = (edge) => {
+    for (const sel of [$('edge-from'), $('edge-to')]) {
+      sel.replaceChildren();
+      for (const n of graph().nodes) {
+        const op = document.createElement('option');
+        op.value = n.id; op.textContent = `${TYPES[n.type]} · ${n.name}`;
+        sel.append(op);
+      }
+      if (edge) sel.value = sel === $('edge-from') ? edge.from : edge.to;
+    }
+  };
+  const openEdgeDialog = (edge = null) => {
+    if (graph().nodes.length < 1) { notify('至少需要一个节点才能连线。', true); return; }
+    editingEdgeId = edge ? edge.id : null;
+    $('edge-dialog-title').textContent = edge ? '编辑连线' : '新增连线';
+    fillEdgeSelects(edge);
+    if (!edge && graph().nodes.length >= 2) $('edge-to').selectedIndex = 1;
+    $('edge-label').value = edge ? (edge.label || '') : '';
+    edgeDialog.showModal();
+  };
+  $('edge-cancel').onclick = () => edgeDialog.close();
+  $('edge-form').onsubmit = e => {
+    e.preventDefault();
+    const from = $('edge-from').value, to = $('edge-to').value, label = $('edge-label').value.trim();
+    if (!from || !to) return;
+    if (from === to) { notify('起点与终点不能是同一节点。', true); return; }
+    const g = graph();
+    if (editingEdgeId) {
+      Object.assign(g.edges.find(x => x.id === editingEdgeId), { from, to, label });
+      notify('连线已更新');
+    } else {
+      const dup = g.edges.find(x => x.from === from && x.to === to && x.label === label);
+      if (dup) { notify('相同方向与说明的连线已存在。', true); return; }
+      const edge = { id: uid(), from, to, label };
+      g.edges.push(edge);
+      selection = { kind: 'edge', id: edge.id };
+      notify('连线已添加');
+    }
+    edgeDialog.close();
+    touch(); renderAll();
+  };
+
+  /* ===== 导入：网页工作台 / 桌面项目 JSON ===== */
+  const importDialog = $('import-dialog');
+  const findNode = (type, name) => graph().nodes.find(n => n.type === type && n.name === name);
+  const seedFromBook = (book, { withOutlines = true } = {}) => {
+    // 按「类型 + 名称」去重合并；返回新增数量。
+    const g = graph();
+    let added = 0;
+    const findOrAdd = (type, name, note, status) => {
+      const exist = findNode(type, name);
+      if (exist) { if (note && !exist.note) exist.note = note; return exist; }
+      const n = { id: uid(), type, name, note: note || '', status: status || 'open' };
+      seedPositionsFor(n, g.nodes.length + added);
+      g.nodes.push(n); added++;
+      return n;
+    };
+    const chars = Array.isArray(book.characters) ? book.characters : [];
+    for (const c of chars) {
+      const name = String(c && c.name || '').trim();
+      if (!name) continue;
+      const parts = [
+        c.role && `身份：${c.role}`,
+        c.traits && `性格：${c.traits}`,
+        c.background && `背景：${c.background}`,
+        c.dialogueStyle && `说话风格：${c.dialogueStyle}`,
+      ].filter(Boolean);
+      findOrAdd('character', name, parts.join('\n'));
+    }
+    const world = Array.isArray(book.worldSettings) ? book.worldSettings : [];
+    for (const w of world) {
+      const title = String(w && w.title || '').trim();
+      if (!title) continue;
+      if (String(w.category || '').includes('伏笔')) {
+        const resolved = String(w.category || '').includes('已回收');
+        findOrAdd('foreshadow', title, [w.category && `分类：${w.category}`, w.content].filter(Boolean).join('\n'), resolved ? 'resolved' : 'open');
+      } else {
+        findOrAdd('plot', title, [w.category && `分类：${w.category}`, w.content].filter(Boolean).join('\n'));
+      }
+    }
+    if (withOutlines && Array.isArray(book.chapters)) {
+      for (const c of book.chapters) {
+        const title = String(c && c.title || '').trim();
+        if (!title) continue;
+        findOrAdd('plot', title, String(c.outline || '').trim());
+      }
+    }
+    // 角色「关系」文本 → 连线：文本中出现其他角色名的片段自动生成边。
+    for (const c of chars) {
+      const srcName = String(c && c.name || '').trim();
+      const text = String(c && c.relationships || '').trim();
+      if (!srcName || !text) continue;
+      const src = findNode('character', srcName);
+      if (!src) continue;
+      for (const o of chars) {
+        const othName = String(o && o.name || '').trim();
+        if (!othName || othName === srcName) continue;
+        const dst = findNode('character', othName);
+        if (!dst || dst.id === src.id) continue;
+        for (const frag of text.split(/[；;。!\n]/)) {
+          const piece = frag.trim();
+          if (!piece || !piece.includes(othName)) continue;
+          if (g.edges.some(x => x.from === src.id && x.to === dst.id && x.label === piece)) continue;
+          g.edges.push({ id: uid(), from: src.id, to: dst.id, label: piece.slice(0, 30) });
+          break; // 每对角色只取第一处提及
+        }
+      }
+    }
+    return added;
+  };
+  const fillImportBooks = () => {
+    const sel = $('import-book'); sel.replaceChildren();
+    const books = workspaceBooks();
+    if (!books.length) {
+      const op = document.createElement('option');
+      op.value = ''; op.textContent = '（工作台暂无作品，可用下方文件导入）';
+      sel.append(op); sel.disabled = true;
+    } else {
+      sel.disabled = false;
+      for (const b of books) {
+        const op = document.createElement('option');
+        op.value = b.id; op.textContent = b.title || '未命名作品';
+        sel.append(op);
+      }
+      const cur = new URLSearchParams(location.search).get('book');
+      if (cur && books.some(b => b.id === cur)) sel.value = cur;
+    }
+  };
+  $('import-open').onclick = () => { fillImportBooks(); $('import-file').value = ''; importDialog.showModal(); };
+  $('import-cancel').onclick = () => importDialog.close();
+  $('import-form').onsubmit = async e => {
+    e.preventDefault();
+    const withOutlines = $('import-outlines').checked;
+    const file = $('import-file').files[0];
+    try {
+      if (file) {
+        if (file.size > 10 * 1024 * 1024) throw Error('文件超过 10 MB，请确认是单本/少量项目 JSON');
+        const data = JSON.parse((await file.text()).replace(/^\uFEFF/, ''));
+        const books = Array.isArray(data) ? data : [data];
+        let total = 0;
+        let lastId = null;
+        for (const b of books) {
+          if (!b || typeof b !== 'object' || Array.isArray(b)) continue;
+          const hasCollections = Array.isArray(b.characters) || Array.isArray(b.worldSettings) || Array.isArray(b.chapters);
+          if (typeof b.title !== 'string' && !hasCollections) continue; // 不是作品对象，跳过
+          const id = typeof b.id === 'string' && b.id ? b.id : uid();
+          if (!store.graphs[id]) store.graphs[id] = newGraph(typeof b.title === 'string' ? b.title : '');
+          if (typeof b.title === 'string' && b.title) store.graphs[id].title = b.title;
+          const prev = currentId; currentId = id;
+          total += seedFromBook(b, { withOutlines });
+          currentId = prev;
+          lastId = id;
+        }
+        if (lastId) { currentId = lastId; selection = null; view.x = 0; view.y = 0; view.scale = 1; }
+        touch(); renderAll();
+        if (lastId) fitView();
+        notify(total ? `已导入 ${total} 个节点（按类型+名称去重）` : '没有可导入的新节点', !total);
+        importDialog.close();
+        return;
+      }
+      const bookId = $('import-book').value;
+      const book = workspaceBooks().find(b => b.id === bookId);
+      if (!book) { notify('请选择工作台作品，或改用文件导入。', true); return; }
+      const added = seedFromBook(book, { withOutlines });
+      touch(); renderAll();
+      notify(added ? `已从《${book.title}》导入 ${added} 个节点` : '没有可导入的新节点', !added);
+      importDialog.close();
+    } catch (error) { notify(`未导入：${error.message}`, true); }
+  };
+
+  /* ===== 导出 / 清空 ===== */
+  $('export-json').onclick = () => {
+    const g = graph();
+    if (!g.nodes.length) { notify('画布为空，没有可导出的内容。', true); return; }
+    download(`${g.title || '关系图'}.json`, JSON.stringify({ title: g.title, nodes: g.nodes, edges: g.edges }, null, 2), 'application/json');
+    notify('关系图 JSON 已导出');
+  };
+  $('export-svg').onclick = () => {
+    const g = graph();
+    if (!g.nodes.length) { notify('画布为空，没有可导出的内容。', true); return; }
+    const rect = svg.getBoundingClientRect();
+    const clone = svg.cloneNode(true);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clone.setAttribute('width', Math.round(rect.width));
+    clone.setAttribute('height', Math.round(rect.height));
+    clone.querySelectorAll('.edge-hit').forEach(el => el.remove());
+    download(`${g.title || '关系图'}.svg`, new XMLSerializer().serializeToString(clone), 'image/svg+xml');
+    notify('关系图 SVG 已导出');
+  };
+  $('clear-all').onclick = () => {
+    const g = graph();
+    if (!g.nodes.length && !g.edges.length) { notify('画布已经是空的。', true); return; }
+    if (!confirm('清空当前关系图的全部节点与连线？此操作不可恢复（建议先导出 JSON）。')) return;
+    g.nodes = []; g.edges = []; selection = null;
+    touch(); renderAll(); notify('已清空当前关系图');
+  };
+
+  /* ===== 侧栏/工具栏事件 ===== */
+  $('add-character').onclick = () => openNodeDialog(null, 'character');
+  $('add-plot').onclick = () => openNodeDialog(null, 'plot');
+  $('add-foreshadow').onclick = () => openNodeDialog(null, 'foreshadow');
+  $('add-edge').onclick = () => openEdgeDialog(null);
+  $('auto-layout').onclick = autoLayout;
+  $('fit-view').onclick = fitView;
+  $('zoom-in').onclick = () => zoomBy(1.25);
+  $('zoom-out').onclick = () => zoomBy(0.8);
+  document.querySelectorAll('[data-filter]').forEach(el => el.onchange = () => {
+    filters[el.dataset.filter] = el.checked;
+    renderCanvas();
+  });
+  $('graph-select').onchange = () => {
+    currentId = $('graph-select').value;
+    selection = null; view.x = 0; view.y = 0; view.scale = 1;
+    save(); renderAll();
+  };
+  $('new-graph').onclick = () => {
+    const title = prompt('新关系图名称（例如：书名 / 番外线）', '未命名关系图');
+    if (title === null) return;
+    const trimmed = title.trim() || '未命名关系图';
+    let base = `g${Date.now()}`;
+    while (store.graphs[base]) base += 'x';
+    store.graphs[base] = newGraph(trimmed);
+    currentId = base; selection = null; view.x = 0; view.y = 0; view.scale = 1;
+    save(); renderAll(); notify(`已新建「${trimmed}」`);
+  };
+
+  /* ===== 主题切换：与工作台共享 inksmith.theme 偏好 ===== */
+  const THEME_KEY = 'inksmith.theme';
+  const systemDark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+  const renderThemeButton = () => {
+    const t = document.documentElement.dataset.theme;
+    const dark = t ? t === 'dark' : systemDark();
+    $('theme-toggle').textContent = dark ? '☀️ 浅色' : '🌙 深色';
+  };
+  try {
+    const savedTheme = localStorage.getItem(THEME_KEY);
+    if (savedTheme === 'light' || savedTheme === 'dark') document.documentElement.dataset.theme = savedTheme;
+  } catch { /* 存储不可用时跟随系统 */ }
+  renderThemeButton();
+  $('theme-toggle').onclick = () => {
+    const current = document.documentElement.dataset.theme || (systemDark() ? 'dark' : 'light');
+    const next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem(THEME_KEY, next); } catch { /* 忽略 */ }
+    renderThemeButton();
+  };
+
+  /* ===== 初始化 ===== */
+  load();
+  const wanted = new URLSearchParams(location.search).get('book');
+  if (wanted && !store.graphs[wanted]) {
+    const book = workspaceBooks().find(b => b.id === wanted);
+    store.graphs[wanted] = newGraph(book && book.title ? book.title : '未命名关系图');
+    save();
+    if (book) { // 首次从工作台进入：自动播种，省一次手动导入
+      currentId = wanted;
+      const added = seedFromBook(book, { withOutlines: true });
+      touch();
+      renderAll();
+      fitView();
+      notify(added ? `已从《${book.title}》导入 ${added} 个节点，可继续手动补充` : `《${book.title}》暂无可导入的设定`, !added);
+    }
+  }
+  if (!store.graphs[currentId]) currentId = Object.keys(store.graphs)[0] || 'standalone';
+  if (!store.graphs[currentId]) store.graphs[currentId] = newGraph('未命名关系图');
+  renderAll();
+  fitView();
+  window.addEventListener('resize', () => renderCanvas());
+})();
+</script>
+</body>
+</html>
+
+</main>

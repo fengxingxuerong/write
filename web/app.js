@@ -297,6 +297,11 @@
     }
     openView('导出作品',box);
   };
+  $('relation-map').onclick = () => {
+    flushSave();
+    window.open(`relations.html?book=${encodeURIComponent(state.currentId)}`, '_blank');
+    notify('已在新标签页打开关系引导图');
+  };
   window.addEventListener('storage', event => { if (event.key === KEY || event.key === null) { storageBlocked = true; $('save-state').textContent = '其他标签页已修改数据，请备份后刷新'; notify('检测到其他标签页修改，为避免覆盖已停止保存。',true); } });
   const aiDialog = $('ai-dialog');
   let aiTask = null, testTask = null, aiResult = null;
