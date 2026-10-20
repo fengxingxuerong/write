@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:novel_writer/ai_pipeline/fixed_workflow_preset.dart';
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
+import 'package:novel_writer/models/llm_config.dart';
 
 /// 固定的「API → 角色」装配测试（用假密钥，不含真实凭据）。
 ///
@@ -70,16 +71,34 @@ void main() {
       expect(roles[AiRole.planner]!.llm.baseUrl, contains('developer.amd.com.cn'));
       expect(roles[AiRole.verifier]!.llm.temperature, 0.2);
 
-      // 2026-09-22 全端点实测定稿：规划/审校主力 glm-5.2（需 temp=1.0），
-      // 编辑主力 kimi-k3，写手备选为 K2 的 deepseek-v4-flash。
+      // 2026-09-22 全端点实测定稿，2026-10-20 复核：规划/审校主力 AMD
+      // DeepSeek-V4-Flash，编辑主力 kimi-k3，写手备选为 K2 的 deepseek-v4-flash。
       expect(roles[AiRole.planner]!.llm.model, 'DeepSeek-V4-Flash');
       expect(roles[AiRole.planner]!.llm.temperature, 1.0);
       // 规划官输出预算必须显著大于其它角色：多章大纲是长 JSON，而推理模型
-      // 会先用掉一部分额度思考。真机 2026-10-20 实测：AMD 超时后落到 glm-5.2
-      // 备用，4096 预算被 reasoning_tokens（1338）吃掉约 1/3，JSON 被截断在
-      // `"origin"` 字段中间 → 解析失败 → 整轮规划失败。Python 侧规划官早已
-      // 定为 12000，这里对齐，防回退成 4096。
+      // 会先用掉一部分额度思考。真机 2026-10-20 实测：AMD 超时后落到备用位，
+      // 4096 预算被 reasoning 吃掉一截后 JSON 被截断在 `"origin"` 字段中间 →
+      // 解析失败 → 整轮规划失败。Python 侧规划官早已定为 12000，这里对齐防回退。
       expect(roles[AiRole.planner]!.llm.maxTokens, greaterThanOrEqualTo(12000));
+
+      // 规划链的 SenseNova 备用位**不得再是 glm-5.2**：它在长 prompt 下思考链
+      // 吃满预算、正文恒空（实测 reasoning_tokens 1338~4436），作备用等于没备用。
+      // 换成 deepseek-v4-flash 后同一份规划 prompt 实测 11.4s 出完整 3 章大纲。
+      final List<LlmConfig> planFallbacks = roles[AiRole.planner]!.fallbacks;
+      expect(planFallbacks, isNotEmpty);
+      expect(planFallbacks.first.model, 'deepseek-v4-flash');
+      expect(
+        planFallbacks.map((LlmConfig c) => c.model),
+        isNot(contains('glm-5.2')),
+        reason: 'glm-5.2 不得留在规划链上（含备用位）',
+      );
+      // 备用位的输出预算同样要够写完整份大纲 JSON。
+      expect(
+        planFallbacks.first.maxTokens,
+        greaterThanOrEqualTo(12000),
+        reason: '备用位吃 4096 默认会把大纲 JSON 截成半截',
+      );
+
       expect(roles[AiRole.editor]!.llm.model, 'kimi-k3');
       expect(roles[AiRole.verifier]!.llm.model, 'DeepSeek-V4-Flash');
       expect(roles[AiRole.writer]!.fallbacks.first.model, 'deepseek-v4-flash');
