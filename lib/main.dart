@@ -9,6 +9,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app.dart';
 import 'core/crash_reporter.dart';
 import 'core/di/providers.dart';
+import 'core/security/secret_store.dart';
+import 'models/llm_config.dart';
 import 'storage/app_database.dart';
 
 /// 崩溃日志兜底。
@@ -46,6 +48,16 @@ Future<void> main() async {
       try {
         // 初始化本地 JSON 存储目录（applicationSupportDirectory/novels）。
         final AppDatabase database = await AppDatabase.init();
+
+        // 首次启动自动接入本机 AI：本机有 .env.local 密钥就把 AI 引擎打开，
+        // 免得用户默认拿到的是「离线占位草稿」却以为那是 AI 写的。
+        // 用户一旦显式开/关过引擎，这里就不再插手（见函数注释的三条触发条件）。
+        await autoEnableLlmFromLocalKeys(
+          LlmSettingsRepository(
+            database.directory.path,
+            secretStore: const DpapiSecretStore(),
+          ),
+        );
 
         runApp(
           ProviderScope(

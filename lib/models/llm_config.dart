@@ -241,6 +241,17 @@ class LlmSettingsRepository {
     return LlmEngineFlags.fromMap(await _readJson());
   }
 
+  /// 是否**曾经持久化过**引擎开关（配置文件里存在 `useLlm` 键）。
+  ///
+  /// 与 [loadFlags] 的区别：后者在文件缺失时也返回「默认的 false」，无法区分
+  /// 「用户明确关掉了 AI」和「用户从没做过选择」。首次启动自动接入本机密钥
+  /// （见 `autoEnableLlmFromLocalKeys`）只能在前者不成立时动手——否则
+  /// 用户关掉 AI、下次启动又被自动打开，开关等于失效。
+  Future<bool> hasPersistedFlags() async {
+    final Map<String, dynamic> raw = await _readJson();
+    return raw.containsKey('useLlm');
+  }
+
   /// 保存引擎开关（原子写；保留同文件内的 [LlmConfig] 字段）。
   Future<void> saveFlags(LlmEngineFlags flags) async {
     final Map<String, dynamic> merged = <String, dynamic>{

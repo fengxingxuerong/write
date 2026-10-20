@@ -3,6 +3,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:novel_writer/ai_pipeline/fixed_workflow_preset.dart';
+import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
+import 'package:novel_writer/ai_pipeline/services/env_keys_loader.dart';
 import 'package:novel_writer/engine/generation_engine.dart';
 import 'package:novel_writer/engine/llm_engine.dart';
 import 'package:novel_writer/engine/template_engine.dart';
@@ -203,6 +206,45 @@ llmSettingsProvider =
 final Provider<bool> useLlmProvider = Provider<bool>((ref) {
   return ref.watch(llmSettingsProvider.select((s) => s.useLlm));
 });
+
+/// 首次启动自动接入本机 AI：发现 `.env.local` 密钥 → 开启 AI 引擎并装配连接配置。
+///
+/// **为什么需要它**：一键生成页的 `useLlm` 默认是 `false`，于是新装用户点「生成」
+/// 拿到的是语料库拼句的**离线占位草稿**，却以为那是 AI 写的——真机 2026-10-18
+/// 整本《远航星》就是这么来的（详情见
+/// `docs/archive/quality-enhancement-log/2026-10-20-offline-draft-and-consistency-fix.md`）。
+/// 本机明明放着 `NOVEL_KEY_*`，不该让用户先去设置页翻一圈才发现「原来要手动开」。
+///
+/// **三条触发条件（缺一不做）**：
+/// 1. **从未持久化过引擎开关**（[LlmSettingsRepository.hasPersistedFlags] 为 false）——
+///    用户显式开/关过一次之后，开关就归用户，这里绝不再改；
+/// 2. 本机 `.env.local` 能解析出密钥；
+/// 3. 按固定分工装配后**写手主位**可用（AMD `DeepSeek-V4-Flash`）——一键生成是
+///    「一个模型干全部活」，写手位是其中最贴题的那个；拿不到可用端点就不写。
+///
+/// 全程失败静默：自动接入只是便利路径，绝不允许它把启动搞崩。
+///
+/// 返回是否真的写入了配置（供测试与排查断言）。
+Future<bool> autoEnableLlmFromLocalKeys(
+  LlmSettingsRepository repo, {
+  Map<String, String> Function()? loadLocalKeys,
+}) async {
+  try {
+    if (await repo.hasPersistedFlags()) return false;
+    final Map<String, String> keys = (loadLocalKeys ?? EnvKeysLoader.load)();
+    if (keys.isEmpty) return false;
+    final LlmConfig writer =
+        FixedWorkflowPreset.roles(keys)[AiRole.writer]?.llm ??
+            const LlmConfig();
+    if (!writer.isConfigured) return false;
+    await repo.save(writer);
+    await repo.saveFlags(const LlmEngineFlags(useLlm: true));
+    return true;
+  } catch (_) {
+    // 自动接入失败静默：照常启动，用户仍可在设置页手动配置。
+    return false;
+  }
+}
 
 /// 阅读器设置：全局唯一，启动自动加载、变更自动落盘。
 final StateNotifierProvider<ReaderSettingsController, ReaderSettings>

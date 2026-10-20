@@ -5,8 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:novel_writer/core/di/providers.dart';
+import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/engine/llm_engine.dart';
 import 'package:novel_writer/engine/template_engine.dart';
+import 'package:novel_writer/models/llm_config.dart';
 import 'package:novel_writer/models/reader_settings.dart';
 import 'package:novel_writer/storage/app_database.dart';
 
@@ -139,6 +141,75 @@ void main() {
       final ProviderContainer c = makeContainer();
       expect(c.read(projectListViewModelProvider), isNotNull);
       expect(c.read(generateViewModelProvider('n1')), isNotNull);
+    });
+  });
+
+  group('autoEnableLlmFromLocalKeys（首次启动自动接入本机 AI）', () {
+    /// 一份最小可用的本机密钥（AMD + 商汤三 Key），与 .env.local 同形态。
+    Map<String, String> sampleKeys() => <String, String>{
+      'NOVEL_KEY_AMD': 'rc-0000000000000000000000000000000000000000',
+      'NOVEL_KEY_SENSE_K1': 'sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      'NOVEL_KEY_SENSE_K2': 'sk-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      'NOVEL_KEY_SENSE_K3': 'sk-cccccccccccccccccccccccccccccccc',
+    };
+
+    LlmSettingsRepository repo() => LlmSettingsRepository(
+      tempDir.path,
+      secretStore: InMemorySecretStore(),
+    );
+
+    test('首次启动 + 发现密钥：开启 AI 引擎并把写手主位装配为单模型配置', () async {
+      final LlmSettingsRepository r = repo();
+      expect(await r.hasPersistedFlags(), isFalse, reason: '前置：尚无任何持久化开关');
+
+      final bool wrote = await autoEnableLlmFromLocalKeys(
+        r,
+        loadLocalKeys: sampleKeys,
+      );
+      expect(wrote, isTrue);
+
+      final LlmEngineFlags flags = await r.loadFlags();
+      expect(flags.useLlm, isTrue, reason: '本机有 Key 时不该让用户默认吃离线草稿');
+
+      final LlmConfig cfg = await r.load();
+      expect(cfg.isConfigured, isTrue);
+      expect(cfg.model, 'DeepSeek-V4-Flash');
+      expect(cfg.baseUrl, contains('developer.amd.com.cn'));
+    });
+
+    test('本机没有密钥：保持离线引擎，不写入任何东西', () async {
+      final LlmSettingsRepository r = repo();
+      final bool wrote = await autoEnableLlmFromLocalKeys(
+        r,
+        loadLocalKeys: () => <String, String>{},
+      );
+      expect(wrote, isFalse);
+      expect(await r.hasPersistedFlags(), isFalse);
+      expect((await r.loadFlags()).useLlm, isFalse);
+    });
+
+    test('用户显式关过 AI 引擎：不再被自动打开（开关归用户）', () async {
+      final LlmSettingsRepository r = repo();
+      // 用户曾经选择过（这里选择的是「关」）。
+      await r.saveFlags(const LlmEngineFlags(useLlm: false));
+
+      final bool wrote = await autoEnableLlmFromLocalKeys(
+        r,
+        loadLocalKeys: sampleKeys,
+      );
+      expect(wrote, isFalse, reason: '已持久化开关时不得覆盖用户的显式选择');
+      expect((await r.loadFlags()).useLlm, isFalse);
+    });
+
+    test('密钥解析不出可用端点（写手主位为空）：不写入', () async {
+      final LlmSettingsRepository r = repo();
+      final bool wrote = await autoEnableLlmFromLocalKeys(
+        r,
+        // 只有一段无法识别为任何已支持密钥的文本。
+        loadLocalKeys: () => <String, String>{'NOVEL_KEY_UNKNOWN': 'whatever'},
+      );
+      expect(wrote, isFalse);
+      expect(await r.hasPersistedFlags(), isFalse);
     });
   });
 }
