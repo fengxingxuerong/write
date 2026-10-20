@@ -88,4 +88,5 @@
 | [`archive/quality-enhancement-log/2026-09-28-payoff-style.md`](archive/quality-enhancement-log/2026-09-28-payoff-style.md) | 第 22~25 节：2026-09-28 商业爽点闭环与文风指纹 P1-1 |
 | [`archive/quality-enhancement-log/2026-09-29-live-verification.md`](archive/quality-enhancement-log/2026-09-29-live-verification.md) | 第 26~34 节：2026-09-29 爽点断供检测与真机验证 |
 | [`archive/quality-enhancement-log/2026-09-30-thinking-budget.md`](archive/quality-enhancement-log/2026-09-30-thinking-budget.md) | 第 35~35 节：2026-09-30 思考链预算缺陷收敛 |
+| [`archive/quality-enhancement-log/2026-10-20-offline-draft-and-consistency-fix.md`](archive/quality-enhancement-log/2026-10-20-offline-draft-and-consistency-fix.md) | 2026-10-20 桌面端离线占位草稿事故：章首断层 / 跨章主角名 / 空章保护 + 一致性检查器两处误报 |
 
