@@ -24,6 +24,25 @@ import 'package:novel_writer/models/llm_config.dart';
 /// 提示词给 0.92 留出的空间让模型先自查，守卫只兜「模型完全不听指令」的情况。
 const double factFixMinRatio = QualityRules.fixMinRatio;
 
+/// 描述一段「解析不出 JSON」的模型响应（长度 + 头 + 尾）。
+///
+/// 为什么不是简单地截前 120 字：真机 2026-10-20 的失败信息只有
+/// 「大纲规划失败：{」——头截断把「预算吃满导致的半截 JSON」与「端点回的
+/// 报错对象」压成同一种长相，排查只能靠猜。带上长度与**尾部**后，截断
+/// （尾部不闭合）一眼可见。与 2026-09-30 那条经验同源：
+/// **先让日志说真话，缺陷才会自己现形。**
+String _describeBadResponse(String raw) {
+  final String t = raw.trim();
+  if (t.isEmpty) return '空响应（端点全链失败，或该角色未配置可用模型）';
+  const int headLen = 80;
+  const int tailLen = 60;
+  final String head = t.length > headLen ? t.substring(0, headLen) : t;
+  final String tailPart = t.length > headLen + tailLen
+      ? '｜…尾：${t.substring(t.length - tailLen)}'
+      : '';
+  return '响应 ${t.length} 字符｜头：$head$tailPart';
+}
+
 /// 多模型协作长篇小说流水线（Dart 原生编排）。
 ///
 /// 流程：
@@ -451,7 +470,8 @@ class AiPipelineService {
           outline?['chapter_outlines'] as List<dynamic>?;
       if (outline == null || chars == null || chars.isEmpty) {
         task.status = PipelineTaskStatus.failed;
-        task.error = '大纲规划失败：${raw.substring(0, raw.length > 120 ? 120 : raw.length)}';
+        task.error = '大纲规划失败：${_describeBadResponse(raw)}';
+        task.addLog('  [规划官] 大纲解析失败：${_describeBadResponse(raw)}');
         task.finishedAt = DateTime.now();
         await _storage.saveTask(task);
         return;

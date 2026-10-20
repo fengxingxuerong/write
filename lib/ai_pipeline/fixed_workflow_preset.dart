@@ -70,8 +70,16 @@ class FixedWorkflowPreset {
           temperature: temp, maxTokens: 4096);
     final amd = endpoint('NOVEL_KEY_AMD',
         'https://developer.amd.com.cn/radeon/api/v1', 'DeepSeek-V4-Flash', 0.8);
-    // 规划/审校主力（2026-09-24 真实回测：glm-5.2 空正文，AMD 正常）
-    final planner = amd.copyWith(temperature: 1.0);
+    // 规划/审校主力（2026-09-24 真实回测：glm-5.2 空正文，AMD 正常）。
+    //
+    // **maxTokens 单列到 12000**，不能用 endpoint() 的 4096 默认：
+    // 真机 2026-10-20 实跑暴露——AMD 规划超时后落到 glm-5.2 备用，4096 预算
+    // 被 reasoning_tokens 吃掉约 1/3（实测 1338/4096），剩下的额度不够写完
+    // 一份带缩进的多章大纲 JSON，响应被**截断在 `"origin"` 字段中间**，
+    // 解析失败 → 整轮规划失败、流水线在第一章之前就退出。Python 端的规划官
+    // 早在 2026-09-30 就因同一类事故从 4000 提到 12000（见 docs/交付文档.md 9 节），
+    // Dart 端的 4096 是照搬旧值留下的历史欠账。审校（同链、temp 0.2）一并继承本值。
+    final planner = amd.copyWith(temperature: 1.0, maxTokens: 12000);
     // 规划/审校备用：SenseNova glm-5.2，仅在 AMD 失败时启用
     final sensePlanner = endpoint('NOVEL_KEY_SENSE_K1',
         'https://token.sensenova.cn/v1', 'glm-5.2', 1.0);

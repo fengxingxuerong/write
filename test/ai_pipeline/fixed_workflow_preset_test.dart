@@ -74,6 +74,12 @@ void main() {
       // 编辑主力 kimi-k3，写手备选为 K2 的 deepseek-v4-flash。
       expect(roles[AiRole.planner]!.llm.model, 'DeepSeek-V4-Flash');
       expect(roles[AiRole.planner]!.llm.temperature, 1.0);
+      // 规划官输出预算必须显著大于其它角色：多章大纲是长 JSON，而推理模型
+      // 会先用掉一部分额度思考。真机 2026-10-20 实测：AMD 超时后落到 glm-5.2
+      // 备用，4096 预算被 reasoning_tokens（1338）吃掉约 1/3，JSON 被截断在
+      // `"origin"` 字段中间 → 解析失败 → 整轮规划失败。Python 侧规划官早已
+      // 定为 12000，这里对齐，防回退成 4096。
+      expect(roles[AiRole.planner]!.llm.maxTokens, greaterThanOrEqualTo(12000));
       expect(roles[AiRole.editor]!.llm.model, 'kimi-k3');
       expect(roles[AiRole.verifier]!.llm.model, 'DeepSeek-V4-Flash');
       expect(roles[AiRole.writer]!.fallbacks.first.model, 'deepseek-v4-flash');
