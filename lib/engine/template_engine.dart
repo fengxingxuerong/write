@@ -101,6 +101,95 @@ class TemplateEngine implements GenerationEngine {
   /// 构造引擎。
   const TemplateEngine();
 
+  /// 节拍提示织入正文时的引导语池（27 条，覆盖五种句法形态）。
+  ///
+  /// 注意：不得包含 [FanqieGateChecker._leak]（及 scripts/fanqie_review.py
+  /// PROMPT_LEAK）里的短语——引导语会大量出现在正文里，撞上泄漏黑名单
+  /// 会被整章判「提示词残留」。
+  ///
+  /// 2026-09 写手优化：旧版仅 5 条，平均每 2~3 段就复用一次同一引导语，
+  /// 是成书「机械感」的第一来源。扩充后覆盖五种句法形态
+  /// （时间锚点 / 场所动作 / 声音先至 / 心理预期 / 承接转折），
+  /// 且一律不含「雨雪霜雾风」五字（避开闸门的「以天气起手」首屏红线），
+  /// 取样经 `_pickFromPool` 分池去重：窗口内不重复。
+  ///
+  /// **本池不等于「章首可用池」**：其中一批条目自带前指（见
+  /// [antecedentLeadIns]），只能出现在承接句之后，见 [chapterStartLeadIns]。
+  static const List<String> hintLeadIns = <String>[
+    // —— 时间锚点 ——
+    '这一日，',
+    '说来也巧，',
+    '晌午刚过，',
+    '天刚擦黑，',
+    '夜色渐深，',
+    '第二遍钟响时，',
+    '半炷香后，',
+    '出事的那天，',
+    // —— 场所 / 动作切入 ——
+    '门帘一掀，',
+    '转过影壁，',
+    '人还没坐稳，',
+    '出了这道门，',
+    '酒过三巡，',
+    '看热闹的人还没散，',
+    // —— 声音 / 动静先至 ——
+    '话音未落，',
+    '靴声由远及近，',
+    '没人应声，',
+    '没人敢先开口，',
+    // —— 心理 / 预期 ——
+    '谁都没料到，',
+    '不出所料，',
+    '谁都看得出，',
+    '到了这个地步，',
+    // —— 承接 / 转折 ——
+    '变故来得毫无征兆——',
+    '一切要从那件事说起：',
+    '事情坏就坏在，',
+    '偏巧这时候，',
+    '消息比人先到——',
+  ];
+
+  /// **不可作章首第一句**的引导语：语义上必须承接前文（上一句台词、已发生
+  /// 的动作、已存在的场面），单独出现就是一句「没头没尾」的断句。
+  ///
+  /// 真机事故（2026-10-18，桌面端一键生成《远航星》第 1 章）：全书第一句被
+  /// 拼成「**话音未落**，齐灵把秘境图用布裹好，贴身收妥。」——「话音未落」
+  /// 挂在一次并不存在的说话上，读者看到的第一句就是断层。同类还有
+  /// 「第二遍钟响时，」（没有第一遍）、「消息比人先到——」「到了这个地步，」
+  /// 「人还没坐稳，」「看热闹的人还没散，」「一切要从那件事说起：」等。
+  ///
+  /// 与 [chapterStartLeadIns] 构成 [hintLeadIns] 的一个二划分。
+  static const List<String> antecedentLeadIns = <String>[
+    '说来也巧，',
+    '第二遍钟响时，',
+    '半炷香后，',
+    '人还没坐稳，',
+    '出了这道门，',
+    '酒过三巡，',
+    '看热闹的人还没散，',
+    '话音未落，',
+    '没人应声，',
+    '没人敢先开口，',
+    '谁都没料到，',
+    '不出所料，',
+    '谁都看得出，',
+    '到了这个地步，',
+    '一切要从那件事说起：',
+    '事情坏就坏在，',
+    '偏巧这时候，',
+    '消息比人先到——',
+  ];
+
+  /// 章首第一句**可以**用的引导语（自足起句）：时间锚点 / 场所动作 /
+  /// 突发变故三类——它们不指代任何前文，单独成句也读得通。
+  ///
+  /// 由 [hintLeadIns] 剔除 [antecedentLeadIns] 派生，保证两份清单永远互补，
+  /// 不会出现「加了新引导语却忘了分类」的静默漏洞。
+  static final List<String> chapterStartLeadIns = hintLeadIns
+      .where((String s) => !antecedentLeadIns.contains(s))
+      .toList(growable: false);
+
   @override
   Future<GenerationResult> generate(
     GenerationConfig config,
@@ -350,55 +439,15 @@ class _TemplateEngineCore {
     '那一幕过后，{name}久久难以入眠。',
   ];
 
-  /// 节拍提示织入正文时的引导语。
+  /// 章首以天气词起手会被闸门判「首屏红线」，用本正则做避雷。
   static final RegExp _weatherOpenRe =
       RegExp(r'^\s*[^\n]{0,16}[雨雪霜雾风]');
 
-  /// 节拍提示织入正文时的引导语。
+  /// 章首第一句专用引导语池（自足起句），取自 [TemplateEngine.chapterStartLeadIns]。
   ///
-  /// 注意：不得包含 [FanqieGateChecker._leak]（及 scripts/fanqie_review.py
-  /// PROMPT_LEAK）里的短语——引导语会大量出现在正文里，撞上泄漏黑名单
-  /// 会被整章判「提示词残留」。
-  ///
-  /// 2026-09 写手优化：旧版仅 5 条，平均每 2~3 段就复用一次同一引导语，
-  /// 是成书「机械感」的第一来源。扩到 25 条并覆盖五种句法形态
-  /// （时间锚点 / 场所动作 / 声音先至 / 心理预期 / 承接转折），
-  /// 且一律不含「雨雪霜雾风」五字（避开闸门的「以天气起手」首屏红线），
-  /// 取样经 [_pickFromPool] 分池去重：窗口 24 内不重复。
-  static const List<String> _hintLeadIns = <String>[
-    // —— 时间锚点 ——
-    '这一日，',
-    '说来也巧，',
-    '晌午刚过，',
-    '天刚擦黑，',
-    '夜色渐深，',
-    '第二遍钟响时，',
-    '半炷香后，',
-    '出事的那天，',
-    // —— 场所 / 动作切入 ——
-    '门帘一掀，',
-    '转过影壁，',
-    '人还没坐稳，',
-    '出了这道门，',
-    '酒过三巡，',
-    '看热闹的人还没散，',
-    // —— 声音 / 动静先至 ——
-    '话音未落，',
-    '靴声由远及近，',
-    '没人应声，',
-    '没人敢先开口，',
-    // —— 心理 / 预期 ——
-    '谁都没料到，',
-    '不出所料，',
-    '谁都看得出，',
-    '到了这个地步，',
-    // —— 承接 / 转折 ——
-    '变故来得毫无征兆——',
-    '一切要从那件事说起：',
-    '事情坏就坏在，',
-    '偏巧这时候，',
-    '消息比人先到——',
-  ];
+  /// 与正文引导语池分开取样与去重（池键不同），互不干扰各自的重选窗口。
+  static final List<String> _chapterStartLeadIns =
+      TemplateEngine.chapterStartLeadIns;
 
   // 通用填充词（题材无关的物件/动作/情绪/对话）。
   static const List<String> _objects = <String>[
@@ -722,13 +771,32 @@ class _TemplateEngineCore {
 
   /// 把节拍提示织入正文：引导语 + 事件化提示 + 一条匹配阶段的功能句。
   /// 仅用于**用户自写的大纲要点**（点题句有真实信息量）。
+  ///
+  /// 章首第一句走 [_pickLeadIn] 的自足池，且此处必须同步推进
+  /// [_chapterStarted]——大纲驱动路径下首段由本函数写出，旧实现只在此设
+  /// 天气避雷、不设「已开篇」标记，会让整章的引导语都按章首口径取样。
   String _weaveHint(String hint, String stage) {
-    final String lead = _pickFromPool('leadin', _hintLeadIns);
+    final String lead = _pickLeadIn();
     // 前缀段（引导语 + 提示）单独登记查重：之前只登记了尾句，前缀若
     // 与相邻段撞车会被闸门算整句重复。hint 是用户大纲要点（真实信息量），
     // 重复出现也允许输出，仅登记不阻断。
     _tryEmit('$lead$hint。');
     return '$lead$hint。${_nextBeatSentence(stage)}';
+  }
+
+  /// 取一条段落引导语；章首第一句只从自足池取样。
+  ///
+  /// 副作用：把 [_chapterStarted] 置为 true（本函数是「正文已落笔」的唯一
+  /// 判定入口）。章首禁用 [_hintLeadIns] 里的前指条目（[TemplateEngine
+  /// .antecedentLeadIns]），否则会拼出「话音未落，……」这种挂在不存在台词上
+  /// 的断句——真机事故见 [TemplateEngine.antecedentLeadIns] 的注释。
+  String _pickLeadIn() {
+    final bool atChapterStart = !_chapterStarted;
+    _chapterStarted = true;
+    return _pickFromPool(
+      atChapterStart ? 'leadin:chapterStart' : 'leadin',
+      atChapterStart ? _chapterStartLeadIns : TemplateEngine.hintLeadIns,
+    );
   }
 
   /// 阶段驱动的点题句：引导语 + 一条匹配阶段的功能句。
@@ -740,15 +808,16 @@ class _TemplateEngineCore {
     // 章首避雷：第一段若以天气词开头会被闸门判「以天气起手」，
     // 此处重选引导语与首句，直到避开（有限次，保底不阻塞）。
     final bool atChapterStart = !_chapterStarted;
-    _chapterStarted = true;
-    String lead = _pickFromPool('leadin', _hintLeadIns);
+    String lead = _pickLeadIn();
     String tail = _nextBeatSentence(stage);
     for (int attempt = 0;
         atChapterStart &&
             attempt < 5 &&
             _weatherOpenRe.hasMatch('$lead$tail');
         attempt++) {
-      lead = _pickFromPool('leadin', _hintLeadIns);
+      // 重选仍限自足池：_pickLeadIn 已把 _chapterStarted 置 true，
+      // 这里必须显式指定池，不能复用 _pickLeadIn 的章首判定。
+      lead = _pickFromPool('leadin:chapterStart', _chapterStartLeadIns);
       tail = _nextBeatSentence(stage);
     }
     return '$lead$tail';
@@ -1072,7 +1141,11 @@ class _TemplateEngineCore {
     return GenerationResult(
       content: content,
       actualWords: AppConstants.countWords(content),
-      usedConfig: config,
+      // 把本章**实际**使用的主角名回填给调用方：离线引擎在未指定主角名时
+      // 会随机起名，多章连写若每章各起一个，同一本书就会出现两个主角
+      // （真机事故：《远航星》第 1 章「齐灵」、第 2 章「姜临」——读者读到
+      // 的就是断层）。调用方据此把名字承接给后续章节。
+      usedConfig: config.copyWith(protagonistName: _hero),
     );
   }
 }

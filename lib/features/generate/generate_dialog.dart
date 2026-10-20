@@ -355,6 +355,33 @@ class _GenerateDialogState extends ConsumerState<GenerateDialog> {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
+              // 离线模板引擎的显著提示。
+              //
+              // 真机事故：《远航星》就是用这个模式生成的——正文由本地语料库
+              // 随机拼句（章首甚至拼出「话音未落，……」这种没头没尾的断句），
+              // 用户却把它当成「软件写的质量好差」。旧实现只在角落标一行灰字，
+              // 太容易被当成普通状态标签，必须显式说清它不是 AI 写作。
+              if (!llm.useLlm) ...<Widget>[
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.tertiaryContainer,
+                    borderRadius: BorderRadius.circular(AppTokens.r2),
+                  ),
+                  child: Text(
+                    '⚠ 当前是「离线占位草稿」引擎：正文由本机语料库拼句，'
+                    '不是 AI 写作，只适合试排版。想要能投稿的正文，'
+                    '请「去设置」启用 AI 引擎，或回书架进「AI 流水线」页生成。',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Theme.of(context).colorScheme.onTertiaryContainer,
+                    ),
+                  ),
+                ),
+              ],
               // AI 引擎启用但未配置/未启动时：警告 + 快捷设置入口。
               if (llm.useLlm && !llm.config.isConfigured) ...<Widget>[
                 const SizedBox(height: 8),

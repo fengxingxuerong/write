@@ -276,6 +276,63 @@ class _FakeSettingRepo implements SettingRepository {
       throw UnimplementedError('${invocation.memberName} 不应在测试中调用');
 }
 
+/// 可指定「第几次调用返回空正文」的引擎（模拟端点全链失败 / 空响应）。
+///
+/// 真机事故：《远航星》书里留下一条 order=0、标题「第1章」、正文为空的
+/// 记录——引擎返回空正文却被当成功章节落库，导出后是一页空白。
+class _EmptyEngine implements GenerationEngine {
+  _EmptyEngine({required this.emptyAt});
+
+  /// 第几次调用返回空正文（0 基）。
+  final int emptyAt;
+
+  int _callCount = 0;
+
+  @override
+  Future<GenerationResult> generate(
+    GenerationConfig config,
+    ContextBundle ctx, {
+    CancelToken? cancelToken,
+    void Function(GenerationProgress)? onProgress,
+  }) async {
+    final int i = _callCount++;
+    final String content = i == emptyAt ? '' : '第${i + 1}章正文内容。';
+    return GenerationResult(
+      content: content,
+      actualWords: content.length,
+      usedConfig: config,
+    );
+  }
+}
+
+/// 每章「自行起名」的引擎（模拟离线模板引擎未指定主角名时随机起名），
+/// 并回填实际使用名到 usedConfig，供调用方承接。
+class _NamedEngine implements GenerationEngine {
+  _NamedEngine(this.names);
+
+  final List<String> names;
+  final List<GenerationConfig> calls = <GenerationConfig>[];
+  int _callCount = 0;
+
+  @override
+  Future<GenerationResult> generate(
+    GenerationConfig config,
+    ContextBundle ctx, {
+    CancelToken? cancelToken,
+    void Function(GenerationProgress)? onProgress,
+  }) async {
+    calls.add(config);
+    final int i = _callCount++;
+    final String given = (config.protagonistName ?? '').trim();
+    final String hero = given.isNotEmpty ? given : names[i % names.length];
+    return GenerationResult(
+      content: '第${i + 1}章正文内容。',
+      actualWords: 8,
+      usedConfig: config.copyWith(protagonistName: hero),
+    );
+  }
+}
+
 void main() {
   group('GenerateViewModel 多章连写', () {
     test('按 chapterCount 逐章生成并逐章落库', () async {
@@ -738,6 +795,71 @@ void main() {
       } finally {
         await server.close(force: true);
       }
+    });
+  });
+
+  group('GenerateViewModel 空章节保护与主角名承接', () {
+    test('空正文不落库：中止生成并给出错误，已生成章节保留', () async {
+      final _EmptyEngine engine = _EmptyEngine(emptyAt: 1);
+      final _FakeChapterRepo repo = _FakeChapterRepo();
+      final GenerateViewModel vm = GenerateViewModel(
+        engine,
+        repo,
+        _FakeSettingRepo(),
+        'n1',
+        _fakeRef(),
+      );
+
+      await vm.generate(_cfg(chapterCount: 2), _bundle(), 0, '第0章');
+
+      expect(repo.saved, hasLength(1), reason: '第 1 章成功落库，空正文的第 2 章不得落库');
+      expect(repo.saved.single.content, isNotEmpty);
+      expect(vm.state.isGenerating, isFalse);
+      expect(vm.state.error, isNotNull);
+      expect(vm.state.error, contains('未产出正文'));
+    });
+
+    test('多章连写承接第 1 章主角名（防「一本书两个主角」）', () async {
+      // 真机事故：《远航星》第 1 章「齐灵」、第 2 章「姜临」——同书两个主角。
+      final _NamedEngine engine = _NamedEngine(<String>['齐灵', '姜临', '陆长风']);
+      final _FakeChapterRepo repo = _FakeChapterRepo();
+      final GenerateViewModel vm = GenerateViewModel(
+        engine,
+        repo,
+        _FakeSettingRepo(),
+        'n1',
+        _fakeRef(),
+      );
+
+      await vm.generate(_cfg(chapterCount: 3), _bundle(), 1, '第1章');
+
+      expect(engine.calls, hasLength(3));
+      expect(engine.calls[0].protagonistName, isNull);
+      expect(engine.calls[1].protagonistName, equals('齐灵'));
+      expect(engine.calls[2].protagonistName, equals('齐灵'));
+    });
+
+    test('用户显式指定的主角名不被引擎回填值覆盖', () async {
+      final _NamedEngine engine = _NamedEngine(<String>['齐灵', '姜临']);
+      final _FakeChapterRepo repo = _FakeChapterRepo();
+      final GenerateViewModel vm = GenerateViewModel(
+        engine,
+        repo,
+        _FakeSettingRepo(),
+        'n1',
+        _fakeRef(),
+      );
+
+      await vm.generate(
+        _cfg(chapterCount: 2).copyWith(protagonistName: '陈默'),
+        _bundle(),
+        1,
+        '第1章',
+      );
+
+      expect(engine.calls, hasLength(2));
+      expect(engine.calls[0].protagonistName, equals('陈默'));
+      expect(engine.calls[1].protagonistName, equals('陈默'));
     });
   });
 }

@@ -319,5 +319,98 @@ void main() {
         );
       }
     });
+    test('章首第一句不得使用「需前指」引导语（断层回归护栏）', () async {
+      // 真机事故（2026-10-18，桌面端一键生成《远航星》）：全书第一句被拼成
+      // 「话音未落，齐灵把秘境图用布裹好，贴身收妥。」——「话音未落」挂在
+      // 一次并不存在的说话上，读者读到的第一个句子就是断层。
+      // 章首第一句必须从「自足起句」池取样（时间锚点/场所动作/突发变故）。
+      const engine = TemplateEngine();
+      for (final double level in <double>[0.05, 0.2, 0.4, 0.6, 0.8, 0.95]) {
+        final result = await engine.generate(
+          _buildConfig(targetWords: 1200, randomLevel: level),
+          _buildContext(),
+        );
+        final String first = result.content.trim();
+        expect(first, isNotEmpty);
+        for (final String bad in TemplateEngine.antecedentLeadIns) {
+          expect(
+            first.startsWith(bad),
+            isFalse,
+            reason: 'randomLevel=$level：章首以「$bad」起句 -> $first',
+          );
+        }
+      }
+    });
+
+    test('续写章：承接段之后的第一段也不得用「需前指」引导语', () async {
+      const engine = TemplateEngine();
+      final GenerationResult first = await engine.generate(
+        _buildConfig(targetWords: 800, randomLevel: 0.4),
+        _buildContext(),
+      );
+      final String tail = first.content.length > 300
+          ? first.content.substring(first.content.length - 300)
+          : first.content;
+      final GenerationResult result = await engine.generate(
+        _buildConfig(targetWords: 800, randomLevel: 0.4)
+            .copyWith(continuation: tail),
+        _buildContext(),
+      );
+      final List<String> paras = result.content
+          .split(RegExp(r'\n+'))
+          .map((String s) => s.trim())
+          .where((String s) => s.isNotEmpty)
+          .toList();
+      expect(paras.length, greaterThanOrEqualTo(2));
+      // paras[0] 是承接段（continuation opener），paras[1] 才是正文首段。
+      for (final String bad in TemplateEngine.antecedentLeadIns) {
+        expect(
+          paras[1].startsWith(bad),
+          isFalse,
+          reason: '续写章正文首段以「$bad」起句 -> ${paras[1]}',
+        );
+      }
+    });
+
+    test('引导语池二划分完整且互斥（防「新增引导语忘了分类」静默失效）', () {
+      final Set<String> all = TemplateEngine.hintLeadIns.toSet();
+      final Set<String> ante = TemplateEngine.antecedentLeadIns.toSet();
+      final Set<String> start = TemplateEngine.chapterStartLeadIns.toSet();
+      expect(all.length, TemplateEngine.hintLeadIns.length,
+          reason: 'hintLeadIns 存在重复条目');
+      expect(ante.length, TemplateEngine.antecedentLeadIns.length,
+          reason: 'antecedentLeadIns 存在重复条目');
+      expect(
+        ante.difference(all),
+        isEmpty,
+        reason: 'antecedentLeadIns 里有不在引导语池的条目——打字错误会让章首规则静默失效',
+      );
+      expect(start.intersection(ante), isEmpty, reason: '章首池与前指池重叠');
+      expect(start.union(ante), all,
+          reason: '二划分不完整：有条目既不在章首池也不在前指池');
+      expect(start, isNotEmpty, reason: '章首池为空会让章首退化成无引导语');
+    });
+
+    test('多章连写主角名可承接：usedConfig 回填本章实际使用的主角名', () async {
+      // 离线引擎在未指定主角名时随机起名；多章连写不承接就会出现「同一本书
+      // 两个主角」（真机事故：《远航星》第 1 章「齐灵」、第 2 章「姜临」）。
+      const engine = TemplateEngine();
+      final GenerationResult r1 = await engine.generate(
+        _buildConfig(targetWords: 600),
+        _buildContext(),
+      );
+      final String hero = (r1.usedConfig.protagonistName ?? '').trim();
+      expect(hero, isNotEmpty, reason: '引擎未回填实际使用的主角名');
+
+      // 显式指定主角名时必须原样沿用（承接口径）。
+      final GenerationResult r2 = await engine.generate(
+        _buildConfig(targetWords: 600).copyWith(
+          protagonistName: hero,
+          continuation: '上一章结尾：他握紧了手中的剑。',
+        ),
+        _buildContext(),
+      );
+      expect((r2.usedConfig.protagonistName ?? '').trim(), equals(hero));
+    });
   });
 }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:characters/characters.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/core/di/providers.dart';
 import 'package:novel_writer/engine/editor_ai.dart';
@@ -279,6 +280,11 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
 
     try {
       String? continuation = config.continuation;
+      // 多章连写的主角名承接：用户没填名字时，由**第 1 章的实际主角名**兜住
+      // 后面几章。离线模板引擎每章会重新随机起名，不承接就会出现「同一本书
+      // 两个主角」（真机事故：《远航星》第 1 章「齐灵」、第 2 章「姜临」）。
+      // 引擎把本章实际使用名回填进 usedConfig，这里在循环结束处接住。
+      String resolvedProtagonist = (config.protagonistName ?? '').trim();
       // 上一章正文：番茄闸门的跨章 8-gram 重合检查（自我重复）需要它。
       String prevChapterForGate = '';
       for (int i = 0; i < count; i++) {
@@ -287,9 +293,12 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
           throw const GenerationCancelledException();
         }
         // 从第 2 章起承接上一章结尾。
-        final GenerationConfig chapterConfig = config.copyWith(
-          continuation: continuation,
-        );
+        final GenerationConfig chapterConfig = resolvedProtagonist.isEmpty
+            ? config.copyWith(continuation: continuation)
+            : config.copyWith(
+                continuation: continuation,
+                protagonistName: resolvedProtagonist,
+              );
         // 卷纲分配：按比例切分到每章，余数分给靠前的章节。
         // 旧实现用 ceil 按固定步长跳取，末章会堆叠剩余全部要点；
         // 均分后各章负担均衡，不会出现「一章吃掉半卷纲」。
@@ -356,6 +365,14 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
               );
             },
           );
+        }
+
+        // 接住引擎回填的主角名：仅当用户没显式指定、且当前还没接住过时才采纳，
+        // 之后各章沿用同一个名字（多章连写的主角连续性）。
+        if (resolvedProtagonist.isEmpty) {
+          final String usedHero =
+              (result.usedConfig.protagonistName ?? '').trim();
+          if (usedHero.isNotEmpty) resolvedProtagonist = usedHero;
         }
 
         // 自动质检 + 润色（仅 LLM 引擎启用时；失败静默，不阻塞主流程）。
@@ -428,6 +445,17 @@ class GenerateViewModel extends StateNotifier<GenerateState> {
               // 定点修失败不阻塞生成：保留原文与闸门结论。
             }
           }
+        }
+
+        // 空章节保护：端点全链失败/被限流时引擎可能返回空正文，旧实现把它
+        // 当成功章节落库，导出后就是一页空白（真机事故：《远航星》书里留下
+        // 一条 order=0、标题「第1章」、正文为空的记录）。空产出直接判失败
+        // 并停止后续章节——已生成的前面几章保留，用户可重试本章。
+        if (AppConstants.countWords(finalContent) < 1) {
+          throw const EngineException(
+            '本章未产出正文（模型链路全部失败或为空响应），已中止且未落库；'
+            '请检查模型配置与配额后重试',
+          );
         }
 
         // AI 章节标题：AI 引擎启用时提炼标题（失败/超时回退原标题）。
