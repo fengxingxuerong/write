@@ -67,6 +67,41 @@ void main() {
       expect(r.worldIssues.isNotEmpty, isTrue);
     });
 
+    test('只靠后缀线索混进来的滑窗碎片不得进人名候选（真实误报回归）', () {
+      // 真机事故（2026-10-20 抓出）：「我不说」「也不看」「在琉璃京看着」这类句子
+      // 会被滑窗切成「我不 / 也不 / 在琉 / 在琉璃」，它们只因**后一个字是动词**
+      // （后缀线索）就进了候选，两两编辑距离＝1，把干净的书报成「人名不一致 3 处」。
+      // 修复：候选首字必须是姓氏（与 Python looks_like_name 同口径），
+      // 正好也是本函数文档注释里早就承诺的「姓氏 + 1~3 字」。
+      final ConsistencyReport r = NovelConsistencyChecker.check(<Chapter>[
+        makeChapter(0, '我不说话。他也不看这些。在琉璃京看着人来人往。'),
+        makeChapter(1, '我不说话。他也不看那些。在琉璃京看着天色渐晚。'),
+        makeChapter(2, '我不说话。他也不看这边。在琉璃京看着灯火。'),
+      ]);
+      expect(r.nameIssues, isEmpty,
+          reason: '滑窗碎片被当成人名：'
+              '${r.nameIssues.map((i) => '${i.nameA}/${i.nameB}').toList()}');
+    });
+
+    test('滑窗碎片不得被判成「死者复活」（真实误报回归）', () {
+      // 真机事故（2026-10-20 抓出）：玄幻稿第 1 章有「宗门大比被退婚羞辱，濒死
+      // 觉醒上古剑魂」，第 2 章又有「退婚的帖子当着满堂人的面……」。死亡词前
+      // 15 字的滑窗把「退婚」「说明」「明水」这类**碎片**当成了死者名字，于是
+      // 一本正文毫无问题的书被判「剧情矛盾 5 处」——检查器自己在造谣。
+      //
+      // 修复：死者候选必须「像人名」（首字为姓氏，或前一字是「小/老」），
+      // 与 Python `fanqie_metrics.looks_like_name` 同口径。
+      final ConsistencyReport r = NovelConsistencyChecker.check(<Chapter>[
+        makeChapter(0, '宗门大比被退婚羞辱，濒死之际觉醒上古剑魂。'
+            '他在心里飞快地权衡：退，前功尽弃。'),
+        makeChapter(1, '退婚的帖子当着满堂人的面，被递到陆沉手上。'
+            '陆沉把话说明白，一字一顿。'),
+      ]);
+      expect(r.plotIssues, isEmpty,
+          reason: '滑窗碎片被当成死者：'
+              '${r.plotIssues.map((i) => i.reason).toList()}');
+    });
+
     test('死者复活矛盾检测', () {
       final ConsistencyReport r = NovelConsistencyChecker.check(<Chapter>[
         makeChapter(0, '张三在战斗中牺牲，倒在地上。'),

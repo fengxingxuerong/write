@@ -369,6 +369,12 @@ class NovelConsistencyChecker {
         final String token = chars.sublist(i, i + len).join();
         if (!_allCjk(token)) continue;
         if (_isStopName(token)) continue;
+        // 「首字是姓才算人名」——与 Python `fanqie_metrics.looks_like_name`
+        // 同口径。**本函数的文档注释一直这么写，实现却从未做这道闸**，于是
+        // 「我不 / 也不 / 在琉 / 在琉璃」这类只靠后缀动词线索混进来的滑窗
+        // 碎片也进了候选，两两编辑距离＝1 → 把干净的书报成「人名不一致 3 处」
+        // （由 test/engine/quality/writing_ability_test.dart 抓出）。
+        if (!_looksLikeName(chars, i, token)) continue;
         freq[token] = (freq[token] ?? 0) + 1;
       }
     }
@@ -577,6 +583,10 @@ class NovelConsistencyChecker {
           for (int len = 2; len <= 4 && startPos + len <= chars.length; len++) {
             final String candidate = chars.sublist(startPos, startPos + len).join();
             if (_allCjk(candidate) && !_isStopName(candidate)) {
+              // 「像人名」+「不以虚词收尾」两道闸：与 [_extractPersonNames]
+              // 拉齐口径，杜绝把滑窗碎片当死者（详见 [_looksLikeName]）。
+              if (!_looksLikeName(chars, startPos, candidate)) continue;
+              if (_isNonNameTail(candidate)) continue;
               result.add(candidate);
             }
           }
@@ -585,6 +595,26 @@ class NovelConsistencyChecker {
       }
     }
     return result;
+  }
+
+  /// 人名候选的「像人名」闸：首字须为姓氏（或前一字是「小 / 老」这类昵称前缀）。
+  ///
+  /// 与 Python `scripts/fanqie_metrics.py::looks_like_name`（「首字是姓才算人名」）
+  /// 同一口径——Python 侧是主流水线，口径以它为准。
+  ///
+  /// 修误报（由 `test/engine/quality/writing_ability_test.dart` 抓出）：
+  /// 死亡词前 15 字的滑窗会把「被**退婚**羞辱，濒死」「说**明水**越」这类碎片当成
+  /// 死者名字，而同一碎片又在后一章出现（「退婚的帖子当着满堂人的面」），于是把
+  /// 一本正文毫无问题的书报成「剧情矛盾 5 处」；只靠后缀动词线索混进来的
+  /// 「我不 / 也不 / 在琉」同理——检查器自己在造谣。哲学与 [_isNonNameTail] 一致：
+  /// 宁可漏报，也不误报污染结论。
+  static bool _looksLikeName(
+      List<String> chars, int startPos, String candidate) {
+    if (startPos > 0) {
+      final String prev = chars[startPos - 1];
+      if (prev == '小' || prev == '老') return true;
+    }
+    return _isSurname(candidate.characters.first);
   }
 
   /// 判断句子是否含有回忆/过去标记（闪回时出现的死人不算矛盾）。
@@ -671,17 +701,24 @@ class NovelConsistencyChecker {
     return badTails.contains(s.characters.last);
   }
 
-  /// 常用姓氏（简化表）。
+  /// 常用姓氏（与 Python `scripts/fanqie_metrics.py::SURNAMES` 对齐 + 复姓）。
+  ///
+  /// 为什么要整表照搬 Python：Dart 侧原来只有 86 个（百家姓前段），**漏了
+  /// 「陆 / 林 / 宋 / 程」这类真实在用的姓**，而本项目的实测主角就有「陆沉」
+  /// 「林舟」。[_looksLikeDeadName] 用的是「首字是姓才算人名」，一旦漏姓，
+  /// 真人物的死亡矛盾会被整条漏掉——口径以 Python 主流水线为准。
   static final Set<String> _surnames = <String>{
-    '赵', '钱', '孙', '李', '周', '吴', '郑', '王', '冯', '陈',
-    '褚', '卫', '蒋', '沈', '韩', '杨', '朱', '秦', '尤', '许',
-    '何', '吕', '施', '张', '孔', '曹', '严', '华', '金', '魏',
-    '陶', '姜', '戚', '谢', '邹', '苏', '潘', '葛', '范', '彭',
-    '郎', '鲁', '马', '苗', '凤', '花', '方', '俞', '任', '袁',
-    '柳', '唐', '罗', '薛', '雷', '贺', '倪', '汤', '滕', '殷',
-    '毕', '郝', '安', '常', '乐', '于', '时', '傅', '皮',
-    '齐', '康', '伍', '余', '元', '卜', '顾', '孟', '平', '黄',
-    '和', '穆', '萧', '尹', '司马', '上官', '欧阳', '诸葛',
+    // Python `fanqie_metrics.SURNAMES` 全表（主流水线口径，拆三段便于阅读）。
+    ...'王李张刘陈杨黄赵周吴徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡'
+        .split(''),
+    ...'余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯'
+        .split(''),
+    ...'龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤柴桑关岳鲍盛赖樊温柯岑路桂傅齐应宗简'
+        .split(''),
+    // Dart 侧原有、Python 表未单列的（保留不删，姓氏表宁宽勿窄）。
+    ...'褚卫尤施华戚葛郎鲁苗凤花俞柳倪滕殷毕安常乐时皮伍元卜和穆萧'.split(''),
+    // 复姓整词识别（Python 仅按首字判，Dart 侧保留整词，识别更准）。
+    '司马', '上官', '欧阳', '诸葛', '端木', '独孤', '慕容', '司徒', '尉迟', '长孙',
   };
 
   static bool _isSurname(String s) => _surnames.contains(s);
