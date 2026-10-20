@@ -243,6 +243,12 @@ void main() {
           expect(s.vetoCount, 0, reason: '$where 触达否决级红线');
         }
       }
+      // 落盘目录必须自建：`verify-logs/` 是 gitignore 的，干净检出里并不存在。
+      // 旧实现直接 writeAsString，靠「CI 里先跑过 demo 冒烟顺带建了目录」侥幸绿；
+      // 而 `flutter test` 各测试文件是**并行**的，一旦本文件先跑（或单独跑）
+      // 就 PathNotFoundException——2026-10-20 在干净 worktree 上复现并修掉。
+      // 与 tool/qa_bench_test.dart 同款写法。
+      Directory('verify-logs').createSync(recursive: true);
       await File(
               'verify-logs${Platform.pathSeparator}writing_ability_scores.txt')
           .writeAsString('==== 真实成书能力切片 ====\n$slices', flush: true);
