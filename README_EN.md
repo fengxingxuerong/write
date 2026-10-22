@@ -44,14 +44,16 @@
 - **AI assist**: in-editor 「✨ Continue」 (streaming mid-sentence continuation with a chosen length) / 「📝 Rewrite」 (rewrite the selected text) / 「🔍 Proofread」 (typos / malformed sentences / repetition, apply what you check). All three inject the character's dialogue style into the prompt.
 - **Drafts box**: stash prose you're unhappy with in one click, managed from a workspace dialog (promote / delete).
 - **Focus mode (F11)**: hide the sidebar for immersive writing.
-- **Shortcuts**: `Ctrl+S` save / `Ctrl+B` toggle sidebar / `Ctrl+E` focus editor / `F11` focus mode.
+- **Shortcuts**: `Ctrl+S` save / `Ctrl+B` generate / `Ctrl+E` export / `Ctrl+N` new chapter / `Ctrl+F` find & replace in the editor / `Ctrl+Shift+F` whole-book search / `F11` focus mode.
 
 ### Novel management
 
 - **JSON file storage**: one `.json` file per project (`meta` + `chapters` + `characters` + `worldSettings`). Copy the file to another machine and you have migrated.
+- **Manuscript import**: the shelf's **Import** action accepts **TXT / Markdown**, recognizes 「第 X 章 / 序章 / 楔子 / 番外」 and Markdown headings, previews the chapter split and word count, then creates a new work. The source file is read-only and existing projects are never overwritten. UTF-8 (with BOM) and UTF-16 LE/BE (with BOM; BOM-less ASCII is also sniffed) are supported; GBK files get an actionable "save as UTF-8" message rather than being silently decoded into mojibake.
 - **Project list**: title search, filtering (all / in progress / archived), cards showing genre·chapter count·word count·last update; supports **archive / unarchive** (no data is deleted).
 - **Backup & restore**: import a JSON backup directly from the shelf. Importing copies it as a new work and rewrites the internal IDs, so existing projects are never overwritten.
 - **Characters / worldbuilding / outlines**: structured editing, maintained continuously as chapters advance. A **volume outline overview** dialog aggregates the outline key points of every chapter and can copy them in one click as the input for multi-chapter continuous writing.
+- **Project info**: title, genre, tone and per-chapter word target can be changed at any time; the target drives chapter progress and writing statistics (0 = no target), instead of mistaking the generation cap for a writing goal.
 - **Reading mode**: a built-in reader (white / beige / night themes; font size, line height and serif are adjustable and persisted).
 
 ### Generation engine (pluggable)
@@ -233,7 +235,7 @@ The local equivalent is `powershell -ExecutionPolicy Bypass -File verify-novel.p
 - AI settings: `llm_settings.json` (written atomically via tmp+rename; the Windows desktop build encrypts the API key with DPAPI, and local Ollama addresses need no API key).
 - Reader settings: `app_settings.json` (theme / font size / line height / serif).
 - Sensitive words: `sensitive_words.json` (custom terms) + `sensitive_stats.json` (historical hit statistics).
-- Cross-platform migration: copy the corresponding `<id>.json` file into the `novels/` directory on the target device; alternatively use 「Import backup」 on the shelf to restore from a JSON file as a new work.
+- Cross-platform migration: copy the corresponding `<id>.json` file into the `novels/` directory on the target device; alternatively use **Import** on the shelf to restore a JSON backup as a new work, or import a TXT / Markdown manuscript and keep writing.
 
 ## Secrets & security
 

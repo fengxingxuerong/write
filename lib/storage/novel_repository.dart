@@ -51,7 +51,7 @@ class NovelRepository {
       title: title.trim().isEmpty ? '未命名作品' : title.trim(),
       genre: genre,
       tone: tone,
-      targetWordsPerChapter: AppConstants.defaultMaxWordsPerChapter,
+      targetWordsPerChapter: AppConstants.defaultTargetWords,
       createdAt: now,
       updatedAt: now,
       chapters: <Chapter>[],

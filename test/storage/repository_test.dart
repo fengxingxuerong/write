@@ -211,7 +211,7 @@ void main() {
       expect(novel.genre, equals('kehuan'));
       expect(
         novel.targetWordsPerChapter,
-        equals(AppConstants.defaultMaxWordsPerChapter),
+        equals(AppConstants.defaultTargetWords),
       );
       expect(novel.chapters, isEmpty);
       expect(await db.exists(novel.id), isTrue);

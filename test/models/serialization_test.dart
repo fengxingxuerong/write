@@ -233,7 +233,7 @@ void main() {
       expect(back.tone, equals(AppConstants.defaultTone));
       expect(
         back.targetWordsPerChapter,
-        equals(AppConstants.defaultMaxWordsPerChapter),
+        equals(AppConstants.defaultTargetWords),
       );
       expect(back.chapters, isEmpty);
       expect(back.characters, isEmpty);

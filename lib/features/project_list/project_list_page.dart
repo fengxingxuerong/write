@@ -7,14 +7,17 @@ import 'package:go_router/go_router.dart';
 
 import 'package:novel_writer/core/constants/genre_presets.dart';
 import 'package:novel_writer/core/di/providers.dart';
+import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/core/theme/app_tokens.dart';
 import 'package:novel_writer/core/utils/text_fmt.dart';
 import 'package:novel_writer/features/project_list/crash_logs_dialog.dart';
+import 'package:novel_writer/features/project_list/manuscript_import_dialog.dart';
 import 'package:novel_writer/features/project_list/novel_card.dart';
 import 'package:novel_writer/features/project_list/project_list_viewmodel.dart';
 import 'package:novel_writer/features/workspace/book_qa_report_dialog.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/storage/app_database.dart';
+import 'package:novel_writer/storage/manuscript_import_service.dart';
 import 'package:novel_writer/widgets/app_card.dart';
 import 'package:novel_writer/widgets/app_feedback.dart';
 import 'package:novel_writer/widgets/app_skeleton.dart';
@@ -33,7 +36,7 @@ class ProjectListPage extends ConsumerStatefulWidget {
 class _ProjectListPageState extends ConsumerState<ProjectListPage> {
   final TextEditingController _search = TextEditingController();
   String _sort = 'updated';
-  bool _importingBackup = false;
+  bool _importing = false;
 
   @override
   void initState() {
@@ -59,7 +62,7 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
       body: Column(
         children: <Widget>[
           _Masthead(
-            onImport: _importBackup,
+            onImport: _startImport,
             novelCount: state.novels.length,
             totalWords:
                 state.novels.fold<int>(0, (int a, NovelSummary n) => a + n.wordCount),
@@ -79,7 +82,7 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
             onSort: (String s) => setState(() => _sort = s),
             onSearch: (String q) =>
                 ref.read(projectListViewModelProvider.notifier).setQuery(q),
-            onImport: _importBackup,
+            onImport: _startImport,
             onCreate: _showCreateDialog,
           ),
           Container(height: AppTokens.hairline, color: ink.divider),
@@ -96,7 +99,7 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
                         .read(projectListViewModelProvider.notifier)
                         .setArchived(n.id, !n.archived),
                     onDelete: _confirmDelete,
-                    onImport: _importBackup,
+                    onImport: _startImport,
                     onCreate: _showCreateDialog,
                   ),
           ),
@@ -118,10 +121,26 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
     AppToast.success(context, '《${draft.title}》已创建');
   }
 
+  /// 导入入口：先让用户选择来源，再走对应的文件选择与预览。
+  Future<void> _startImport() async {
+    if (_importing) return;
+    setState(() => _importing = true);
+    try {
+      final ImportSource? source = await showImportSourceDialog(context);
+      if (source == null || !mounted) return;
+      switch (source) {
+        case ImportSource.backup:
+          await _importBackup();
+        case ImportSource.manuscript:
+          await _importManuscript();
+      }
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
   /// 从 JSON 备份恢复作品。备份中的 ID 会被重新生成，避免覆盖现有作品。
   Future<void> _importBackup() async {
-    if (_importingBackup) return;
-    setState(() => _importingBackup = true);
     try {
       final FilePickerResult? picked = await FilePicker.platform.pickFiles(
         dialogTitle: '选择墨匠 JSON 备份',
@@ -142,9 +161,60 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
         '《${imported.title}》已恢复为新作品，原备份文件未修改',
       );
     } catch (e) {
-      if (mounted) AppToast.error(context, '导入备份失败：$e');
-    } finally {
-      if (mounted) setState(() => _importingBackup = false);
+      if (mounted) {
+        AppToast.error(
+          context,
+          '导入备份失败：${e is AppException ? e.message : e}',
+        );
+      }
+    }
+  }
+
+  /// 导入 TXT / Markdown 原稿：解析 → 预览确认 → 建成新作品。
+  Future<void> _importManuscript() async {
+    final FilePickerResult? picked = await FilePicker.platform.pickFiles(
+      dialogTitle: '选择 TXT / Markdown 原稿',
+      type: FileType.custom,
+      allowedExtensions: <String>['txt', 'md', 'markdown'],
+    );
+    if (picked == null || picked.files.isEmpty || !mounted) return;
+    final String? path = picked.files.single.path;
+    if (path == null || path.isEmpty) {
+      AppToast.error(context, '原稿文件没有可用路径');
+      return;
+    }
+
+    try {
+      final ManuscriptImportService service =
+          ref.read(manuscriptImportServiceProvider);
+      final ManuscriptImportPreview preview =
+          await service.readFile(File(path));
+      if (!mounted) return;
+
+      final ManuscriptImportDraft? draft =
+          await showManuscriptImportPreview(context, preview);
+      if (draft == null || !mounted) return;
+
+      final Novel imported = await service.save(
+        preview,
+        title: draft.title,
+        genre: draft.genre,
+        tone: draft.tone,
+      );
+      await ref.read(projectListViewModelProvider.notifier).load();
+      if (!mounted) return;
+      AppToast.success(
+        context,
+        '《${imported.title}》已导入：${imported.chapters.length} 章 · '
+        '${TextFmt.words(imported.wordCount())} 字',
+      );
+    } catch (e) {
+      if (mounted) {
+        AppToast.error(
+          context,
+          '导入原稿失败：${e is AppException ? e.message : e}',
+        );
+      }
     }
   }
 
@@ -256,7 +326,8 @@ class _Masthead extends ConsumerWidget {
             children: <Widget>[
               ToolButton(
                 icon: Icons.file_upload_outlined,
-                label: '导入 JSON 备份',
+                label: '导入',
+                tooltip: '导入 JSON 备份或 TXT / Markdown 原稿',
                 onPressed: onImport,
               ),
               ToolButton(
@@ -367,7 +438,7 @@ class _Toolbar extends StatelessWidget {
           OutlinedButton.icon(
             onPressed: onImport,
             icon: const Icon(Icons.file_upload_outlined, size: 17),
-            label: const Text('导入备份'),
+            label: const Text('导入'),
           ),
           const SizedBox(width: AppTokens.s2),
           FilledButton.icon(
@@ -524,10 +595,11 @@ class _Bookshelf extends StatelessWidget {
           ? EmptyState(
               icon: Icons.auto_stories_outlined,
               message: '书架还是空的',
-              hint: '新建一部作品，或让 AI 流水线从一句灵感开始铺出整本大纲。',
+              hint: '新建一部作品；已有稿子可直接导入 TXT / Markdown 继续写，'
+                  '或让 AI 流水线从一句灵感开始铺出整本大纲。',
               actionLabel: '新建作品',
               onAction: onCreate,
-              secondaryLabel: '导入备份',
+              secondaryLabel: '导入原稿 / 备份',
               onSecondary: onImport,
             )
           : const EmptyState(
@@ -870,7 +942,7 @@ class _CreateNovelDialogState extends State<_CreateNovelDialog> {
                   const SizedBox(height: AppTokens.s3),
                   Text(
                     '题材决定 AI 写手的人设、术语与节奏基调；基调影响开篇氛围。'
-                    '两者之后都能在工作区里改。',
+                    '创建后可在工作区「工具箱 → 作品信息」里修改。',
                     style: AppFonts.text(ink.inkFaint,
                         size: 12, height: 1.7),
                   ),

@@ -21,6 +21,7 @@ import 'package:novel_writer/storage/chapter_snapshot_service.dart';
 import 'package:novel_writer/storage/goal_repository.dart';
 import 'package:novel_writer/storage/novel_repository.dart';
 import 'package:novel_writer/storage/novel_backup_service.dart';
+import 'package:novel_writer/storage/manuscript_import_service.dart';
 import 'package:novel_writer/storage/setting_repository.dart';
 
 /// 全局主题模式由阅读设置中的 appTheme 派生，修改后立即持久化。
@@ -65,6 +66,12 @@ final Provider<ChapterRepository> chapterRepositoryProvider =
         ref.watch(appDatabaseProvider),
         snapshots: ref.watch(chapterSnapshotServiceProvider),
       );
+    });
+
+/// 原稿导入服务：TXT / Markdown → 新作品。
+final Provider<ManuscriptImportService> manuscriptImportServiceProvider =
+    Provider<ManuscriptImportService>((ref) {
+      return ManuscriptImportService(ref.watch(novelRepositoryProvider));
     });
 
 /// 设定仓库：角色 / 世界观的 CRUD（同样落盘到单 json）。

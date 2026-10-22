@@ -23,7 +23,7 @@ class Novel {
   /// 基调。
   final String tone;
 
-  /// 单章目标字数（仅作默认提示，生成时以配置为准）。
+  /// 单章目标字数（写作进度/统计用；生成时以配置为准）。
   final int targetWordsPerChapter;
 
   /// 创建时间。
@@ -94,7 +94,8 @@ class Novel {
       genre: (json['genre'] as String?) ?? AppConstants.defaultGenre,
       tone: (json['tone'] as String?) ?? AppConstants.defaultTone,
       targetWordsPerChapter:
-          (json['targetWordsPerChapter'] as int?) ?? AppConstants.defaultMaxWordsPerChapter,
+          (json['targetWordsPerChapter'] as int?) ??
+          AppConstants.defaultTargetWords,
       createdAt: DateTime.parse(json['createdAt'] as String),
       updatedAt: DateTime.parse(json['updatedAt'] as String),
       archived: (json['archived'] as bool?) ?? false,

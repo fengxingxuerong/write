@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -15,10 +14,12 @@ import 'package:novel_writer/features/reader/reader_page.dart';
 import 'package:novel_writer/features/workspace/beat_board_dialog.dart';
 import 'package:novel_writer/features/workspace/chapter_list_panel.dart';
 import 'package:novel_writer/features/workspace/draft_box_dialog.dart';
+import 'package:novel_writer/features/workspace/novel_info_dialog.dart';
 import 'package:novel_writer/features/workspace/outline_dialog.dart';
 import 'package:novel_writer/features/workspace/search_dialog.dart';
 import 'package:novel_writer/features/workspace/setting_panel.dart';
 import 'package:novel_writer/features/workspace/volume_outline_dialog.dart';
+import 'package:novel_writer/features/workspace/workspace_shortcuts.dart';
 import 'package:novel_writer/features/workspace/world_book_dialog.dart';
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/novel.dart';
@@ -60,10 +61,12 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
   Future<void> _reload() async {
     setState(() => _loading = true);
     try {
-      final Novel novel =
-          await ref.read(novelRepositoryProvider).getNovel(widget.novelId);
+      final Novel novel = await ref
+          .read(novelRepositoryProvider)
+          .getNovel(widget.novelId);
       // 保持当前选中（若仍存在于列表中）。
-      final bool stillThere = _selectedChapterId != null &&
+      final bool stillThere =
+          _selectedChapterId != null &&
           novel.chapters.any((Chapter c) => c.id == _selectedChapterId);
       if (!mounted) return;
       setState(() {
@@ -125,6 +128,53 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
     await _reload();
   }
 
+  /// 编辑作品信息：书名 / 题材 / 基调 / 单章目标字数。
+  Future<void> _editNovelInfo(Novel novel) async {
+    final NovelInfoDraft? draft = await showNovelInfoDialog(
+      context,
+      novel: novel,
+    );
+    if (draft == null || !mounted) return;
+    try {
+      await ref
+          .read(novelRepositoryProvider)
+          .mutateNovel(
+            widget.novelId,
+            (Novel current) => current.copyWith(
+              title: draft.title,
+              genre: draft.genre,
+              tone: draft.tone,
+              targetWordsPerChapter: draft.targetWordsPerChapter,
+            ),
+          );
+      await _reload();
+      if (mounted) AppToast.success(context, '作品信息已更新');
+    } catch (e) {
+      if (mounted) AppToast.error(context, '保存作品信息失败：$e');
+    }
+  }
+
+  /// 打开全书搜索（标题 / 正文 / 大纲 / 角色 / 世界观）。
+  void _openSearch() {
+    final Novel? novel = _novel;
+    if (novel == null) return;
+    showDialog<void>(
+      context: context,
+      builder: (BuildContext ctx) => SearchDialog(
+        novel: novel,
+        onSelect: (SearchHit hit) {
+          final Chapter? chapter = hit.chapter;
+          if (chapter != null) {
+            setState(() => _selectedChapterId = chapter.id);
+          } else {
+            WorldBookDialog.show(context, novel);
+          }
+          Navigator.of(ctx).pop();
+        },
+      ),
+    );
+  }
+
   /// 打开卷纲总览弹窗（全书章节大纲汇总）。
   Future<void> _openVolumeOutline(Novel novel) async {
     Future<void> editAndReopen() async {
@@ -161,7 +211,9 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
     if (novel == null) return;
     final int target = index + delta;
     if (target < 0 || target >= novel.chapters.length) return;
-    final List<String> ordered = novel.chapters.map((Chapter c) => c.id).toList();
+    final List<String> ordered = novel.chapters
+        .map((Chapter c) => c.id)
+        .toList();
     final String tmp = ordered[index];
     ordered[index] = ordered[target];
     ordered[target] = tmp;
@@ -175,7 +227,9 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
   Future<void> _reorder(int oldIndex, int newIndex) async {
     final Novel? novel = _novel;
     if (novel == null) return;
-    final List<String> ordered = novel.chapters.map((Chapter c) => c.id).toList();
+    final List<String> ordered = novel.chapters
+        .map((Chapter c) => c.id)
+        .toList();
     if (oldIndex < 0 || oldIndex >= ordered.length) return;
     final String moved = ordered.removeAt(oldIndex);
     if (newIndex < 0) newIndex = 0;
@@ -198,19 +252,17 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
 
   /// 键位速查：应用内唯一可查的快捷键入口（Ctrl+/ 与应用内入口共用）。
   void _showShortcuts() {
-    const List<(String, String)> items = <(String, String)>[
-      ('Ctrl+S', '保存全部章节'),
-      ('Ctrl+B', '一键生成续写'),
-      ('Ctrl+E', '导出当前小说'),
-      ('F11', '专注模式：收起左右栏'),
-      ('Ctrl+/', '本键位速查'),
-    ];
+    const List<(String, String)> items = shortcutHelpItems;
     showDialog<void>(
       context: context,
       builder: (BuildContext ctx) => AlertDialog(
         title: const Text('快捷键'),
         contentPadding: const EdgeInsets.fromLTRB(
-            AppTokens.s6, AppTokens.s5, AppTokens.s8, AppTokens.s2),
+          AppTokens.s6,
+          AppTokens.s5,
+          AppTokens.s8,
+          AppTokens.s2,
+        ),
         content: SizedBox(
           width: 320,
           child: Column(
@@ -224,7 +276,9 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
                     children: <Widget>[
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 2),
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
                         decoration: BoxDecoration(
                           color: AppInk.of(ctx).inkSoft.withValues(alpha: 0.10),
                           borderRadius: BorderRadius.circular(4),
@@ -242,7 +296,10 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
                       Expanded(
                         child: Text(
                           desc,
-                          style: AppFonts.text(AppInk.of(ctx).inkSoft, size: 13),
+                          style: AppFonts.text(
+                            AppInk.of(ctx).inkSoft,
+                            size: 13,
+                          ),
                         ),
                       ),
                     ],
@@ -264,15 +321,11 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
   Future<void> _openGenerate() async {
     final Novel? novel = _novel;
     if (novel == null) return;
-    await showGenerateDialog(
-      context,
-      novel,
-      (Chapter ch) {
+    await showGenerateDialog(context, novel, (Chapter ch) {
         _reload();
         if (!mounted) return;
         setState(() => _selectedChapterId = ch.id);
-      },
-    );
+    });
   }
 
   Chapter? get _selectedChapter {
@@ -331,41 +384,21 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
     }
 
     return Scaffold(
-      body: CallbackShortcuts(
-        bindings: <ShortcutActivator, VoidCallback>{
-          const SingleActivator(LogicalKeyboardKey.keyS, control: true):
-              _saveAll,
-          const SingleActivator(LogicalKeyboardKey.keyB, control: true):
-              _openGenerate,
-          const SingleActivator(LogicalKeyboardKey.keyE, control: true): () {
-            final Novel? n = _novel;
-            if (n != null) showExportDialog(context, n);
-          },
-          const SingleActivator(LogicalKeyboardKey.f11): _toggleFocus,
-          // Ctrl+/：键位速查（此前快捷键只存在于代码与 README，应用内无处可查）。
-          const SingleActivator(LogicalKeyboardKey.slash, control: true):
-              _showShortcuts,
-        },
+      body: WorkspaceShortcuts(
+        onSave: _saveAll,
+        onGenerate: _openGenerate,
+        onExport: _exportCurrent,
+        onNewChapter: _addChapter,
+        onSearch: _openSearch,
+        onToggleFocus: _toggleFocus,
+        onShowHelp: _showShortcuts,
         child: Column(
           children: <Widget>[
             _WorkspaceHeader(
               novel: novel,
               chapter: _selectedChapter,
               focusMode: _focusMode,
-              onSearch: () => showDialog<void>(
-                context: context,
-                builder: (BuildContext ctx) => SearchDialog(
-                  novel: novel,
-                  onSelect: (SearchHit hit) {
-                    final Chapter? chapter = hit.chapter;
-                    if (chapter != null) {
-                      setState(() => _selectedChapterId = chapter.id);
-                    } else {
-                      WorldBookDialog.show(context, novel);
-                    }
-                  },
-                ),
-              ),
+              onSearch: _openSearch,
               onToggleFocus: _toggleFocus,
               onRead: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
@@ -373,13 +406,14 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
                 ),
               ),
               onWorldBook: () => WorldBookDialog.show(context, novel),
+              onNovelInfo: () => _editNovelInfo(novel),
               onDraftBox: () => showDraftBoxDialog(context, novel),
               onVolumeOutline: () => _openVolumeOutline(novel),
               onBeatBoard: _selectedChapter == null
                   ? null
-                  : () => BeatBoardDialog.show(context, novel, _selectedChapter!),
-              onCover: () =>
-                  CoverGenerator.showCoverPreview(context, novel),
+                  : () =>
+                        BeatBoardDialog.show(context, novel, _selectedChapter!),
+              onCover: () => CoverGenerator.showCoverPreview(context, novel),
               onExport: () => showExportDialog(context, novel),
               onGenerate: _openGenerate,
               onShortcuts: _showShortcuts,
@@ -405,8 +439,16 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
       AppToast.info(context, '先选一章再保存');
       return;
     }
-    AppToast.success(context, '已保存（自动保存已开启）',
-        duration: const Duration(milliseconds: 1100));
+    AppToast.success(
+      context,
+      '已保存（自动保存已开启）',
+      duration: const Duration(milliseconds: 1100),
+    );
+  }
+
+  void _exportCurrent() {
+    final Novel? novel = _novel;
+    if (novel != null) showExportDialog(context, novel);
   }
 
   /// 桌面端三栏（可拖宽）。
@@ -507,6 +549,7 @@ class _WorkspaceHeader extends ConsumerWidget {
     required this.onToggleFocus,
     required this.onRead,
     required this.onWorldBook,
+    required this.onNovelInfo,
     required this.onDraftBox,
     required this.onVolumeOutline,
     required this.onExport,
@@ -523,6 +566,7 @@ class _WorkspaceHeader extends ConsumerWidget {
   final VoidCallback onToggleFocus;
   final VoidCallback onRead;
   final VoidCallback onWorldBook;
+  final VoidCallback onNovelInfo;
   final VoidCallback onDraftBox;
   final VoidCallback onVolumeOutline;
   final VoidCallback? onBeatBoard;
@@ -536,11 +580,17 @@ class _WorkspaceHeader extends ConsumerWidget {
     final AppInk ink = AppInk.of(context);
     final GenrePreset preset = GenrePresets.get(novel.genre);
     final int words = novel.chapters.fold<int>(
-        0, (int a, Chapter c) => a + c.wordCount());
+      0,
+      (int a, Chapter c) => a + c.wordCount(),
+    );
 
     return Container(
       padding: const EdgeInsets.fromLTRB(
-          AppTokens.s3, AppTokens.s2, AppTokens.s4, AppTokens.s2),
+        AppTokens.s3,
+        AppTokens.s2,
+        AppTokens.s4,
+        AppTokens.s2,
+      ),
       decoration: BoxDecoration(
         color: ink.surface,
         border: Border(bottom: BorderSide(color: ink.divider)),
@@ -571,11 +621,13 @@ class _WorkspaceHeader extends ConsumerWidget {
                     novel.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: AppFonts.text(ink.ink,
+                    style: AppFonts.text(
+                      ink.ink,
                         size: 16.5,
                         weight: FontWeight.w700,
                         height: 1.3,
-                        serifFace: true),
+                      serifFace: true,
+                    ),
                   ),
                 ),
                 const SizedBox(width: AppTokens.s2 + 2),
@@ -583,20 +635,24 @@ class _WorkspaceHeader extends ConsumerWidget {
                 if (novel.archived)
                   const Padding(
                     padding: EdgeInsets.only(left: AppTokens.s2 - 2),
-                    child: TintBadge('已归档',
-                        dense: true, tone: BadgeTone.warn),
+                    child: TintBadge('已归档', dense: true, tone: BadgeTone.warn),
                   ),
                 const SizedBox(width: AppTokens.s3),
                 Text(
                   '${novel.chapters.length} 章 · ${TextFmt.words(words)} 字',
-                  style: AppFonts.text(ink.inkFaint,
-                      size: 12, height: 1.3, monoFace: true),
+                  style: AppFonts.text(
+                    ink.inkFaint,
+                    size: 12,
+                    height: 1.3,
+                    monoFace: true,
+                  ),
                 ),
                 if (chapter != null) ...<Widget>[
                   const SizedBox(width: AppTokens.s2),
-                  Text('· ${chapter!.title}',
-                      style: AppFonts.text(ink.inkSoft,
-                          size: 12, height: 1.3)),
+                  Text(
+                    '· ${chapter!.title}',
+                    style: AppFonts.text(ink.inkSoft, size: 12, height: 1.3),
+                  ),
                 ],
               ],
             ),
@@ -607,7 +663,10 @@ class _WorkspaceHeader extends ConsumerWidget {
           ActionGroup(
             children: <Widget>[
               ToolButton(
-                  icon: Icons.search, label: '全文搜索 (Ctrl+F)', onPressed: onSearch),
+                icon: Icons.search,
+                label: '全书搜索 (Ctrl+Shift+F)',
+                onPressed: onSearch,
+              ),
               ToolButton(
                 icon: focusMode ? Icons.fullscreen_exit : Icons.fullscreen,
                 label: '专注模式 (F11)',
@@ -617,16 +676,20 @@ class _WorkspaceHeader extends ConsumerWidget {
               ToolButton(
                   icon: Icons.menu_book_outlined,
                   label: '阅读预览',
-                  onPressed: onRead),
+                onPressed: onRead,
+              ),
               ToolButton(
                   icon: Icons.upload_outlined,
                   label: '导出 (Ctrl+E)',
-                  onPressed: onExport),
+                onPressed: onExport,
+              ),
               _ToolOverflow(
                 novel: novel,
                 onWorldBook: onWorldBook,
+                onNovelInfo: onNovelInfo,
                 onDraftBox: onDraftBox,
                 onVolumeOutline: onVolumeOutline,
+                onShortcuts: onShortcuts,
                 onBeatBoard: onBeatBoard,
                 onCover: onCover,
               ),
@@ -651,16 +714,20 @@ class _ToolOverflow extends StatelessWidget {
   const _ToolOverflow({
     required this.novel,
     required this.onWorldBook,
+    required this.onNovelInfo,
     required this.onDraftBox,
     required this.onVolumeOutline,
+    required this.onShortcuts,
     this.onBeatBoard,
     this.onCover,
   });
 
   final Novel novel;
   final VoidCallback onWorldBook;
+  final VoidCallback onNovelInfo;
   final VoidCallback onDraftBox;
   final VoidCallback onVolumeOutline;
+  final VoidCallback onShortcuts;
   final VoidCallback? onBeatBoard;
   final VoidCallback? onCover;
 
@@ -673,6 +740,10 @@ class _ToolOverflow extends StatelessWidget {
       icon: Icon(Icons.apps_outlined, size: 18, color: ink.inkSoft),
       onSelected: (String v) {
         switch (v) {
+          case 'info':
+            onNovelInfo();
+          case 'shortcuts':
+            onShortcuts();
           case 'world':
             onWorldBook();
           case 'draft':
@@ -686,23 +757,62 @@ class _ToolOverflow extends StatelessWidget {
         }
       },
       itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-        _line(context, 'world', Icons.auto_stories_outlined, '世界书',
-            '${novel.characters.length} 角色 · ${novel.worldSettings.length} 设定'),
-        _line(context, 'volume', Icons.account_tree_outlined, '卷纲总览',
-            '全书章节大纲一屏看'),
-        _line(context, 'draft', Icons.inventory_2_outlined, '存稿箱',
-            '${novel.drafts.length} 份草稿'),
+        _line(
+          context,
+          'info',
+          Icons.edit_note_outlined,
+          '作品信息',
+          '书名 / 题材 / 单章目标',
+        ),
+        _line(
+          context,
+          'world',
+          Icons.auto_stories_outlined,
+          '世界书',
+          '${novel.characters.length} 角色 · ${novel.worldSettings.length} 设定',
+        ),
+        _line(
+          context,
+          'volume',
+          Icons.account_tree_outlined,
+          '卷纲总览',
+          '全书章节大纲一屏看',
+        ),
+        _line(
+          context,
+          'draft',
+          Icons.inventory_2_outlined,
+          '存稿箱',
+          '${novel.drafts.length} 份草稿',
+        ),
         if (onBeatBoard != null)
           _line(context, 'beat', Icons.view_week_outlined, '节拍板', '本章场景与节奏'),
         if (onCover != null)
-          _line(context, 'cover', Icons.auto_awesome_mosaic_outlined, '封面生成',
-              '导出配图'),
+          _line(
+            context,
+            'cover',
+            Icons.auto_awesome_mosaic_outlined,
+            '封面生成',
+            '导出配图',
+          ),
+        _line(
+          context,
+          'shortcuts',
+          Icons.keyboard_outlined,
+          '快捷键',
+          'Ctrl+/ 随时可查',
+        ),
       ],
     );
   }
 
-  PopupMenuItem<String> _line(BuildContext context, String value, IconData icon,
-      String title, String hint) {
+  PopupMenuItem<String> _line(
+    BuildContext context,
+    String value,
+    IconData icon,
+    String title,
+    String hint,
+  ) {
     return PopupMenuItem<String>(
       value: value,
       child: Row(
@@ -717,7 +827,9 @@ class _ToolOverflow extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                  fontSize: 11.5, color: AppInk.of(context).inkFaint),
+                fontSize: 11.5,
+                color: AppInk.of(context).inkFaint,
+              ),
             ),
           ),
         ],
