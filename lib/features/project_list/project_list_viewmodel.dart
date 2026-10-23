@@ -115,15 +115,20 @@ class ProjectListViewModel extends StateNotifier<ProjectListState> {
     }
   }
 
-  /// 删除项目并刷新列表。
-  Future<void> delete(String id) async {
+  /// 删除项目（移入回收站）并刷新列表；返回是否成功。
+  ///
+  /// 调用方必须看返回值：删除失败时项目仍在书架，不能一律提示「已删除」。
+  Future<bool> delete(String id) async {
     try {
       await _repo.deleteNovel(id);
       await load();
+      return true;
     } on AppException catch (e) {
       state = state.copyWith(error: e.message);
+      return false;
     } catch (e) {
       state = state.copyWith(error: '删除作品失败：$e');
+      return false;
     }
   }
 

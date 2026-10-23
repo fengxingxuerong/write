@@ -671,7 +671,7 @@ void main() {
   });
 
   group('删除清理备份', () {
-    test('deleteNovel 把主文件/备份/临时文件一并清掉（防止备份自愈复活已删项目）', () async {
+    test('deleteNovel 把主文件/备份/临时文件移出原目录（防止备份自愈复活已删项目）', () async {
       final Novel novel = await novelRepo.createNovel(
         title: '删除清理',
         genre: 'xuanhuan',

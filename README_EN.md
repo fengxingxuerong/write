@@ -50,7 +50,7 @@
 
 - **JSON file storage**: one `.json` file per project (`meta` + `chapters` + `characters` + `worldSettings`). Copy the file to another machine and you have migrated.
 - **Manuscript import**: the shelf's **Import** action accepts **TXT / Markdown**, recognizes 「第 X 章 / 序章 / 楔子 / 番外」 and Markdown headings, previews the chapter split and word count, then creates a new work. The source file is read-only and existing projects are never overwritten. UTF-8 (with BOM) and UTF-16 LE/BE (with BOM; BOM-less ASCII is also sniffed) are supported; GBK files get an actionable "save as UTF-8" message rather than being silently decoded into mojibake.
-- **Project list**: title search, filtering (all / in progress / archived), cards showing genre·chapter count·word count·last update; supports **archive / unarchive** (no data is deleted).
+- **Project list**: title search, filtering (all / in progress / archived), cards showing genre·chapter count·word count·last update; supports **archive / unarchive** (no data is deleted); deleted works go to a **trash** kept for 30 days and can be restored or permanently removed.
 - **Backup & restore**: import a JSON backup directly from the shelf. Importing copies it as a new work and rewrites the internal IDs, so existing projects are never overwritten.
 - **Characters / worldbuilding / outlines**: structured editing, maintained continuously as chapters advance. A **volume outline overview** dialog aggregates the outline key points of every chapter and can copy them in one click as the input for multi-chapter continuous writing.
 - **Project info**: title, genre, tone and per-chapter word target can be changed at any time; the target drives chapter progress and writing statistics (0 = no target), instead of mistaking the generation cap for a writing goal.
@@ -231,7 +231,7 @@ The local equivalent is `powershell -ExecutionPolicy Bypass -File verify-novel.p
 
 ## Where data is stored
 
-- Project data: `applicationSupportDirectory/novels/` on each platform — one `<id>.json` file per project plus an `index.json` index.
+- Project data: `applicationSupportDirectory/novels/` on each platform — one `<id>.json` file per project plus an `index.json` index; deleted projects are kept in `novels/trash/` (30 days or at most 50 entries, restorable from the shelf's **Trash**).
 - AI settings: `llm_settings.json` (written atomically via tmp+rename; the Windows desktop build encrypts the API key with DPAPI, and local Ollama addresses need no API key).
 - Reader settings: `app_settings.json` (theme / font size / line height / serif).
 - Sensitive words: `sensitive_words.json` (custom terms) + `sensitive_stats.json` (historical hit statistics).

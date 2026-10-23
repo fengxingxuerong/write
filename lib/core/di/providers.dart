@@ -23,6 +23,7 @@ import 'package:novel_writer/storage/novel_repository.dart';
 import 'package:novel_writer/storage/novel_backup_service.dart';
 import 'package:novel_writer/storage/manuscript_import_service.dart';
 import 'package:novel_writer/storage/setting_repository.dart';
+import 'package:novel_writer/storage/trash_service.dart';
 
 /// 全局主题模式由阅读设置中的 appTheme 派生，修改后立即持久化。
 final Provider<ThemeMode> themeModeProvider = Provider<ThemeMode>((ref) {
@@ -73,6 +74,11 @@ final Provider<ManuscriptImportService> manuscriptImportServiceProvider =
     Provider<ManuscriptImportService>((ref) {
       return ManuscriptImportService(ref.watch(novelRepositoryProvider));
     });
+
+/// 作品回收站：删除可恢复（30 天 / 最多 50 份）。
+final Provider<TrashStore> trashStoreProvider = Provider<TrashStore>((ref) {
+  return TrashService(ref.watch(appDatabaseProvider));
+});
 
 /// 设定仓库：角色 / 世界观的 CRUD（同样落盘到单 json）。
 final Provider<SettingRepository> settingRepositoryProvider =

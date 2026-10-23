@@ -14,10 +14,12 @@ import 'package:novel_writer/features/project_list/crash_logs_dialog.dart';
 import 'package:novel_writer/features/project_list/manuscript_import_dialog.dart';
 import 'package:novel_writer/features/project_list/novel_card.dart';
 import 'package:novel_writer/features/project_list/project_list_viewmodel.dart';
+import 'package:novel_writer/features/project_list/trash_dialog.dart';
 import 'package:novel_writer/features/workspace/book_qa_report_dialog.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/storage/app_database.dart';
 import 'package:novel_writer/storage/manuscript_import_service.dart';
+import 'package:novel_writer/storage/trash_service.dart';
 import 'package:novel_writer/widgets/app_card.dart';
 import 'package:novel_writer/widgets/app_feedback.dart';
 import 'package:novel_writer/widgets/app_skeleton.dart';
@@ -63,6 +65,7 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
         children: <Widget>[
           _Masthead(
             onImport: _startImport,
+            onTrash: _showTrash,
             novelCount: state.novels.length,
             totalWords:
                 state.novels.fold<int>(0, (int a, NovelSummary n) => a + n.wordCount),
@@ -249,18 +252,32 @@ class _ProjectListPageState extends ConsumerState<ProjectListPage> {
         .rename(novel.id, title.trim());
   }
 
+  /// 打开回收站；恢复或永久删除后刷新书架。
+  Future<void> _showTrash() async {
+    final TrashStore store = ref.read(trashStoreProvider);
+    await showTrashDialog(context, store);
+    if (!mounted) return;
+    await ref.read(projectListViewModelProvider.notifier).load();
+  }
+
   Future<void> _confirmDelete(NovelSummary novel) async {
     final bool ok = await showConfirmDialog(
       context,
       title: '删除作品',
       content: '确定删除《${novel.title}》？\n${novel.chapterCount} 章 · '
-          '${TextFmt.words(novel.wordCount)} 字会一并移除，该操作不可恢复。',
-      confirmLabel: '删除',
+          '${TextFmt.words(novel.wordCount)} 字会移入回收站，保留 30 天（最多 50 份），期间可以恢复。',
+      confirmLabel: '移入回收站',
       danger: true,
     );
     if (!ok || !mounted) return;
-    await ref.read(projectListViewModelProvider.notifier).delete(novel.id);
-    if (mounted) AppToast.info(context, '已删除《${novel.title}》');
+    final bool deleted =
+        await ref.read(projectListViewModelProvider.notifier).delete(novel.id);
+    if (!mounted) return;
+    if (deleted) {
+      AppToast.info(context, '已移入回收站；可在书架右上角「回收站」恢复');
+    } else {
+      AppToast.error(context, '删除失败，作品仍在书架');
+    }
   }
 }
 
@@ -270,11 +287,13 @@ class _Masthead extends ConsumerWidget {
     required this.novelCount,
     required this.totalWords,
     required this.onImport,
+    required this.onTrash,
   });
 
   final int novelCount;
   final int totalWords;
   final VoidCallback onImport;
+  final VoidCallback onTrash;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -329,6 +348,12 @@ class _Masthead extends ConsumerWidget {
                 label: '导入',
                 tooltip: '导入 JSON 备份或 TXT / Markdown 原稿',
                 onPressed: onImport,
+              ),
+              ToolButton(
+                icon: Icons.restore_from_trash_outlined,
+                label: '回收站',
+                tooltip: '回收站（删除的作品保留 30 天，可恢复）',
+                onPressed: onTrash,
               ),
               ToolButton(
                 icon: Icons.auto_awesome,

@@ -65,8 +65,15 @@ void main() {
       final novel = await repo.createNovel(title: '待删', genre: 'x', tone: 'y');
       await vm.load();
       expect(vm.state.novels, hasLength(1));
-      await vm.delete(novel.id);
+      expect(await vm.delete(novel.id), isTrue);
       expect(vm.state.novels, isEmpty);
+    });
+
+    test('delete 失败时返回 false 并保留错误，不能谎报成功', () async {
+      final ProjectListViewModel failingVm =
+          ProjectListViewModel(_ThrowingRepo());
+      expect(await failingVm.delete('n1'), isFalse);
+      expect(failingVm.state.error, contains('存储层故障'));
     });
 
     test('rename 更新标题', () async {

@@ -45,6 +45,11 @@ void main() {
         // 刊头与工具条不能被挤掉。
         expect(find.text('我的作品'), findsOneWidget);
         expect(find.text('新建作品'), findsWidgets);
+        // 删除可恢复的入口必须真的在书架上，而不是只写在文档里。
+        expect(
+          find.byTooltip('回收站（删除的作品保留 30 天，可恢复）'),
+          findsOneWidget,
+        );
         // 空态不该出现（有数据时）。
         expect(find.text('书架还是空的'), findsNothing);
         // 6 本书 + 末尾「新建」卡。

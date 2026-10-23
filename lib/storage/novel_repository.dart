@@ -8,6 +8,7 @@ import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/world_setting.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/storage/app_database.dart';
+import 'package:novel_writer/storage/trash_service.dart';
 
 /// 项目仓库：负责单 json 文件的读写与索引维护。
 ///
@@ -102,12 +103,21 @@ class NovelRepository {
     return mutateNovel(id, (Novel novel) => novel.copyWith(archived: archived));
   }
 
-  /// 删除项目（删除 json / 备份 / 残留临时文件，并从索引移除）。
+  /// 删除项目（移入回收站，保留 30 天；索引立即移除）。
+  ///
+  /// 回收站写入失败时不删索引、不动主文件，让「删除」保持全有或全无：
+  /// 宁可这次删除失败，也不能出现「书架没了、回收站也没有」的静默丢失。
   Future<void> deleteNovel(String id) {
     return db.withNovelLock(id, () async {
       final File file = db.novelFile(id);
       if (await file.exists()) {
-        await file.delete();
+        Novel? novel;
+        try {
+          novel = await db.readNovel(id);
+        } catch (_) {
+          // 文件损坏也要尽力把原始文件收进回收站，而不是直接销毁。
+        }
+        await TrashService(db).moveToTrash(id, novel: novel);
       }
       // 备份与临时文件必须一并清理：readNovel 有「主文件缺失时从备份自愈」
       // 的兜底，若留下 .bak.json，已删除的项目会在下次读取时"复活"。

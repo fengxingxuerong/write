@@ -30,7 +30,7 @@
 ### 小说管理
 - **JSON 文件存储**：每个小说项目单个 `.json` 文件（meta + chapters + characters + worldSettings），跨端拷贝即迁移
 - **导入原稿**：书架「导入」支持 **TXT / Markdown**，自动识别「第 X 章 / 序章 / 楔子 / 番外」与 Markdown 标题，先预览拆章结果与字数，再建成新作品；只读源文件、不覆盖现有项目。支持 UTF-8（含 BOM）与 UTF-16 LE/BE（含 BOM；无 BOM 的 ASCII 也会嗅探），GBK 原稿会提示另存为 UTF-8（Dart 标准库无 GBK 解码器，不静默解成乱码）
-- **项目列表**：标题搜索、筛选（全部/进行中/已归档）、卡片显示题材·章数·字数·更新时间；支持**归档/取消归档**（不删数据）
+- **项目列表**：标题搜索、筛选（全部/进行中/已归档）、卡片显示题材·章数·字数·更新时间；支持**归档/取消归档**（不删数据）；删除作品会移入**回收站**保留 30 天，可恢复或永久删除
 - **备份恢复**：书架可直接导入 JSON 备份；导入会复制为新作品并重写内部 ID，不会覆盖现有项目。
 - **角色 / 世界观 / 大纲**：结构化编辑，随章节推进持续维护；**卷纲总览**弹窗汇总全书各章大纲要点，可一键复制为多章连写的卷纲输入
 - **作品信息**：书名、题材、基调与单章目标字数都可随时修改；单章目标用于章节进度与写作统计（0 = 不设目标），不再把生成上限当成写作目标
@@ -204,7 +204,7 @@ flutter test
 
 ## 数据存储位置
 
-- 项目数据：各平台 `applicationSupportDirectory/novels/`，每个项目一个 `<id>.json` 文件 + 一个 `index.json` 索引。
+- 项目数据：各平台 `applicationSupportDirectory/novels/`，每个项目一个 `<id>.json` 文件 + 一个 `index.json` 索引；删除的项目暂存于 `novels/trash/`（30 天或最多 50 份，可在书架「回收站」恢复）。
 - AI 设置：`llm_settings.json`（原子写 tmp+rename；Windows 桌面版使用 DPAPI 加密 API Key，本地 Ollama 地址免 API Key）。
 - 阅读设置：`app_settings.json`（主题/字号/行距/衬线）。
 - 敏感词：`sensitive_words.json`（自定义词）+ `sensitive_stats.json`（历史命中统计）。
