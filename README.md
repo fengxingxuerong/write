@@ -18,6 +18,7 @@
 - **编辑器**：防抖 3 秒自动保存 + 失焦/退出立即保存；字数实时统计 + **字数目标进度条**；字号（10~28）/ 行距（1.4~2.0）调节
 - **写作统计**：当前章节字数 / 段落数 / 句子数 / 今日写作量 / 平均句长
 - **章节分割**：按空行块把长章节一键拆分为多章（自动重排顺序）
+- **章节删除可恢复**：删除单章会先移入章节回收站，保留 30 天（每本最多 50 章），可从章节栏右上角恢复，并尽量放回原位置
 - **查找替换（Ctrl+F）**：实时匹配计数、↑/↓ 循环跳转、替换当前 / 全部替换；替换后自动触发敏感词复查
 - **全书检索**：支持搜索章节正文、章节标题、章节大纲、角色档案和世界观设定，并显示命中来源与上下文片段
 - **番茄钟**：25 分钟专注计时，编辑时随时开关
@@ -204,7 +205,7 @@ flutter test
 
 ## 数据存储位置
 
-- 项目数据：各平台 `applicationSupportDirectory/novels/`，每个项目一个 `<id>.json` 文件 + 一个 `index.json` 索引；删除的项目暂存于 `novels/trash/`（30 天或最多 50 份，可在书架「回收站」恢复）。
+- 项目数据：各平台 `applicationSupportDirectory/novels/`，每个项目一个 `<id>.json` 文件 + 一个 `index.json` 索引；删除的项目暂存于 `novels/trash/projects/`（30 天或最多 50 份，可在书架「回收站」恢复），删除的章节暂存于 `novels/trash/chapters/`。
 - AI 设置：`llm_settings.json`（原子写 tmp+rename；Windows 桌面版使用 DPAPI 加密 API Key，本地 Ollama 地址免 API Key）。
 - 阅读设置：`app_settings.json`（主题/字号/行距/衬线）。
 - 敏感词：`sensitive_words.json`（自定义词）+ `sensitive_stats.json`（历史命中统计）。

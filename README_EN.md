@@ -37,6 +37,7 @@
 - **Editor**: 3-second debounced autosave plus an immediate save on blur/exit; live word count with a **word-goal progress bar**; font size (10–28) and line height (1.4–2.0) adjustment.
 - **Writing statistics**: current chapter word count / paragraphs / sentences / words written today / mean sentence length.
 - **Chapter splitting**: split a long chapter into multiple chapters by blank-line block in one click (order is re-indexed automatically).
+- **Recoverable chapter deletion**: deleting a chapter first writes its prose and outline to a chapter trash, kept for 30 days (up to 50 per book); restore from the chapter panel's trash button and it is placed back near its original position.
 - **Find & replace (Ctrl+F)**: live match count, ↑/↓ cyclic jumping, replace current / replace all; a sensitive-word recheck is triggered automatically after replacement.
 - **Whole-book search**: search chapter prose, chapter titles, chapter outlines, character profiles and worldbuilding settings, showing the hit source and a context snippet.
 - **Pomodoro timer**: 25-minute focus timer, toggleable at any time while editing.
@@ -231,7 +232,7 @@ The local equivalent is `powershell -ExecutionPolicy Bypass -File verify-novel.p
 
 ## Where data is stored
 
-- Project data: `applicationSupportDirectory/novels/` on each platform — one `<id>.json` file per project plus an `index.json` index; deleted projects are kept in `novels/trash/` (30 days or at most 50 entries, restorable from the shelf's **Trash**).
+- Project data: `applicationSupportDirectory/novels/` on each platform — one `<id>.json` file per project plus an `index.json` index; deleted projects are kept in `novels/trash/projects/` (30 days or at most 50 entries, restorable from the shelf's **Trash**), and deleted chapters in `novels/trash/chapters/`.
 - AI settings: `llm_settings.json` (written atomically via tmp+rename; the Windows desktop build encrypts the API key with DPAPI, and local Ollama addresses need no API key).
 - Reader settings: `app_settings.json` (theme / font size / line height / serif).
 - Sensitive words: `sensitive_words.json` (custom terms) + `sensitive_stats.json` (historical hit statistics).

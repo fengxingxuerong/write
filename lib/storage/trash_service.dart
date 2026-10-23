@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/storage/app_database.dart';
+import 'package:novel_writer/storage/chapter_trash_service.dart';
 
 /// 回收站中的一本作品。
 class TrashEntry {
@@ -58,7 +59,7 @@ abstract interface class TrashStore {
 /// 本地作品回收站。
 ///
 /// 删除作品不再直接删文件，而是把主文件与备份文件移动到
-/// `novels/trash/<millis>-<id>/`，并写一份 `meta.json` 供列表展示。
+/// `novels/trash/projects/<millis>-<id>/`，并写一份 `meta.json` 供列表展示。
 /// 默认保留 30 天、最多 50 份；超期/超量自动清理，用户也可以手动永久删除。
 ///
 /// 为什么保留原始 JSON 而不是只存一份摘要：恢复必须做到**逐字还原**，
@@ -78,7 +79,9 @@ class TrashService implements TrashStore {
   String get _sep => Platform.pathSeparator;
 
   /// 回收站根目录。
-  Directory get directory => Directory('${db.directory.path}${_sep}trash');
+  /// 回收站根目录（按类型分目录，避免「清空作品回收站」误删章节回收站）。
+  Directory get directory =>
+      Directory('${db.directory.path}${_sep}trash${_sep}projects');
 
   /// 把一本作品移入回收站。
   ///
@@ -258,14 +261,19 @@ class TrashService implements TrashStore {
 
   @override
   Future<void> purge(TrashEntry entry) async {
-    await _deleteFolder(Directory(entry.folderPath));
+    await _purgeEntry(entry);
   }
 
   @override
   Future<void> purgeAll() async {
     if (!await directory.exists()) return;
+    final List<TrashEntry> entries = await _scan();
+    for (final TrashEntry entry in entries) {
+      await _purgeEntry(entry);
+    }
+    // 清掉没有 meta/主文件的残留目录，避免永久删除后还留碎片。
     await for (final FileSystemEntity entity in directory.list()) {
-      if (entity is Directory) {
+      if (entity is Directory && await entity.exists()) {
         await _deleteFolder(entity);
       }
     }
@@ -282,7 +290,7 @@ class TrashService implements TrashStore {
     for (final TrashEntry entry in entries) {
       if (entry.deletedAt.isBefore(cutoff)) {
         try {
-          await _deleteFolder(Directory(entry.folderPath));
+          await _purgeEntry(entry);
         } catch (_) {
           // 自动清理失败不应让整个回收站打不开（可能是杀软短暂占用）。
         }
@@ -300,7 +308,7 @@ class TrashService implements TrashStore {
     final int removeCount = entries.length - maxEntries;
     for (int i = 0; i < removeCount; i++) {
       try {
-        await _deleteFolder(Directory(entries[i].folderPath));
+        await _purgeEntry(entries[i]);
       } catch (_) {
         // 同上：自动清理失败不阻塞列表。
       }
@@ -369,6 +377,20 @@ class TrashService implements TrashStore {
       }
     } catch (e) {
       throw StorageException('清理回收站失败', e);
+    }
+  }
+
+  /// 永久删除一条作品记录时，连带清掉它名下的章节回收站。
+  ///
+  /// 否则用户看到「永久删除作品」后会以为所有正文都没了，实际上章节碎片
+  /// 还留在 `trash/chapters/<novelId>/`。章节回收站属于该作品，恢复入口也
+  /// 依附于作品；作品被永久删除后它们已无处可恢复。
+  Future<void> _purgeEntry(TrashEntry entry) async {
+    await _deleteFolder(Directory(entry.folderPath));
+    try {
+      await ChapterTrashService(db).purgeAll(entry.id);
+    } catch (_) {
+      // 章节回收站清理失败不应让作品永久删除失败；残留目录不影响书架。
     }
   }
 }

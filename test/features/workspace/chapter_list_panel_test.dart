@@ -47,6 +47,26 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('章节栏可以打开最近删除的章节', (WidgetTester tester) async {
+    bool opened = false;
+    await tester.pumpWidget(_wrap(ChapterListPanel(
+      chapters: <Chapter>[_ch(1, '第一章', '甲' * 10)],
+      selectedChapterId: null,
+      onSelect: (_) {},
+      onAdd: () {},
+      onDelete: (_) {},
+      onMoveUp: (_) {},
+      onMoveDown: (_) {},
+      onEditOutline: (_) {},
+      onReorder: (_, __) {},
+      onShowTrash: () => opened = true,
+    )));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('最近删除的章节'));
+    expect(opened, isTrue);
+  });
+
   testWidgets('空列表给出可点的下一步，而不是「暂无章节」四个字', (WidgetTester tester) async {
     await tester.pumpWidget(_wrap(ChapterListPanel(
       chapters: const <Chapter>[],

@@ -18,6 +18,7 @@ import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/storage/app_database.dart';
 import 'package:novel_writer/storage/chapter_repository.dart';
 import 'package:novel_writer/storage/chapter_snapshot_service.dart';
+import 'package:novel_writer/storage/chapter_trash_service.dart';
 import 'package:novel_writer/storage/goal_repository.dart';
 import 'package:novel_writer/storage/novel_repository.dart';
 import 'package:novel_writer/storage/novel_backup_service.dart';
@@ -79,6 +80,12 @@ final Provider<ManuscriptImportService> manuscriptImportServiceProvider =
 final Provider<TrashStore> trashStoreProvider = Provider<TrashStore>((ref) {
   return TrashService(ref.watch(appDatabaseProvider));
 });
+
+/// 章节回收站：删除单章可恢复（30 天 / 每本最多 50 章）。
+final Provider<ChapterTrashStore> chapterTrashStoreProvider =
+    Provider<ChapterTrashStore>((ref) {
+      return ChapterTrashService(ref.watch(appDatabaseProvider));
+    });
 
 /// 设定仓库：角色 / 世界观的 CRUD（同样落盘到单 json）。
 final Provider<SettingRepository> settingRepositoryProvider =

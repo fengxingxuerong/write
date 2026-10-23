@@ -142,7 +142,7 @@ class _TrashDialogState extends State<_TrashDialog> {
         children: <Widget>[
           Icon(Icons.restore_from_trash_outlined, size: 20, color: ink.primary),
           const SizedBox(width: AppTokens.s2),
-          const Text('回收站'),
+          const Text('作品回收站'),
         ],
       ),
       content: SizedBox(width: width, height: height, child: _buildBody(ink)),
@@ -169,7 +169,7 @@ class _TrashDialogState extends State<_TrashDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Text('回收站读取失败', style: AppFonts.text(ink.ink, size: 14)),
+            Text('作品回收站读取失败', style: AppFonts.text(ink.ink, size: 14)),
             const SizedBox(height: AppTokens.s2),
             Text(_error!, style: AppFonts.text(ink.inkFaint, size: 12)),
             const SizedBox(height: AppTokens.s3),

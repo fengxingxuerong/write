@@ -13,6 +13,7 @@ import 'package:novel_writer/features/generate/generate_dialog.dart';
 import 'package:novel_writer/features/reader/reader_page.dart';
 import 'package:novel_writer/features/workspace/beat_board_dialog.dart';
 import 'package:novel_writer/features/workspace/chapter_list_panel.dart';
+import 'package:novel_writer/features/workspace/chapter_trash_dialog.dart';
 import 'package:novel_writer/features/workspace/draft_box_dialog.dart';
 import 'package:novel_writer/features/workspace/novel_info_dialog.dart';
 import 'package:novel_writer/features/workspace/outline_dialog.dart';
@@ -24,6 +25,7 @@ import 'package:novel_writer/features/workspace/world_book_dialog.dart';
 import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/services/search_service.dart';
+import 'package:novel_writer/storage/chapter_trash_service.dart';
 import 'package:novel_writer/widgets/app_card.dart';
 import 'package:novel_writer/widgets/app_feedback.dart';
 import 'package:novel_writer/widgets/app_skeleton.dart';
@@ -103,16 +105,30 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
       context,
       title: '删除章节',
       content: target == null
-          ? '确定删除这一章？正文会一并移除，不可恢复。'
-          : '确定删除《${target.title}》？${TextFmt.words(target.wordCount())} 字正文会一并移除，不可恢复。',
+          ? '确定删除这一章？会移入章节回收站，保留 30 天，可从章节栏右上角恢复。'
+          : '确定删除《${target.title}》？${TextFmt.words(target.wordCount())} 字正文会移入章节回收站，保留 30 天，可从章节栏右上角恢复。',
       confirmLabel: '删除',
       danger: true,
     );
     if (!ok || !mounted) return;
-    await ref.read(chapterRepositoryProvider).deleteChapter(widget.novelId, id);
-    if (_selectedChapterId == id) _selectedChapterId = null;
+    try {
+      await ref
+          .read(chapterRepositoryProvider)
+          .deleteChapter(widget.novelId, id);
+      if (_selectedChapterId == id) _selectedChapterId = null;
+      await _reload();
+      if (mounted) AppToast.info(context, '章节已移入回收站，可随时恢复');
+    } catch (e) {
+      if (mounted) AppToast.error(context, '删除章节失败：$e');
+    }
+  }
+
+  /// 打开章节回收站；恢复或永久删除后刷新当前作品。
+  Future<void> _showChapterTrash() async {
+    final ChapterTrashStore store = ref.read(chapterTrashStoreProvider);
+    await showChapterTrashDialog(context, store, novelId: widget.novelId);
+    if (!mounted) return;
     await _reload();
-    if (mounted) AppToast.info(context, '章节已删除');
   }
 
   Future<void> _editOutline(Chapter chapter) async {
@@ -464,6 +480,7 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
         onMoveDown: (int i) => _move(i, 1),
         onEditOutline: _editOutline,
         onReorder: _reorder,
+        onShowTrash: _showChapterTrash,
         targetWordsPerChapter: novel.targetWordsPerChapter,
       ),
       center: EditorPage(
@@ -501,6 +518,7 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
                 onMoveDown: (int i) => _move(i, 1),
                 onEditOutline: _editOutline,
                 onReorder: _reorder,
+                onShowTrash: _showChapterTrash,
                 targetWordsPerChapter: novel.targetWordsPerChapter,
               ),
             1 => EditorPage(

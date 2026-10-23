@@ -93,7 +93,7 @@ void main() {
     ]);
     await open(tester, store);
 
-    expect(find.text('回收站'), findsOneWidget);
+    expect(find.text('作品回收站'), findsOneWidget);
     expect(find.text('被删的书'), findsOneWidget);
     expect(find.text('另一本书'), findsOneWidget);
     expect(find.textContaining('3 章'), findsOneWidget);
@@ -163,7 +163,7 @@ void main() {
     final _FakeTrash store = _FakeTrash(<TrashEntry>[])..failList = true;
     await open(tester, store);
 
-    expect(find.text('回收站读取失败'), findsOneWidget);
+    expect(find.text('作品回收站读取失败'), findsOneWidget);
     store.failList = false;
     await tester.tap(find.text('重试'));
     await tester.pumpAndSettle();

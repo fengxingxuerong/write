@@ -23,6 +23,7 @@ class ChapterListPanel extends StatefulWidget {
     required this.onMoveDown,
     required this.onEditOutline,
     required this.onReorder,
+    this.onShowTrash,
     this.targetWordsPerChapter = 0,
   });
 
@@ -53,6 +54,9 @@ class ChapterListPanel extends StatefulWidget {
   /// 拖拽重排回调（oldIndex → newIndex）。
   final void Function(int oldIndex, int newIndex) onReorder;
 
+  /// 打开「最近删除的章节」。
+  final VoidCallback? onShowTrash;
+
   /// 单章目标字数（>0 时每行显示达成度）。
   final int targetWordsPerChapter;
 
@@ -76,6 +80,7 @@ class _ChapterListPanelState extends State<ChapterListPanel> {
           count: widget.chapters.length,
           words: _totalWords,
           onAdd: widget.onAdd,
+          onShowTrash: widget.onShowTrash,
         ),
         Container(height: AppTokens.hairline, color: ink.divider),
         Expanded(
@@ -129,12 +134,14 @@ class _Header extends StatelessWidget {
     required this.count,
     required this.words,
     required this.onAdd,
+    this.onShowTrash,
   });
 
   final AppInk ink;
   final int count;
   final int words;
   final VoidCallback onAdd;
+  final VoidCallback? onShowTrash;
 
   @override
   Widget build(BuildContext context) {
@@ -160,6 +167,13 @@ class _Header extends StatelessWidget {
             ),
           ),
           const SizedBox(width: AppTokens.s2 - 2),
+          if (onShowTrash != null)
+            IconButton(
+              icon: const Icon(Icons.restore_from_trash_outlined, size: 18),
+              tooltip: '最近删除的章节',
+              visualDensity: VisualDensity.compact,
+              onPressed: onShowTrash,
+            ),
           IconButton(
             icon: const Icon(Icons.add, size: 18),
             tooltip: '新增章节',

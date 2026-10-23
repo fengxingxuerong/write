@@ -6,6 +6,7 @@ import 'package:novel_writer/models/chapter.dart';
 import 'package:novel_writer/models/chapter_draft.dart';
 import 'package:novel_writer/models/novel.dart';
 import 'package:novel_writer/storage/app_database.dart';
+import 'package:novel_writer/storage/chapter_trash_service.dart';
 import 'package:novel_writer/storage/chapter_snapshot_service.dart';
 
 /// 章节仓库：在单 json 内对 chapters 做增删改、排序与自动保存。
@@ -20,13 +21,16 @@ import 'package:novel_writer/storage/chapter_snapshot_service.dart';
 /// 不同项目仍可并发。
 class ChapterRepository {
   /// 构造仓库。[snapshots] 可选：注入后启用版本快照。
-  const ChapterRepository(this.db, {this.snapshots});
+  const ChapterRepository(this.db, {this.snapshots, this.chapterTrash});
 
   /// 数据库句柄。
   final AppDatabase db;
 
   /// 版本快照服务（null 表示禁用快照）。
   final ChapterSnapshotService? snapshots;
+
+  /// 章节回收站（null 时使用默认实现）。
+  final ChapterTrashService? chapterTrash;
 
   /// 发起一次快照（fire-and-forget：失败不影响保存主流程）。
   void _snap(
@@ -191,10 +195,16 @@ class ChapterRepository {
     });
   }
 
-  /// 删除章节，并重新索引 order 保持连续。
+  /// 删除章节：先写入章节回收站，再重新索引 order 保持连续。
   Future<void> deleteChapter(String novelId, String chapterId) {
     return db.withNovelLock(novelId, () async {
       final Novel novel = await db.readNovel(novelId);
+      final Chapter? target =
+          novel.chapters.where((c) => c.id == chapterId).firstOrNull;
+      if (target != null) {
+        // 写入失败会抛出并中止删除：宁可这次删不掉，也不能让正文凭空消失。
+        await (chapterTrash ?? ChapterTrashService(db)).moveToTrash(target);
+      }
       final List<Chapter> remaining = novel.chapters
           .where((c) => c.id != chapterId)
           .toList()
