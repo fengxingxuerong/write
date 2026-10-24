@@ -2,7 +2,8 @@
 ; 编译: ISCC.exe installer.iss
 
 #define MyAppName "墨匠 InkSmith"
-#define MyAppVersion "0.1.0"
+; 与 pubspec.yaml 的 1.0.0+2 对齐：安装包展示语义版本，build 号不进入文件名。
+#define MyAppVersion "1.0.0"
 #define MyAppPublisher "InkSmith"
 #define MyAppExeName "novel_writer.exe"
 
