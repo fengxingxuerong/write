@@ -3,7 +3,8 @@
 // 启用方式（PowerShell）：
 //   $env:NOVEL_LIVE = '1'
 //   $env:NOVEL_KEY_FILE = 'D:/Desktop/新建 Text Document.txt'   # 可选，默认读仓库 .env.local
-//   flutter test test/ai_pipeline/role_workflow_live_test.dart --timeout 20m
+//   flutter test test/ai_pipeline/role_workflow_live_test.dart
+//   （超时由测试内置 Timeout(45min) 控制，命令行 --timeout 不生效）
 //
 // 做法：把配置文件里的密钥按「策划/写手/编辑/标题/审校」固定分工装配成端点链，
 // 跑软件内置的 AiPipelineService 生成一部短篇（规划→场景→正文→润色→审校），
@@ -58,7 +59,10 @@ void main() {
         expect(c.llm.isConfigured, isTrue, reason: '${r.label} 主模型未配置');
       }
 
-      // 3) 跑内置流水线：3 章、约 4500 字，开启编辑、审校、质量评分和低分重写。
+      // 3) 跑内置流水线：目标 9000 字、上限 3 章，开启编辑、审校、质量评分和低分重写。
+      //    当前云端端点章均 3000~4000+ 字，9000 字目标下 2 章（约 1 万字）即达标，第 3 章
+      //    不再产出（达标即停），由 maxChapters=3 作为硬上限兜底。这与冒烟门禁
+      //    --total-words 自锁是同一根因（见 docs/交付文档.md 9.2），测试断言已放宽为 >= 2 章。
       final Directory out = Directory('verify-logs')
         ..createSync(recursive: true);
       final PipelineStorage storage = PipelineStorage(
@@ -66,7 +70,7 @@ void main() {
         secretStore: InMemorySecretStore(),
       );
       final AiPipelineConfig config = AiPipelineConfig(
-        totalWords: 4500,
+        totalWords: 9000,
         maxChapters: 3,
         genre: '玄幻',
         protagonist: '林舟',
@@ -117,8 +121,13 @@ void main() {
       );
 
       // 4) 断言：跑完、有稿、成稿达到基本体量。
+      //    当前云端端点章均 3000~4000+ 字，9000 字目标下 2 章即达标（ai_pipeline_service
+      //    章循环的 totalWords >= config.totalWords break），第 3 章由 maxChapters=3 作为上限
+      //    兜底而非强制产出——这与冒烟门禁 --total-words 自锁是同一根因，测试不应
+      //    与产品「达标即停」逻辑对冲。2 章已完整覆盖全部角色链（规划/写手/编辑/
+      //    标题/审校/终审/打回重写），故断言 >= 2 章即可。
       expect(task.status, PipelineTaskStatus.done);
-      expect(task.chapters, hasLength(3));
+      expect(task.chapters.length, greaterThanOrEqualTo(2));
       expect(task.totalWords, greaterThanOrEqualTo(3000));
       for (final PipelineChapter c in task.chapters) {
         final FanqieGateReport gate = FanqieGateChecker(
@@ -159,7 +168,10 @@ void main() {
       print('成稿已落盘：${novelFile.path}（${buf.length} 字符）');
       print('正文预览：${task.chapters.first.content.substring(0, 120)}');
     },
-    timeout: const Timeout(Duration(minutes: 20)),
+    // 内置超时（in-code 优先于命令行 --timeout）：2026-10-18 实测 20 分钟不够——
+    // 2 章生成 + 终审 3 采样 + 打回重写 2 章已耗 19.5 分钟，终审二审时被杀。
+    // 3 章 + 终审多轮按当前端点速度留 45 分钟余量。
+    timeout: const Timeout(Duration(minutes: 45)),
     skip: live ? null : 'NOVEL_LIVE 未设置（保持离线）',
   );
 }
