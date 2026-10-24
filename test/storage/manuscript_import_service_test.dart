@@ -150,9 +150,47 @@ void main() {
     expect(shelf.map((NovelSummary n) => n.id).toSet(), hasLength(2));
   });
 
-  test('GBK 原稿明确失败且不留下半本作品', () async {
+  test('Windows 上 GBK 原稿可直接导入', () async {
     final File source = File('${tempDir.path}/GBK.txt');
-    await source.writeAsBytes(<int>[0xB5, 0xDA, 0xD2, 0xBB, 0xD5, 0xC2]);
+    await source.writeAsBytes(<int>[
+      0xB5,
+      0xDA,
+      0xD2,
+      0xBB,
+      0xD5,
+      0xC2,
+      0x20,
+      0xB3,
+      0xF5,
+      0xBC,
+      0xFB,
+      0x0A,
+      0xD5,
+      0xFD,
+      0xCE,
+      0xC4,
+      0xA1,
+      0xA3,
+    ]);
+
+    final ManuscriptImportPreview preview = await service.readFile(source);
+    expect(preview.manuscript.chapters, hasLength(1));
+    expect(preview.manuscript.chapters.single.title, '第一章 初见');
+    expect(preview.manuscript.chapters.single.content, '正文。');
+
+    final Novel novel = await service.save(
+      preview,
+      title: 'GBK 旧稿',
+      genre: 'dushi',
+      tone: '日常',
+    );
+    expect(novel.chapters.single.title, '第一章 初见');
+    expect(novel.chapters.single.content, '正文。');
+  }, skip: !Platform.isWindows);
+
+  test('无法识别的编码明确失败且不留下半本作品', () async {
+    final File source = File('${tempDir.path}/unknown.txt');
+    await source.writeAsBytes(<int>[0x81]);
 
     await expectLater(
       service.readFile(source),

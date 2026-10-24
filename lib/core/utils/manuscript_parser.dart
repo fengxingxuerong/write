@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:novel_writer/core/constants/app_constants.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
+import 'package:novel_writer/core/utils/gbk_decoder.dart';
 
 /// 导入原稿中的一章。
 class ParsedManuscriptChapter {
@@ -256,8 +257,12 @@ class ManuscriptParser {
     try {
       return utf8.decode(bytes);
     } on FormatException {
+      // Windows 中文 TXT 大量仍是 GBK/GB18030；系统解码器可用时直接兼容，
+      // 不再强迫用户先另存为 UTF-8。
+      final String? gbk = GbkDecoder.tryDecode(bytes);
+      if (gbk != null) return gbk;
       throw const StorageException(
-        '文件不是 UTF-8 编码（中文 TXT 常见 GBK/GB18030）。'
+        '文件不是 UTF-8，也无法识别为 GBK/GB18030。'
         '请用记事本或编辑器“另存为 UTF-8”后重试。',
       );
     }

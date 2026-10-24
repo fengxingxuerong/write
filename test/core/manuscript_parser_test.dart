@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -37,8 +38,8 @@ void main() {
       expect(ManuscriptParser.decodeBytes(bytes), 'Chapter One');
     });
 
-    test('GBK 中文给出可执行的另存为提示，不静默解成乱码', () {
-      // GBK 的「第一章」。
+    test('Windows 上 GBK 原稿可直接解码', () {
+      // GBK 的「第一章 初见\n正文。」
       final Uint8List bytes = Uint8List.fromList(<int>[
         0xB5,
         0xDA,
@@ -46,7 +47,25 @@ void main() {
         0xBB,
         0xD5,
         0xC2,
+        0x20,
+        0xB3,
+        0xF5,
+        0xBC,
+        0xFB,
+        0x0A,
+        0xD5,
+        0xFD,
+        0xCE,
+        0xC4,
+        0xA1,
+        0xA3,
       ]);
+      expect(ManuscriptParser.decodeBytes(bytes), '第一章 初见\n正文。');
+    }, skip: !Platform.isWindows);
+
+    test('无法识别的编码给出可执行的另存为提示', () {
+      // 0x81 是 GBK 前导字节但没有合法后继，UTF-8/GBK 都应失败。
+      final Uint8List bytes = Uint8List.fromList(<int>[0x81]);
       expect(
         () => ManuscriptParser.decodeBytes(bytes),
         throwsA(
