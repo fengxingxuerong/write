@@ -16,8 +16,21 @@ class LlmChatResult {
   /// 模型思考过程（如有，供开发面板/审计用）。
   final String? reasoning;
 
+  /// 本次调用的 token 用量（端点未返回 usage 时为 [LlmUsage.empty]）。
+  ///
+  /// **这里必须是「原样透传」而不是「算出来的估算值」**：只有服务端返回的
+  /// usage 才是真实账单依据。任何本地估算（按字数 / 4 之类）都会在
+  /// 中文场景下偏得离谱（中文 1 字 ≈ 1~2 token，而 UTF-8 字节数是 3）。
+  /// 估算值会给出「本次消耗 8,432 token」这种精确到个位的假账，
+  /// 作者据此做的预算判断全是错的。
+  final LlmUsage usage;
+
   /// 构造结果。
-  const LlmChatResult(this.content, {this.reasoning});
+  const LlmChatResult(
+    this.content, {
+    this.reasoning,
+    this.usage = LlmUsage.empty,
+  });
 }
 
 /// 连接自检（ping）结果。
@@ -310,14 +323,19 @@ class LlmChatClient {
         final Map<String, dynamic>? message =
             jsonResp['message'] as Map<String, dynamic>?;
         final String raw = (message?['content'] as String? ?? '');
-        return _splitReasoning(raw);
+        final LlmChatResult r = _splitReasoning(raw);
+        return LlmChatResult(
+          r.content,
+          reasoning: r.reasoning,
+          usage: LlmUsage.parse(jsonResp),
+        );
       }
 
       // OpenAI 兼容非流式响应
       final List<dynamic> choices =
           jsonResp['choices'] as List<dynamic>? ?? const [];
       if (choices.isEmpty) {
-        return const LlmChatResult('');
+        return LlmChatResult('', usage: LlmUsage.parse(jsonResp));
       }
       final Map<String, dynamic> first =
           choices.first as Map<String, dynamic>;
@@ -325,7 +343,7 @@ class LlmChatClient {
           first['message'] as Map<String, dynamic>?;
 
       if (message == null) {
-        return const LlmChatResult('');
+        return LlmChatResult('', usage: LlmUsage.parse(jsonResp));
       }
 
       // 优先从独立 reasoning 字段提取思考链（OpenAI 标准格式）
@@ -345,7 +363,11 @@ class LlmChatClient {
         // （这里为了兼容性，不把剥离的 thinking 暴露给上层）
       }
 
-      return LlmChatResult(cleanContent, reasoning: reasoning);
+      return LlmChatResult(
+        cleanContent,
+        reasoning: reasoning,
+        usage: LlmUsage.parse(jsonResp),
+      );
     } catch (e) {
       // 2xx 但响应体无法解析：服务端异常，吞成「空正文」会让上层误以为
       // 模型正常返回了空稿。抛传输异常，交给路由 failover 与日志定位。

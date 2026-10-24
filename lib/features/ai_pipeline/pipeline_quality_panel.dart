@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 import 'package:novel_writer/core/theme/app_tokens.dart';
+import 'package:novel_writer/models/llm_config.dart';
+import 'package:novel_writer/models/llm_usage.dart';
 import 'package:novel_writer/widgets/app_card.dart';
 import 'package:novel_writer/widgets/common.dart';
 
@@ -51,6 +53,10 @@ class PipelineQualityPanel extends StatelessWidget {
         _ChiefCard(task: task),
         const SizedBox(height: AppTokens.s3),
         _SummaryBar(summary: s),
+        if (task.llmLedger.callCount > 0) ...<Widget>[
+          const SizedBox(height: AppTokens.s3),
+          _UsageBar(ledger: task.llmLedger),
+        ],
         const SizedBox(height: AppTokens.s3),
         for (final PipelineChapter c in chapters)
           _ChapterQualityCard(chapter: c),
@@ -231,6 +237,55 @@ class _SummaryBar extends StatelessWidget {
             value: '${summary.staleForeshadows}',
             hint: '埋设超 5 章仍未回收——终审会判「伏笔悬空」硬伤',
             color: summary.staleForeshadows > 0 ? ink.danger : ink.success,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 用量总览：调用次数 / token / 估算成本。
+///
+/// **未知就显示「未知」**：端点不返回 usage 是常态，显示 0 会被读成「免费」。
+class _UsageBar extends StatelessWidget {
+  /// 构造用量条。
+  const _UsageBar({required this.ledger});
+
+  /// 任务用量账本。
+  final LlmLedger ledger;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppInk ink = AppInk.of(context);
+    final bool known = ledger.hasKnownUsage;
+    return AppCard(
+      title: 'AI 用量',
+      child: Wrap(
+        spacing: AppTokens.s6,
+        runSpacing: AppTokens.s2,
+        children: <Widget>[
+          _Stat(
+            label: '调用次数',
+            value: '${ledger.callCount}',
+            hint: '记录到的模型调用次数（含失败/空响应）',
+          ),
+          _Stat(
+            label: '输入 token',
+            value: known ? formatTokenCount(ledger.total.inputTokens) : '未知',
+            hint: '端点返回的真实 usage；未返回时如实显示未知，不按字数估算',
+            color: known ? ink.ink : ink.inkFaint,
+          ),
+          _Stat(
+            label: '输出 token',
+            value: known ? formatTokenCount(ledger.total.outputTokens) : '未知',
+            hint: '端点返回的真实 usage；未返回时如实显示未知，不按字数估算',
+            color: known ? ink.ink : ink.inkFaint,
+          ),
+          _Stat(
+            label: '估算成本',
+            value: formatCostUsd(ledger.estimatedCostUsd),
+            hint: '按内置价格表估算（美元，约数）；未知模型不计入',
+            color: ledger.estimatedCostUsd == null ? ink.inkFaint : ink.ink,
           ),
         ],
       ),

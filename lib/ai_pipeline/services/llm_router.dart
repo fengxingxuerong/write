@@ -8,7 +8,11 @@ import 'package:novel_writer/models/llm_config.dart';
 /// 一次链式路由调用的结果。
 class LlmRouteResult {
   /// 构造结果。
-  const LlmRouteResult({required this.content, this.used});
+  const LlmRouteResult({
+    required this.content,
+    this.used,
+    this.usage = LlmUsage.empty,
+  });
 
   /// 模型返回正文（已 trim；链上全部失败时为空串）。
   final String content;
@@ -17,6 +21,9 @@ class LlmRouteResult {
   ///
   /// 可用于日志/审计「本次走了主还是备」。
   final LlmConfig? used;
+
+  /// 本次命中的端点返回的 token 用量（端点未返回 usage 时为 [LlmUsage.empty]）。
+  final LlmUsage usage;
 
   /// 是否拿到非空正文。
   bool get ok => content.isNotEmpty;
@@ -133,7 +140,7 @@ class ChainLlmRouter implements LlmRouter {
         final String content = r.content.trim();
         if (content.isNotEmpty) {
           _markOk(key);
-          return LlmRouteResult(content: content, used: cfg);
+          return LlmRouteResult(content: content, used: cfg, usage: r.usage);
         }
         onLog?.call('${cfg.model} 返回为空，尝试下一个');
       } on GenerationCancelledException {

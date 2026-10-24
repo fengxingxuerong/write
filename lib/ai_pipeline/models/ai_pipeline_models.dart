@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:novel_writer/models/llm_config.dart';
+import 'package:novel_writer/models/llm_usage.dart';
 
 /// 多模型协作流水线 —— 角色枚举。
 ///
@@ -1057,6 +1058,12 @@ class AiPipelineTask {
   /// 伏笔台账 JSON（每章提取的未收伏笔清单，防长篇丢伏笔/改设定）。
   String foreshadowLedger;
 
+  /// LLM 调用用量账本（按角色/按章可聚合；随任务落盘，续跑不丢）。
+  ///
+  /// **未知不等于免费**：端点不返回 usage 时记空用量，成本显示「未知」，
+  /// 绝不按字数估算——那会给作者一份看起来精确的假账。
+  final LlmLedger llmLedger;
+
   /// 构造任务。
   AiPipelineTask({
     required this.id,
@@ -1072,6 +1079,7 @@ class AiPipelineTask {
     this.importedNovelId,
     this.stateTrack = '',
     this.foreshadowLedger = '[]',
+    LlmLedger? llmLedger,
     List<ChiefReview>? chiefReviews,
     List<ChiefRewriteRecord>? chiefRewrites,
     this.chiefSamples = 3,
@@ -1079,6 +1087,7 @@ class AiPipelineTask {
     this.chiefRewriteMax = 2,
   })  : chapters = chapters ?? <PipelineChapter>[],
         log = log ?? <String>[],
+        llmLedger = llmLedger ?? LlmLedger(),
         chiefReviews = chiefReviews ?? <ChiefReview>[],
         chiefRewrites = chiefRewrites ?? <ChiefRewriteRecord>[];
 
@@ -1199,6 +1208,7 @@ class AiPipelineTask {
         'importedNovelId': importedNovelId,
         'stateTrack': stateTrack,
         'foreshadowLedger': foreshadowLedger,
+        'llmLedger': llmLedger.toJson(),
         'chiefReviews': chiefReviews.map((ChiefReview e) => e.toJson()).toList(),
         'chiefRewrites':
             chiefRewrites.map((ChiefRewriteRecord e) => e.toJson()).toList(),
@@ -1234,6 +1244,10 @@ class AiPipelineTask {
       importedNovelId: json['importedNovelId'] as String?,
       stateTrack: json['stateTrack'] as String? ?? '',
       foreshadowLedger: json['foreshadowLedger'] as String? ?? '[]',
+      // 旧任务文件无此键 → 空账本（= 未记录），不是「0 token」。
+      llmLedger: LlmLedger.fromJson(
+        (json['llmLedger'] as Map<String, dynamic>?) ?? <String, dynamic>{},
+      ),
       // 旧任务文件无这些键 → 空列表（= 尚未终审），不是「终审了 0 分」。
       chiefReviews: (json['chiefReviews'] as List<dynamic>? ?? const [])
           .whereType<Map<String, dynamic>>()

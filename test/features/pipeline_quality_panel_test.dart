@@ -9,6 +9,8 @@ import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/core/theme/app_theme.dart';
 import 'package:novel_writer/features/ai_pipeline/ai_pipeline_pages.dart';
 import 'package:novel_writer/features/ai_pipeline/pipeline_quality_panel.dart';
+import 'package:novel_writer/models/llm_config.dart';
+import 'package:novel_writer/models/llm_usage.dart';
 
 /// 质量面板与结构化质量记录的行为护栏。
 ///
@@ -17,11 +19,16 @@ import 'package:novel_writer/features/ai_pipeline/pipeline_quality_panel.dart';
 /// 2. 「未评分」不得用 0 分填充（0 分是「评了但很差」）；
 /// 3. 结构化记录必须能往返序列化，否则评分只活在内存里、断点续跑即丢。
 void main() {
-  AiPipelineTask taskWith(List<PipelineChapter> chapters) => AiPipelineTask(
+  AiPipelineTask taskWith(
+    List<PipelineChapter> chapters, {
+    LlmLedger? llmLedger,
+  }) =>
+      AiPipelineTask(
         id: 't1',
         config: const AiPipelineConfig(),
         outline: const <String, dynamic>{'title': '测试书'},
         chapters: chapters,
+        llmLedger: llmLedger,
         createdAt: DateTime(2026, 10, 2),
       );
 
@@ -903,6 +910,46 @@ group('模型层派生属性', () {
       await tester.pumpAndSettle();
       expect(find.byType(PipelineQualityPanel), findsNothing);
       expect(find.textContaining('[流水线] 启动'), findsOneWidget);
+    });
+  });
+
+  group('AI 用量条', () {
+    testWidgets('已知用量显示调用次数、token 与估算成本', (WidgetTester tester) async {
+      await pumpPanel(
+        tester,
+        taskWith(
+          <PipelineChapter>[chapter()],
+          llmLedger: LlmLedger(<LlmLedgerEntry>[
+            const LlmLedgerEntry(
+              role: '正文写手',
+              model: 'deepseek-v4-flash',
+              chapterIdx: 1,
+              usage: LlmUsage(inputTokens: 1000000, outputTokens: 1000000),
+            ),
+          ]),
+        ),
+      );
+
+      expect(find.text('AI 用量'), findsOneWidget);
+      expect(find.text('1'), findsWidgets);
+      expect(find.text('1,000,000'), findsNWidgets(2));
+      expect(find.text('\$0.50'), findsOneWidget);
+    });
+
+    testWidgets('端点未返回 usage 时显示未知而不是 0', (WidgetTester tester) async {
+      await pumpPanel(
+        tester,
+        taskWith(
+          <PipelineChapter>[chapter()],
+          llmLedger: LlmLedger(<LlmLedgerEntry>[
+            const LlmLedgerEntry(role: '正文写手', model: 'some-model'),
+          ]),
+        ),
+      );
+
+      // 输入 / 输出 / 成本三处都未知；不能出现「0 token / $0.00」。
+      expect(find.text('未知'), findsNWidgets(3));
+      expect(find.text('\$0.00'), findsNothing);
     });
   });
 }

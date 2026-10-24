@@ -43,6 +43,39 @@ void main() {
       await main.close();
     });
 
+    test('端点返回 usage 时原样透传到路由结果', () async {
+      final _Endpoint main = await _startFake(
+        statusCode: 200,
+        content: '主文',
+        usage: <String, dynamic>{
+          'prompt_tokens': 31,
+          'completion_tokens': 12,
+        },
+      );
+      final ChainLlmRouter router = ChainLlmRouter(retry: _singleTry);
+      final LlmRouteResult r = await router.call(
+        <LlmConfig>[_endpoint(main, 'main')],
+        system: 's',
+        user: 'u',
+      );
+      expect(r.usage.inputTokens, 31);
+      expect(r.usage.outputTokens, 12);
+      expect(r.usage.isKnown, isTrue);
+      await main.close();
+    });
+
+    test('端点不返回 usage 时记未知，不按正文估算', () async {
+      final _Endpoint main = await _startFake(statusCode: 200, content: '主文');
+      final ChainLlmRouter router = ChainLlmRouter(retry: _singleTry);
+      final LlmRouteResult r = await router.call(
+        <LlmConfig>[_endpoint(main, 'main')],
+        system: 's',
+        user: 'u',
+      );
+      expect(r.usage.isKnown, isFalse);
+      await main.close();
+    });
+
     test('主端点 429 → 自动切备用并返回备用内容', () async {
       final _Endpoint main = await _startFake(statusCode: 429, content: '');
       final _Endpoint backup = await _startFake(
@@ -418,11 +451,13 @@ class _Endpoint {
     required this.statusCode,
     required this.content,
     this.statuses,
+    this.usage,
   });
 
   final int statusCode;
   final String content;
   final List<int>? statuses;
+  final Map<String, dynamic>? usage;
 
   HttpServer? _server;
   int _count = 0;
@@ -464,6 +499,7 @@ class _Endpoint {
             'message': <String, dynamic>{'content': content},
           },
         ],
+        if (usage != null) 'usage': usage,
       });
       req.response
         ..statusCode = code
@@ -484,11 +520,13 @@ Future<_Endpoint> _startFake({
   required int statusCode,
   required String content,
   List<int>? statuses,
+  Map<String, dynamic>? usage,
 }) async {
   final _Endpoint e = _Endpoint.plan(
     statusCode: statusCode,
     content: content,
     statuses: statuses,
+    usage: usage,
   );
   await e.start();
   return e;

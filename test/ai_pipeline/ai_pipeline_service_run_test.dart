@@ -11,6 +11,7 @@ import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
 import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/core/security/secret_store.dart';
 import 'package:novel_writer/models/llm_config.dart';
+import 'package:novel_writer/models/llm_usage.dart';
 
 /// AiPipelineService.run 编排全流程测试（_FakeRouter 替身，零网络）。
 ///
@@ -1145,15 +1146,63 @@ void main() {
           reason: '日志必须说清「打回了但没改成」');
     });
   });
+
+  group('token 用量账本', () {
+    test('每次模型调用记一条账、按当前章归档，并随任务落盘', () async {
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(outline: outlineJson()),
+        usage: const LlmUsage(inputTokens: 100, outputTokens: 40),
+      );
+      final AiPipelineTask t = await runTask(
+        task(config(totalWords: 100000, maxChapters: 1)),
+        router,
+      );
+
+      expect(t.llmLedger.callCount, greaterThan(1));
+      // 第 1 条是全书大纲规划（不属于具体章节，记 0），其余都属于第 1 章。
+      expect(t.llmLedger.entries.first.chapterIdx, 0);
+      expect(
+        t.llmLedger.entries.skip(1).every((LlmLedgerEntry e) => e.chapterIdx == 1),
+        isTrue,
+        reason: '章节内所有调用都应记在第 1 章',
+      );
+      expect(t.llmLedger.total.inputTokens, t.llmLedger.callCount * 100);
+      expect(t.llmLedger.total.outputTokens, t.llmLedger.callCount * 40);
+
+      final AiPipelineTask back = AiPipelineTask.fromJson(
+        jsonDecode(jsonEncode(t.toJson())) as Map<String, dynamic>,
+      );
+      expect(back.llmLedger.callCount, t.llmLedger.callCount);
+      expect(back.llmLedger.total.inputTokens, t.llmLedger.total.inputTokens);
+    });
+
+    test('端点不返回 usage 时账本记未知，不写假数字', () async {
+      final _FakeRouter router = _FakeRouter(
+        baseRespond(outline: outlineJson()),
+      );
+      final AiPipelineTask t = await runTask(
+        task(config(totalWords: 100000, maxChapters: 1)),
+        router,
+      );
+
+      expect(t.llmLedger.callCount, greaterThan(0));
+      expect(t.llmLedger.hasKnownUsage, isFalse);
+      expect(t.llmLedger.estimatedCostUsd, isNull);
+      expect(t.llmLedger.total.totalTokens, 0);
+    });
+  });
 }
 
 /// LlmRouter 测试替身：按 (system, user) 直出内容，零网络、零延时。
 class _FakeRouter implements LlmRouter {
-  /// 构造替身；[respond] 为应答器。
-  _FakeRouter(this.respond);
+  /// 构造替身；[respond] 为应答器，[usage] 为每次调用返回的用量。
+  _FakeRouter(this.respond, {this.usage = LlmUsage.empty});
 
   /// 应答器：system 提示 + user 提示 → 模型产出。
   final String Function(String system, String user) respond;
+
+  /// 每次调用返回的用量（测试账本累计口径）。
+  final LlmUsage usage;
 
   /// 全部 system 提示（断言「某角色是否被调用」）。
   final List<String> systems = <String>[];
@@ -1176,6 +1225,7 @@ class _FakeRouter implements LlmRouter {
     return LlmRouteResult(
       content: respond(system, user),
       used: chain.isEmpty ? null : chain.first,
+      usage: usage,
     );
   }
 }

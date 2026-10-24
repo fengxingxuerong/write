@@ -13,6 +13,137 @@ enum LlmProvider {
   ollama,
 }
 
+/// 单次 LLM 调用的 token 用量。
+///
+/// **为什么需要它**：此前 Dart 与 Python 两端都只取正文，**从不解析响应里的
+/// `usage`**——于是「这本书花了多少钱」「哪一章最烧 token」这类问题在产品里
+/// 根本无从回答：作者只能看服务商后台的账单，而账单分不出「哪一章的润色
+/// 把额度吃完了」。多角色流水线一次跑动几十次调用，作者对成本的感知是
+/// 完全黑箱的。
+///
+/// 解析 `usage` 是零成本的（字段本来就在响应体里），不解析才是浪费。
+/// 各家字段口径不同，故这里做**多口径兼容**：
+/// - OpenAI 兼容：`usage.prompt_tokens` / `completion_tokens` / `total_tokens`；
+/// - 部分网关只给 `usage.input_tokens` / `output_tokens`（Anthropic 风格）；
+/// - 部分网关把字段拍平在**顶层**（不在 `usage` 子对象里）；
+/// - Ollama：`prompt_eval_count` / `eval_count`。
+///
+/// 缺字段时一律记 0（**不猜、不估算**）：账本宁可显示「未知」也不能编造数字，
+/// 编出来的成本会让作者误判预算，见 [LlmUsage.isKnown]。
+class LlmUsage {
+  /// 输入 token 数（prompt / input）。
+  final int inputTokens;
+
+  /// 输出 token 数（completion / output）。
+  final int outputTokens;
+
+  /// 构造用量。
+  const LlmUsage({
+    this.inputTokens = 0,
+    this.outputTokens = 0,
+  });
+
+  /// 空用量（端点未返回 usage 时）。
+  static const LlmUsage empty = LlmUsage();
+
+  /// 是否拿到了真实数字。
+  ///
+  /// 两者皆 0 视为「未知」——端点不返回 usage 是常态，不该在 UI 上显示
+  /// 「本次消耗 0 token」（那会被作者读成「这次免费」）。
+  bool get isKnown => inputTokens > 0 || outputTokens > 0;
+
+  /// 总 token 数。
+  int get totalTokens => inputTokens + outputTokens;
+
+  /// 累加另一段用量（重试、链式 failover 会产生多段）。
+  LlmUsage operator +(LlmUsage other) => LlmUsage(
+        inputTokens: inputTokens + other.inputTokens,
+        outputTokens: outputTokens + other.outputTokens,
+      );
+
+  /// 序列化。
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'inputTokens': inputTokens,
+        'outputTokens': outputTokens,
+      };
+
+  /// 反序列化。
+  factory LlmUsage.fromJson(Map<String, dynamic> json) => LlmUsage(
+        inputTokens: json['inputTokens'] as int? ?? 0,
+        outputTokens: json['outputTokens'] as int? ?? 0,
+      );
+
+  /// 从任意响应 JSON 中解析用量（兼容多口径）。
+  ///
+  /// 传 null（解析失败）返回 [empty]。
+  static LlmUsage parse(Object? body) {
+    if (body is! Map) return empty;
+    final Map<dynamic, dynamic> root = body;
+
+    // 口径 1：标准 `usage` 子对象（OpenAI 兼容）。
+    final Object? usage = root['usage'];
+    if (usage is Map) {
+      final LlmUsage parsed = _parseUsageMap(usage);
+      if (parsed.isKnown) return parsed;
+    }
+
+    // 口径 2：顶层拍平（部分网关把 usage 字段直接放在响应根上）。
+    final LlmUsage flat = _parseUsageMap(root);
+    if (flat.isKnown) return flat;
+
+    // 口径 3：Ollama 字段名不同，单独兜一次。
+    final int? promptEval = _asInt(root['prompt_eval_count']);
+    final int? evalCount = _asInt(root['eval_count']);
+    if (promptEval != null || evalCount != null) {
+      return LlmUsage(
+        inputTokens: promptEval ?? 0,
+        outputTokens: evalCount ?? 0,
+      );
+    }
+
+    return empty;
+  }
+
+  /// 解析一个 usage 风格的对象（字段名多口径兼容）。
+  static LlmUsage _parseUsageMap(Map<dynamic, dynamic> map) {
+    final int? input = _asInt(map['prompt_tokens']) ??
+        _asInt(map['input_tokens']) ??
+        _asInt(map['promptTokens']) ??
+        _asInt(map['inputTokens']);
+    final int? output = _asInt(map['completion_tokens']) ??
+        _asInt(map['output_tokens']) ??
+        _asInt(map['completionTokens']) ??
+        _asInt(map['outputTokens']);
+    // 只有 total_tokens 时无法拆分输入/输出，按「全是输出」处理是错的，
+    // 宁可记 0（未知）也不制造错误的拆分口径。
+    if (input == null && output == null) return empty;
+    return LlmUsage(inputTokens: input ?? 0, outputTokens: output ?? 0);
+  }
+
+  /// 宽松取整数（端点偶尔回字符串形式的数字）。
+  static int? _asInt(Object? v) {
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v.trim());
+    return null;
+  }
+
+  @override
+  String toString() =>
+      'LlmUsage(in: $inputTokens, out: $outputTokens, total: $totalTokens)';
+}
+
+/// 人类可读的 token 计数（按千分位分组，避免 1234567 难以扫读）。
+String formatTokenCount(int tokens) {
+  final String raw = tokens.abs().toString();
+  final StringBuffer b = StringBuffer();
+  for (int i = 0; i < raw.length; i++) {
+    if (i > 0 && (raw.length - i) % 3 == 0) b.write(',');
+    b.write(raw[i]);
+  }
+  return '${tokens < 0 ? '-' : ''}$b';
+}
+
 /// LLM 引擎配置。
 class LlmConfig {
   /// 提供商类型。

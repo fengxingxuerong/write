@@ -12,6 +12,7 @@ import 'package:novel_writer/core/errors/app_exceptions.dart';
 import 'package:novel_writer/engine/quality/fanqie_gate_checker.dart';
 import 'package:novel_writer/engine/quality/quality_rules.g.dart';
 import 'package:novel_writer/models/llm_config.dart';
+import 'package:novel_writer/models/llm_usage.dart';
 
 /// 关卡5 定点修的字数下限比例。
 ///
@@ -65,6 +66,12 @@ class AiPipelineService {
   /// 角色 → 模型的路由器（链式 failover + 健康池冷却）。
   final LlmRouter _router;
 
+  /// 当前记账章号（0 = 不属于具体章节，如全书大纲/终审）。
+  ///
+  /// 账本要在每次调用后落一条记录，而 `_call` 不接收章号参数（调用点太多）；
+  /// 由章循环/按章步骤在调用前设置，避免把润色、核查的用量全记到最后章。
+  int _currentChapterIdx = 0;
+
   /// 链上是否至少一个端点已配置（主或任一备用）。
   static bool _chainConfigured(AiRoleConfig cfg) =>
       cfg.chain.any((LlmConfig c) => c.isConfigured);
@@ -94,8 +101,21 @@ class AiPipelineService {
       isCancelled: isCancelled,
     );
     final String content = result.content.trim();
+    final String usedModel = result.used?.model ?? cfg.llm.model;
+    task.llmLedger.entries.add(
+      LlmLedgerEntry(
+        role: role.label,
+        model: usedModel,
+        chapterIdx: _currentChapterIdx,
+        usage: result.usage,
+      ),
+    );
+    if (result.usage.isKnown) {
+      task.addLog('  [用量] ${role.label}（$usedModel）：'
+          '输入 ${result.usage.inputTokens} / 输出 ${result.usage.outputTokens} token');
+    }
     if (content.isEmpty) {
-      task.addLog('  [空响应] ${role.label}（${cfg.llm.model}）');
+      task.addLog('  [空响应] ${role.label}（$usedModel）');
     }
     return content;
   }
@@ -119,6 +139,7 @@ class AiPipelineService {
     int round, {
     required bool Function() isCancelled,
   }) async {
+    _currentChapterIdx = 0;
     final AiRoleConfig cfg = task.config.roleOf(AiRole.editor);
     if (!_chainConfigured(cfg)) return ChiefReview(round: round, overall: -1);
     final List<PipelineChapter> chapters = List<PipelineChapter>.from(
@@ -231,6 +252,7 @@ class AiPipelineService {
     int idx,
     List<ForeshadowEntry> block,
   ) async {
+    _currentChapterIdx = idx;
     final AiRoleConfig cfg = task.config.roleOf(AiRole.editor);
     if (!_chainConfigured(cfg)) return (checks: const <PromiseCheck>[], ok: false);
     final String prompt = promiseVerifyPrompt(
@@ -281,6 +303,7 @@ class AiPipelineService {
     String text,
     int idx,
   ) async {
+    _currentChapterIdx = idx;
     final AiRoleConfig cfg = task.config.roleOf(AiRole.planner);
     if (!_chainConfigured(cfg)) {
       return (hits: const <Fabrication>[], ok: false);
@@ -455,6 +478,7 @@ class AiPipelineService {
 
     // ===== Phase 1：总规划官规划全书大纲 =====
     if (task.outline.isEmpty) {
+      _currentChapterIdx = 0;
       task.addLog('[规划官] 规划全书大纲...');
       final String raw = await call(
         AiRole.planner,
@@ -499,6 +523,7 @@ class AiPipelineService {
         return;
       }
       final int idx = (ch['idx'] as num?)?.toInt() ?? 0;
+      _currentChapterIdx = idx;
       if (task.chapters.any((PipelineChapter c) => c.idx == idx)) continue;
       if (task.totalWords >= task.config.totalWords) break;
       if (idx > task.config.maxChapters) break;
@@ -1264,6 +1289,7 @@ class AiPipelineService {
           task.addLog('  [打回] ${chief.overall} 分 < 打回线 '
               '${task.chiefRewriteThreshold}，打回重写第 ${cited.join("、")} 章');
           for (final int n in cited) {
+            _currentChapterIdx = n;
             final int i = task.chapters
                 .indexWhere((PipelineChapter c) => c.idx == n);
             final PipelineChapter target = task.chapters[i];
