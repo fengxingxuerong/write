@@ -214,10 +214,15 @@ void main() {
     testWidgets('角色未配置模型时给出警告且不创建任务',
         (WidgetTester tester) async {
       // 构造一个「角色全都没配端点」的存储，验证 _start 的守卫拦得住。
+      // localEnvKeysProvider 换成空实现：否则开发机上的真实 .env.local
+      // 会被自动载入，角色表被意外配满，守卫用例必挂。
       final _ListPipelineStorage storage = _ListPipelineStorage(<AiPipelineTask>[]);
       await tester.pumpWidget(
         ProviderScope(
-          overrides: <Override>[pipelineStorageProvider.overrideWithValue(storage)],
+          overrides: <Override>[
+            pipelineStorageProvider.overrideWithValue(storage),
+            localEnvKeysProvider.overrideWithValue(() => <String, String>{}),
+          ],
           child: MaterialApp.router(
             theme: AppTheme.light,
             routerConfig: _stubRouter(),
@@ -230,7 +235,10 @@ void main() {
       // 直接以配置页为根（不靠路由跳转，避免留下未完成的 push future）。
       await tester.pumpWidget(
         ProviderScope(
-          overrides: <Override>[pipelineStorageProvider.overrideWithValue(storage)],
+          overrides: <Override>[
+            pipelineStorageProvider.overrideWithValue(storage),
+            localEnvKeysProvider.overrideWithValue(() => <String, String>{}),
+          ],
           child: MaterialApp(
             theme: AppTheme.light,
             home: const AiPipelineConfigPage(),
@@ -257,6 +265,42 @@ void main() {
       expect(storage.savedRecentCount, 0,
           reason: '守卫拦截时不得写最近配置');
       expect(find.textContaining('未配置模型'), findsOneWidget);
+    });
+  });
+
+  group('配置页：本机密钥自动载入', () {
+    testWidgets('有 .env.local 时自动装配固定分工并提示商汤三 Key 就绪',
+        (WidgetTester tester) async {
+      final _ListPipelineStorage storage =
+          _ListPipelineStorage(<AiPipelineTask>[]);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: <Override>[
+            pipelineStorageProvider.overrideWithValue(storage),
+            localEnvKeysProvider.overrideWithValue(() => <String, String>{
+              'NOVEL_KEY_SENSE_K1': 'sk-fake1',
+              'NOVEL_KEY_SENSE_K2': 'sk-fake2',
+              'NOVEL_KEY_SENSE_K3': 'sk-fake3',
+              'NOVEL_KEY_AMD': 'rc-fake',
+            }),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.light,
+            home: const AiPipelineConfigPage(),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.textContaining('已自动从 .env.local 载入 4 个密钥'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('商汤 K1/K2/K3 固定分工已就绪'),
+        findsOneWidget,
+      );
     });
   });
 }

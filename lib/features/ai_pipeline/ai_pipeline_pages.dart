@@ -8,6 +8,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:novel_writer/ai_pipeline/fixed_workflow_preset.dart';
 import 'package:novel_writer/ai_pipeline/models/ai_pipeline_models.dart';
 import 'package:novel_writer/ai_pipeline/services/ai_pipeline_service.dart';
+import 'package:novel_writer/ai_pipeline/services/env_keys_loader.dart';
 import 'package:novel_writer/ai_pipeline/services/novel_importer.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_qa.dart';
 import 'package:novel_writer/ai_pipeline/services/pipeline_storage.dart';
@@ -46,6 +47,14 @@ final Provider<NovelImporter> novelImporterProvider = Provider<NovelImporter>((
     ref.watch(appDatabaseProvider),
   );
 });
+
+/// 本机 `.env.local` 密钥自动载入函数（默认 [EnvKeysLoader.load]）。
+///
+/// 抽成 provider 是为了让 widget 测试能替换为「返回空表」的假实现：否则
+/// 在开发机上（仓库根存在真实 `.env.local`）跑测试，自动载入会把
+///「未配置守卫」这类用例的角色表意外配满，测试结论随机器环境漂移。
+final Provider<Map<String, String> Function()> localEnvKeysProvider =
+    Provider<Map<String, String> Function()>((ref) => EnvKeysLoader.load);
 
 // ============================================================
 // 首页：任务列表
@@ -395,7 +404,49 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
   @override
   void initState() {
     super.initState();
-    _loadRecent();
+    _bootstrap();
+  }
+
+  /// 页面启动序列：先恢复最近任务配置，再尝试自动载入本机密钥。
+  ///
+  /// 顺序即优先级：`_loadRecent` 恢复的是用户的显式状态，在前；自动载入
+  /// 只在「角色表整张没配过任何端点」时补位（见 [_tryAutoloadLocalKeys]）。
+  Future<void> _bootstrap() async {
+    await _loadRecent();
+    await _tryAutoloadLocalKeys();
+  }
+
+  /// 尝试从本机 `.env.local` 自动载入密钥并按固定分工装配（默认行为）。
+  ///
+  /// **只填空缺、不抢已有**：最近任务配置里已配置的角色优先（含用户手动
+  /// 改过的端点）；只有整张角色表都没配过端点时才自动载入。密钥仍只在
+  /// 内存里参与装配，落盘走任务配置的 DPAPI 加密通道，不落明文。
+  Future<void> _tryAutoloadLocalKeys() async {
+    if (!mounted || _lastKeys.isNotEmpty) return;
+    final bool anyConfigured =
+        _roles.values.any((AiRoleConfig c) => c.llm.isConfigured);
+    if (anyConfigured) return;
+    final Map<String, String> keys = ref.read(localEnvKeysProvider)();
+    if (keys.isEmpty || !mounted) return;
+    setState(() {
+      _lastKeys = keys;
+      _roles = FixedWorkflowPreset.roles(
+        keys,
+        includeCandidates: _useUnverified,
+        roleOverrides:
+            FixedWorkflowPreset.parseOverrides(_roleRoutingCtrl.text),
+      );
+    });
+    final int total = keys.length;
+    final bool senseReady = keys.containsKey('NOVEL_KEY_SENSE_K1') &&
+        keys.containsKey('NOVEL_KEY_SENSE_K2') &&
+        keys.containsKey('NOVEL_KEY_SENSE_K3');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _snack(senseReady
+          ? '已自动从 .env.local 载入 $total 个密钥：商汤 K1/K2/K3 固定分工已就绪'
+          : '已自动从 .env.local 载入 $total 个密钥并按固定分工装配');
+    });
   }
 
   /// 加载最近一次任务配置并预填表单。
@@ -425,12 +476,19 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
   /// 复用导入密钥时的**同一条**装配路径（[FixedWorkflowPreset.roles]），只是多传
   /// 一次覆盖表——不另开一条装配逻辑，否则两条路径迟早会漂移。
   void _applyRoleRouting() {
-    if (_lastKeys.isEmpty) {
+    Map<String, String> keys = _lastKeys;
+    if (keys.isEmpty) {
+      // 重启后 `_lastKeys`（仅存内存）不在，但本机 .env.local 还在——
+      // 补一次自动载入，不逼用户为「换个模型」再走一遍手动导入。
+      keys = ref.read(localEnvKeysProvider)();
+      if (keys.isNotEmpty) _lastKeys = keys;
+    }
+    if (keys.isEmpty) {
       _snack('还没有导入过密钥：先「导入本机 API 配置」，再按路由装配');
       return;
     }
     final Map<AiRole, AiRoleConfig> next = FixedWorkflowPreset.roles(
-      _lastKeys,
+      keys,
       includeCandidates: _useUnverified,
       roleOverrides:
           FixedWorkflowPreset.parseOverrides(_roleRoutingCtrl.text),
@@ -661,7 +719,8 @@ class _AiPipelineConfigPageState extends ConsumerState<AiPipelineConfigPage> {
                   const Text(
                     '把本机 API 配置导入后，软件会按固定分工自动装配：'
                     '策划/写手/编辑/标题/审校 五岗各自的主模型与备用链、'
-                    '各自温度一次到位，无需逐个手填。',
+                    '各自温度一次到位，无需逐个手填。'
+                    '仓库根目录的 .env.local（NOVEL_KEY_* 格式）会自动载入，无需手动导入。',
                   ),
                   const SizedBox(height: 6),
                   Text(
